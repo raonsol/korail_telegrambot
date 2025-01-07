@@ -1,0 +1,5 @@
+*.old
+*.old/
+*.pyc
+*.pem
+.env

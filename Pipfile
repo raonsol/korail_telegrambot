@@ -1,0 +1,17 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+"fastapi[standard]" = ">=0.115.0, <0.116.0"
+requests = "*"
+python-telegram-bot = "*"
+pyopenssl = "*"
+korail2 = "0.4.0"
+
+[dev-packages]
+black = "*"
+
+[requires]
+python_version = "3.13"
