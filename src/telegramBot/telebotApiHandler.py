@@ -329,12 +329,12 @@ class TelebotApiHandler:
                 ]
                 arguments = [str(argument) for argument in arguments]
                 print(f"Starting reservation, arguments: {arguments}")
-                
-                cmd = ["python", "-m", "src.telegramBot.telebotBackProcess"] + arguments
-                proc = subprocess.Popen(cmd)
-                self.userDict[chatId]["pid"] = proc.pid
+
+                pid = self.start_background_process(arguments)
+
+                self.userDict[chatId]["pid"] = pid
                 self.runningStatus[chatId] = {
-                    "pid": proc.pid,
+                    "pid": pid,
                     "korailId": user_info["korailId"],
                 }
 
@@ -349,8 +349,26 @@ class TelebotApiHandler:
                 msg = MESSAGES_ERROR["INPUT_WRONG"]
             self.sendMessage(chatId, msg)
         except Exception as e:
-            self.sendMessage(chatId, f"예약 시작 중 오류가 발생했습니다. /start를 입력해 다시 시작해 주세요")
+            self.sendMessage(
+                chatId,
+                "예약 시작 중 오류가 발생했습니다. /start를 입력해 다시 시작해 주세요",
+            )
             print(f"Error starting reservation, {chatId}: {str(e)}")
+
+    def start_background_process(self, arguments):
+        try:
+            cmd = ["python", "-m", "telegramBot.telebotBackProcess"] + arguments
+            cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+            process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd
+            )
+
+            return process.pid
+
+        except Exception as e:
+            print(f"Failed to start process: {str(e)}")
+            return False, str(e)
 
     def already_doing(self, chatId):
         train_info = self.userDict[chatId]["trainInfo"]
@@ -491,9 +509,7 @@ async def handle_chat_message(request: TelegramRequest):
 
 @router.post("/telebot/reservations/{chatId}/completion")
 def send_reservation_status(
-    chatId: int, 
-    msg: str = Query(...), 
-    status: str = Query(...)
+    chatId: int, msg: str = Query(...), status: str = Query(...)
 ):
     """예약 프로세스에서 결과를 받아 사용자에게 메세지 전송
 

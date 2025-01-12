@@ -151,7 +151,7 @@ class Korail:
 
     def sendBotStateChange(self, chatId, msg, status):
         # callbackUrl = f"https://127.0.0.1:8080/telebot/{chatId}/completion" # if using ssl inside docker, use this
-        callbackUrl = f"http://127.0.0.1:8080/telebot/{chatId}/completion"
+        callbackUrl = f"http://127.0.0.1:8080/telebot/reservations/{chatId}/completion"
         print(chatId, msg, status)
         param = {"chatId": chatId, "msg": msg, "status": status}
         s = requests.session()
