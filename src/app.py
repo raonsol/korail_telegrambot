@@ -11,7 +11,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(router, prefix="/telebot")
+app.include_router(router)
 
 if __name__ == "__main__":
     # Server will be run using the make run command
