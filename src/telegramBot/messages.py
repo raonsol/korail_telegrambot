@@ -127,12 +127,12 @@ https://www.letskorail.com/ebizprd/EbizPrdTicketpr13500W_pr13510.do
 코레일톡 앱에서 결제하기:
 코레일톡 → 오른쪽 상단 메뉴 → 승차권 예매 → 예약 승차권 조회/취소
 """,
+    "RESERVE_FINISHED": "예약이 취소되었습니다.",
 }
 
 MESSAGES_ERROR = {
     "RESERVE_CANCELLED": "예약 작업이 취소되었습니다.",
     "RESERVE_INIT_CANCELLED": "예매 진행을 취소합니다.",
-    "RESERVE_FINISHED": "예약이 취소되었습니다.",
     "RESERVE_CANCELLED_BY_ADMIN": "관리자에 의해 실행중이던 예약이 강제 종료됩니다.",
     "RESERVE_WRONG": "차편을 찾을 수 없거나, 검색에 문제가 생겼습니다. 처음부터 다시 시도해 주세요.",
     "RESERVE_FAILED": """

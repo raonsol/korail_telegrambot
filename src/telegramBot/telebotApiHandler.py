@@ -203,7 +203,7 @@ class TelebotApiHandler:
                 self.start_accept(chatId)
             elif is_negative(data):
                 self.handle_progress(chatId, 0)
-                msg = MESSAGES_ERROR["RESERVE_FINISHED"]
+                msg = MESSAGES_INFO["RESERVE_FINISHED"]
                 self.sendMessage(chatId, msg)
             else:
                 msg = MESSAGES_ERROR["INPUT_PW_FAILURE"].format(username)
@@ -384,7 +384,12 @@ class TelebotApiHandler:
 
     def cancel_func(self, chatId):
         userPid = self.userDict[chatId]["pid"]
-        if userPid != 9999999:
+
+        if chatId not in self.runningStatus:
+            msg = "진행중인 예약이 없습니다."
+            self.sendMessage(chatId, msg)
+            
+        elif userPid != 9999999:
             os.kill(userPid, signal.SIGTERM)
             print(f"실행중인 프로세스 {userPid}를 종료합니다.")
 
@@ -392,9 +397,9 @@ class TelebotApiHandler:
             msgToSubscribers = f'{self.userDict[chatId]["userInfo"]["korailId"]}의 예약이 종료되었습니다.'
             self.sendToSubscribers(msgToSubscribers)
 
-        self.handle_progress(chatId, 0)
-        msg = MESSAGES_ERROR["RESERVE_FINISHED"]
-        self.sendMessage(chatId, msg)
+            self.handle_progress(chatId, 0)
+            msg = MESSAGES_INFO["RESERVE_FINISHED"]
+            self.sendMessage(chatId, msg)
 
         return None
 
