@@ -507,23 +507,27 @@ async def handle_chat_message(request: TelegramRequest):
     return {"msg": telebot_handler.lastSentMessage}
 
 
-@router.post("/telebot/reservations/{chatId}/completion")
+@router.post("/telebot/completion/{chatId}")
 def send_reservation_status(
-    chatId: int, msg: str = Query(...), status: str = Query(...)
+    chatId: int, msg: str = Query(...), status: int = Query(...)
 ):
     """예약 프로세스에서 결과를 받아 사용자에게 메세지 전송
 
     Args:
         chatId (int): 텔레그램 채팅방 ID
         msg (str): 전송할 메시지
-        status (str): 예약 상태 코드 ("0"이면 예약 완료)
+        status (int): 예약 상태 코드 (0이면 예약 완료)
 
     """
-    if status == "0":
+
+    if chatId not in telebot_handler.runningStatus:
+        print(f"Chat ID {chatId} not found in running list.")
+        return
+
+    if status == 0:
         print("예약 완료, 상태 초기화")
         telebot_handler.handle_progress(chatId, 0)
     telebot_handler.sendMessage(chatId, msg)
-
     del telebot_handler.runningStatus[chatId]
     # msgToSubscribers = f'{telebot_handler.userDict[chatId]["userInfo"]["korailId"]}의 예약이 종료되었습니다.'
     # telebot_handler.sendToSubscribers(msgToSubscribers)

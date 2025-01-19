@@ -122,8 +122,11 @@ MESSAGES_INFO = {
 ===================
 
 20분내에 사이트에서 결제를 완료하지 않으면 예약이 취소되니 서두르세요!
-https://www.letskorail.com/ebizprd/EbizPrdTicketpr13500W_pr13510.do?
-"""
+웹 링크에서 결제하기:
+https://www.letskorail.com/ebizprd/EbizPrdTicketpr13500W_pr13510.do
+코레일톡 앱에서 결제하기:
+코레일톡 → 오른쪽 상단 메뉴 → 승차권 예매 → 예약 승차권 조회/취소
+""",
 }
 
 MESSAGES_ERROR = {
