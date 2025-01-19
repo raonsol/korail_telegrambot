@@ -1,5 +1,5 @@
 include .env
-IMAGE_NAME := raonsol/korail_telegrambot:v1
+IMAGE_NAME := raonsol/korail_telegrambot:v0.5
 
 .PHONY: help
 help:           ## Show this help.
@@ -10,27 +10,27 @@ install:	## Install dependencies
 	pipenv install --dev
 
 .PHONY: dev
-dev:  ## Run application in development mode
-	pipenv run fastapi dev src/app.py --port 8080
+dev:  ## Run application in development mode (port: 8390)
+	pipenv run fastapi dev src/app.py --port 8390
 
 .PHONY: run
-run:	## Run application
-	pipenv run fastapi run src/app.py --host 0.0.0.0 --port 8080
+run:	## Run application (port:8391)
+	pipenv run fastapi run src/app.py --host 0.0.0.0 --port 8391
 
 .PHONY: lint
 lint:	## Run lint
 	pipenv run black .
 
-.PHONY: build
-build:		## Build Docker Image
+.PHONY: docker-build
+docker-build:		## Build Docker Image
 	docker build -t ${IMAGE_NAME} -f ./Dockerfile .
 
-.PHONY: publish
-publish:  	## Publish Docker Image
+.PHONY: docker-push
+docker-push:  	## Publish Docker Image
 	docker push ${IMAGE_NAME}
 
-.PHONY: run-docker
-run-docker:	## Run Docker container
+.PHONY: docker-run
+docker-run:	## Run Docker container
 	docker run -d \
 		--name korailbot \
 		--restart unless-stopped \
@@ -40,5 +40,5 @@ run-docker:	## Run Docker container
 		-e BOTTOKEN=${BOTTOKEN} \
 		-e ALLOW_LIST=${ALLOW_LIST} \
 		-e ADMINPW=${ADMINPW} \
-		-p 8391:8080 \
+		-p 8391:8391 \
 		${IMAGE_NAME}

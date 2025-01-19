@@ -1,3 +1,4 @@
+import os
 import requests
 import time
 import sys
@@ -150,7 +151,8 @@ class Korail:
         return None
 
     def sendBotStateChange(self, chatId, msg, status):
-        callbackUrl = f"http://127.0.0.1:8080/telebot/completion/{chatId}"
+        port = 8390 if os.getenv("IS_DEV", "false") == "true" else 8391
+        callbackUrl = f"http://127.0.0.1:{port}/telebot/completion/{chatId}"
         print(chatId, msg, status)
         param = {"msg": msg, "status": status}
         s = requests.session()

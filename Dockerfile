@@ -1,13 +1,13 @@
-FROM python:3.13-slim-buster
+FROM python:3.13.1-slim
 
 WORKDIR /app
-COPY Pipfile /app
-COPY Pipfile.lock /app
+COPY Pipfile* ./
 
-RUN pip install pipenv && pipenv install --system --deploy
+RUN pip install --no-cache-dir pipenv && \
+  pipenv install --system --deploy --clear
 
-COPY . /app
+COPY src .
 
-EXPOSE 8080
+EXPOSE 8391
 
-CMD ["fastapi", "run", "src/app.py", "--port", "8080"]
+CMD ["fastapi", "run", "app.py", "--port", "8391"]
