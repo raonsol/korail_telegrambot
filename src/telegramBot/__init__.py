@@ -1,2 +1,2 @@
-from .korailReserve import Korail
+from .korailReserve import ReserveHandler
 from .telebotApiHandler import TelebotApiHandler

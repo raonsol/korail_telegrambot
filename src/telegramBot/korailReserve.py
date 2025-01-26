@@ -2,16 +2,16 @@ import os
 import requests
 import time
 import sys
-from korail2 import Korail as KorailBase
+from korail2 import Korail
 from korail2 import ReserveOption, TrainType, SoldOutError, NoResultsError
 from .messages import MESSAGES_INFO, MESSAGES_ERROR
 
 sys.setrecursionlimit(10**7)
 
 
-class Korail:
+class ReserveHandler:
     def __init__(self):
-        self.korailObj = None
+        self.korail_client = None
         self.s = requests.session()
         self.reserveInfo = {
             "depDate": "",
@@ -42,8 +42,8 @@ class Korail:
         )
 
     def login(self, username, password):
-        self.korailObj = KorailBase(username, password, auto_login=False)
-        self.loginSuc = self.korailObj.login()
+        self.korail_client = Korail(username, password, auto_login=False)
+        self.loginSuc = self.korail_client.login()
         return self.loginSuc
 
     def reserve(
@@ -115,7 +115,7 @@ class Korail:
 
     def _search_trains(self):
         try:
-            trains = self.korailObj.search_train(
+            trains = self.korail_client.search_train(
                 self.reserveInfo["srcLocate"],
                 self.reserveInfo["dstLocate"],
                 self.reserveInfo["depDate"],
@@ -131,7 +131,7 @@ class Korail:
 
     def _try_reserve(self, train):
         try:
-            return self.korailObj.reserve(train, option=self.reserveInfo["special"])
+            return self.korail_client.reserve(train, option=self.reserveInfo["special"])
         except SoldOutError:
             print("예약을 놓쳤습니다. 다음 열차를 찾습니다.")
             return None
@@ -152,6 +152,7 @@ class Korail:
 
     def sendBotStateChange(self, chatId, msg, status):
         port = 8390 if os.getenv("IS_DEV", "false") == "true" else 8391
+        # port = 8391
         callbackUrl = f"http://127.0.0.1:{port}/telebot/completion/{chatId}"
         print(chatId, msg, status)
         param = {"msg": msg, "status": status}

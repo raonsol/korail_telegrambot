@@ -2,7 +2,7 @@ from korail2 import ReserveOption, TrainType
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from datetime import datetime
-from .korailReserve import Korail
+from .korailReserve import ReserveHandler
 from .messages import MESSAGES_INFO, MESSAGES_ERROR
 import requests
 import os
@@ -151,8 +151,8 @@ class TelebotApiHandler:
             if username and password:
                 self.userDict[chatId]["userInfo"]["korailId"] = username
                 self.userDict[chatId]["userInfo"]["korailPw"] = password
-                korail = Korail()
-                loginSuc = korail.login(username, password)
+                reserve_handler = ReserveHandler()
+                loginSuc = reserve_handler.login(username, password)
                 print(loginSuc)
                 if loginSuc:
                     msg = MESSAGES_INFO["LOGIN_SUCCESS_PROMPT"]
@@ -191,8 +191,8 @@ class TelebotApiHandler:
         print(self.userDict[chatId]["userInfo"])
         username = self.userDict[chatId]["userInfo"]["korailId"]
         password = self.userDict[chatId]["userInfo"]["korailPw"]
-        korail = Korail()
-        loginSuc = korail.login(username, password)
+        reserve_handler = ReserveHandler()
+        loginSuc = reserve_handler.login(username, password)
         print(loginSuc)
         if loginSuc:
             msg = MESSAGES_INFO["LOGIN_SUCCESS_PROMPT"]
@@ -388,7 +388,7 @@ class TelebotApiHandler:
         if chatId not in self.runningStatus:
             msg = "진행중인 예약이 없습니다."
             self.sendMessage(chatId, msg)
-            
+
         elif userPid != 9999999:
             os.kill(userPid, signal.SIGTERM)
             print(f"실행중인 프로세스 {userPid}를 종료합니다.")

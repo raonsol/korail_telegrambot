@@ -1,5 +1,5 @@
 import sys
-from .korailReserve import Korail
+from .korailReserve import ReserveHandler
 
 sys.setrecursionlimit(10**7)
 
@@ -18,13 +18,13 @@ class BackProcess(object):
         self.specialInfo = sys.argv[8]
         self.chatId = sys.argv[9]
         self.maxDepTime = sys.argv[10]
-        self.korail = Korail()
-        self.korail.login(self.username, self.password)
+        self.reserve_handler = ReserveHandler()
+        self.reserve_handler.login(self.username, self.password)
 
     def run(self):
 
         try:
-            self.korail.reserve(
+            self.reserve_handler.reserve(
                 self.depDate,
                 self.srcLocate,
                 self.dstLocate,
@@ -37,7 +37,7 @@ class BackProcess(object):
         except Exception as e:
             print(e)
             msg = "에러 발생 : {}".format(e)
-            self.korail.sendBotStateChange(self.chatId, msg, 0)
+            self.reserve_handler.sendBotStateChange(self.chatId, msg, 0)
         print("Reserve Job for {} is end".format(self.username))
 
 
