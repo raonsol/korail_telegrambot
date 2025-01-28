@@ -4,7 +4,7 @@ import time
 import sys
 from korail2 import Korail
 from korail2 import ReserveOption, TrainType, SoldOutError, NoResultsError
-from .messages import MESSAGES_INFO, MESSAGES_ERROR
+from .messages import Messages
 
 sys.setrecursionlimit(10**7)
 
@@ -142,11 +142,11 @@ class ReserveHandler:
         chatId = self.chatId
 
         if result == "wrong":
-            msg = MESSAGES_ERROR["RESERVE_WRONG"]
+            msg = Messages.Error.RESERVE_WRONG
         elif result:
-            msg = MESSAGES_INFO["RESERVE_SUCCESS"].format(reserveInfo=reserveInfo)
+            msg = Messages.Info.RESERVE_SUCCESS.format(reserveInfo=reserveInfo)
         else:
-            msg = MESSAGES_ERROR["RESERVE_FAILED"]
+            msg = Messages.Error.RESERVE_FAILED
         self.sendBotStateChange(chatId, msg, 0)
         return None
 

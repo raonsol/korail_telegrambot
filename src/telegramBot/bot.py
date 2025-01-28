@@ -1,23 +1,22 @@
-from korail2 import ReserveOption, TrainType
+import os
+import subprocess
+import signal
 from datetime import datetime
-from .korailReserve import ReserveHandler
-from .messages import MESSAGES_INFO, MESSAGES_ERROR
 
-from telegram import Update
+from korail2 import ReserveOption, TrainType
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
     MessageHandler,
     filters,
+    CallbackQueryHandler,
 )
 from telegram.error import TelegramError
 
-import requests
-import os
-import subprocess
-import signal
-import json
+from .korailReserve import ReserveHandler
+from .messages import Messages
 
 
 def is_affirmative(data):
@@ -71,13 +70,13 @@ class TelegramBot:
 
         # 명령어 처리를 위한 핸들러
         command_handlers = {
+            "start": self.start_func,
             "cancel": self.cancel_func,
             "subscribe": self.subscribe_user,
             "status": self.get_status_info,
             "cancelall": self.cancel_all,
             "allusers": self.get_all_users,
             "help": self.return_help,
-            "start": self.start_func,
             "broadcast": self.broadcast_message,
         }
         for command, handler in command_handlers.items():
@@ -90,6 +89,9 @@ class TelegramBot:
         self.app.add_handler(
             MessageHandler(filters.COMMAND, self._handle_unknown_command)
         )
+
+        # Add callback query handler for menu buttons
+        # self.app.add_handler(CallbackQueryHandler(self._handle_callback))
 
     async def handle_progress(self, chatId, action, data=""):
         actions = {
@@ -197,7 +199,7 @@ class TelegramBot:
     async def start_func(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chatId = update.message.chat_id
         self.ensure_user_exists(chatId)
-        msg = MESSAGES_INFO["START_MESSAGE"]
+        msg = Messages.Info.START_MESSAGE  # Clearer that this is a message string
         self.userDict[chatId]["inProgress"] = True
         self.userDict[chatId]["lastAction"] = 1
         await self.send_message(chatId, msg)
@@ -208,7 +210,7 @@ class TelegramBot:
 
         if is_affirmative(data):
             self.userDict[chatId]["lastAction"] = 2
-            msg = MESSAGES_INFO["START_ACCEPT_MESSAGE"]
+            msg = Messages.Info.START_ACCEPT_MESSAGE
 
         elif data == os.environ.get("ADMINPW"):
             username = os.environ.get("USERID")
@@ -226,7 +228,7 @@ class TelegramBot:
 
             reserve_handler = ReserveHandler()
             if reserve_handler.login(username, password):
-                msg = MESSAGES_INFO["LOGIN_SUCCESS_PROMPT"]
+                msg = Messages.Info.LOGIN_SUCCESS_PROMPT
                 self.userDict[chatId]["lastAction"] = 4
             else:
                 self._reset_user_state(chatId)
@@ -234,7 +236,7 @@ class TelegramBot:
 
         elif is_negative(data):
             self._reset_user_state(chatId)
-            msg = MESSAGES_ERROR["RESERVE_INIT_CANCELLED"]
+            msg = Messages.Error.RESERVE_INIT_CANCELLED
 
         await self.send_message(chatId, msg)
         return None
@@ -251,7 +253,7 @@ class TelegramBot:
         else:
             self.userDict[chatId]["userInfo"]["korailId"] = data
             self.userDict[chatId]["lastAction"] = 3
-            msg = MESSAGES_INFO["INPUT_ID_SUCCESS"]
+            msg = Messages.Info.INPUT_PW
         await self.send_message(chatId, msg)
         return None
 
@@ -265,7 +267,7 @@ class TelegramBot:
         loginSuc = reserve_handler.login(username, password)
         print(loginSuc)
         if loginSuc:
-            msg = MESSAGES_INFO["LOGIN_SUCCESS_PROMPT"]
+            msg = Messages.Info.LOGIN_SUCCESS_PROMPT
             self.userDict[chatId]["lastAction"] = 4
             await self.send_message(chatId, msg)
         else:
@@ -273,10 +275,10 @@ class TelegramBot:
                 await self._start_accept(chatId)
             elif is_negative(data):
                 self._reset_user_state(chatId)
-                msg = MESSAGES_INFO["RESERVE_FINISHED"]
+                msg = Messages.Info.RESERVE_FINISHED
                 await self.send_message(chatId, msg)
             else:
-                msg = MESSAGES_ERROR["INPUT_PW_FAILURE"].format(username)
+                msg = Messages.Error.INPUT_PW_FAILURE.format(username)
                 await self.send_message(chatId, msg)
 
         return None
@@ -287,23 +289,23 @@ class TelegramBot:
         if str(data).isdigit() and len(str(data)) == 8 and data >= today:
             self.userDict[chatId]["trainInfo"]["depDate"] = data
             self.userDict[chatId]["lastAction"] = 5
-            msg = MESSAGES_INFO["INPUT_DATE_SUCCESS"]
+            msg = Messages.Info.INPUT_SRC_STATION
         else:
-            msg = MESSAGES_ERROR["INPUT_DATE_FAILURE"]
+            msg = Messages.Error.INPUT_DATE_FAILURE
         await self.send_message(chatId, msg)
         return None
 
     async def _input_src_station(self, chatId, data):
         self.userDict[chatId]["trainInfo"]["srcLocate"] = data
         self.userDict[chatId]["lastAction"] = 6
-        msg = MESSAGES_INFO["INPUT_SRC_STATION_SUCCESS"]
+        msg = Messages.Info.INPUT_DST_STATION
         await self.send_message(chatId, msg)
         return None
 
     async def _input_dst_station(self, chatId, data):
         self.userDict[chatId]["trainInfo"]["dstLocate"] = data
         self.userDict[chatId]["lastAction"] = 7
-        msg = MESSAGES_INFO["INPUT_DST_STATION_SUCCESS"]
+        msg = Messages.Info.INPUT_DEP_TIME
 
         await self.send_message(chatId, msg)
         return None
@@ -312,9 +314,9 @@ class TelegramBot:
         if len(str(data)) == 4 and str(data).isdecimal():
             self.userDict[chatId]["trainInfo"]["depTime"] = data
             self.userDict[chatId]["lastAction"] = 8
-            msg = MESSAGES_INFO["INPUT_DEP_TIME_SUCCESS"]
+            msg = Messages.Info.INPUT_MAX_DEP_TIME
         else:
-            msg = MESSAGES_ERROR["INPUT_DEP_TIME_FAILURE"]
+            msg = Messages.Error.INPUT_DEP_TIME_FAILURE
 
         await self.send_message(chatId, msg)
         return None
@@ -323,9 +325,9 @@ class TelegramBot:
         if len(str(data)) == 4 and str(data).isdecimal():
             self.userDict[chatId]["trainInfo"]["maxDepTime"] = data
             self.userDict[chatId]["lastAction"] = 9
-            msg = MESSAGES_INFO["INPUT_MAX_DEP_TIME_SUCCESS"]
+            msg = Messages.Info.INPUT_TRAIN_TYPE
         else:
-            msg = MESSAGES_ERROR["INPUT_DEP_TIME_FAILURE"]
+            msg = Messages.Error.INPUT_DEP_TIME_FAILURE
 
         await self.send_message(chatId, msg)
         return None
@@ -341,7 +343,7 @@ class TelegramBot:
             self.userDict[chatId]["trainInfo"]["trainType"] = trainType
             self.userDict[chatId]["trainInfo"]["trainTypeShow"] = trainTypeShow
             self.userDict[chatId]["lastAction"] = 10
-            msg = MESSAGES_INFO["INPUT_TRAIN_TYPE_SUCCESS"]
+            msg = Messages.Info.INPUT_SEAT_TYPE
         else:
             msg = """입력하신 값이 1,2 중 하나가 아닙니다. 다시 입력해주세요."""
         await self.send_message(chatId, msg)
@@ -362,7 +364,7 @@ class TelegramBot:
             self.userDict[chatId]["lastAction"] = 11
 
             train_info = self.userDict[chatId]["trainInfo"]
-            msg = MESSAGES_INFO["INPUT_SPECIAL_SUCCESS"].format(
+            msg = Messages.Info.CONFIRM_DETAILS.format(
                 depDate=train_info["depDate"],
                 srcLocate=train_info["srcLocate"],
                 dstLocate=train_info["dstLocate"],
@@ -410,12 +412,12 @@ class TelegramBot:
                 # msgToSubscribers = f"{user_info['korailId']}의 {train_info['srcLocate']}에서 {train_info['dstLocate']}로 {train_info['depDate']}에 출발하는 열차 예약이 시작되었습니다."
                 # self.sendToSubscribers(msgToSubscribers)
 
-                msg = MESSAGES_INFO["RESERVE_STARTED"]
+                msg = Messages.Info.RESERVE_STARTED
             elif is_negative(data):
                 self._reset_user_state(chatId)
-                msg = MESSAGES_ERROR["RESERVE_CANCELLED"]
+                msg = Messages.Error.RESERVE_CANCELLED
             else:
-                msg = MESSAGES_ERROR["INPUT_WRONG"]
+                msg = Messages.Error.INPUT_WRONG
             await self.send_message(chatId, msg)
         except Exception as e:
             await self.send_message(
@@ -441,7 +443,7 @@ class TelegramBot:
 
     async def _already_doing(self, chatId):
         train_info = self.userDict[chatId]["trainInfo"]
-        msg = MESSAGES_ERROR["RESERVE_ALREADY_DOING"].format(
+        msg = Messages.Error.RESERVE_ALREADY_DOING.format(
             depDate=train_info["depDate"],
             srcLocate=train_info["srcLocate"],
             dstLocate=train_info["dstLocate"],
@@ -469,7 +471,7 @@ class TelegramBot:
             await self.broadcast_message(msgToSubscribers)
 
             self._reset_user_state(chatId)
-            msg = MESSAGES_INFO["RESERVE_FINISHED"]
+            msg = Messages.Info.RESERVE_FINISHED
             await self.send_message(chatId, msg)
 
         return None
@@ -516,7 +518,7 @@ class TelegramBot:
         dataForManager = f"총 {count}개의 진행중인 예약을 종료했습니다. 이용중이던 사용자 : {usersKorailIds}"
         await self.send_message(chatId, dataForManager)
 
-        dataForUser = MESSAGES_ERROR["RESERVE_CANCELLED_BY_ADMIN"]
+        dataForUser = Messages.Error.RESERVE_CANCELLED_BY_ADMIN
         for user in usersChatId:
             await self.send_message(user, dataForUser)
             self.handle_progress(user, 0)
@@ -533,5 +535,37 @@ class TelegramBot:
     async def return_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chatId = update.message.chat_id
         self.ensure_user_exists(chatId)
-        msg = MESSAGES_INFO["HELP_MESSAGE"]
+        msg = Messages.Info.HELP_MESSAGE
         await self.send_message(chatId, msg)
+
+    # async def show_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    #     keyboard = [
+    #         [
+    #             InlineKeyboardButton("예약 시작", callback_data="start"),
+    #             InlineKeyboardButton("예약 취소", callback_data="cancel"),
+    #         ],
+    #         [
+    #             InlineKeyboardButton("예약 상태", callback_data="status"),
+    #             InlineKeyboardButton("도움말", callback_data="help"),
+    #         ],
+    #     ]
+    #     reply_markup = InlineKeyboardMarkup(keyboard)
+    #     await update.message.reply_text("메뉴를 선택하세요:", reply_markup=reply_markup)
+
+    # async def _handle_callback(
+    #     self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    # ):
+    #     query = update.callback_query
+    #     await query.answer()
+
+    #     # Map callback_data to existing command handlers
+    #     command_map = {
+    #         "start": self.start_func,
+    #         "cancel": self.cancel_func,
+    #         "status": self.get_status_info,
+    #         "help": self.return_help,
+    #     }
+
+    #     handler = command_map.get(query.data)
+    #     if handler:
+    #         await handler(update, context)
