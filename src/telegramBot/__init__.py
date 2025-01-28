@@ -1,2 +1,2 @@
 from .korailReserve import ReserveHandler
-from .telebotApiHandler import TelebotApiHandler
+from .bot import TelegramBot
