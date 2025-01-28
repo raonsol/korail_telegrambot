@@ -26,6 +26,15 @@ def is_affirmative(data):
 def is_negative(data):
     return str(data).upper() == "N" or str(data) == "아니오"
 
+def is_valid_time(str):
+    try:
+        if not str.isdigit() or len(str) != 4:
+            return False
+        hour = int(str[:2])
+        minute = int(str[2:])
+        return 0 <= hour <= 23 and 0 <= minute <= 59
+    except:
+        return False
 
 class TelegramBot:
     def __init__(self, token: str):
@@ -311,7 +320,7 @@ class TelegramBot:
         return None
 
     async def _input_dep_time(self, chatId, data):
-        if len(str(data)) == 4 and str(data).isdecimal():
+        if is_valid_time(str(data)):
             self.userDict[chatId]["trainInfo"]["depTime"] = data
             self.userDict[chatId]["lastAction"] = 8
             msg = Messages.Info.INPUT_MAX_DEP_TIME
@@ -322,7 +331,7 @@ class TelegramBot:
         return None
 
     async def _input_max_dep_time(self, chatId, data):
-        if len(str(data)) == 4 and str(data).isdecimal():
+        if is_valid_time(str(data)):
             self.userDict[chatId]["trainInfo"]["maxDepTime"] = data
             self.userDict[chatId]["lastAction"] = 9
             msg = Messages.Info.INPUT_TRAIN_TYPE
