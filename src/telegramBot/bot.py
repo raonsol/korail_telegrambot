@@ -520,12 +520,21 @@ class TelegramBot:
                 # self.sendToSubscribers(msgToSubscribers)
 
                 msg = Messages.Info.RESERVE_STARTED
+                await self.send_message(chat_id, msg)
             elif data == "confirm_no":
                 self._reset_user_state(chat_id)
                 msg = Messages.Error.RESERVE_CANCELLED
+                await self.send_message(chat_id, msg)
             else:
                 msg = Messages.Error.INPUT_WRONG
-            await self.send_message(chat_id, msg)
+                keyboard = [
+                    [
+                        InlineKeyboardButton("예", callback_data="confirm_yes"),
+                        InlineKeyboardButton("아니오", callback_data="confirm_no"),
+                    ]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await self.send_message(chat_id, msg, reply_markup=reply_markup)
         except Exception as e:
             await self.send_message(
                 chat_id,
@@ -642,5 +651,9 @@ class TelegramBot:
     async def return_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.message.chat_id
         self.ensure_user_exists(chat_id)
-        msg = Messages.Info.HELP_MESSAGE
+        msg = """
+- 예약 시작 : /start
+- 예약 상태 확인 : /status
+- 예약 진행 취소 : /cancel
+        """
         await self.send_message(chat_id, msg)
