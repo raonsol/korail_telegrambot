@@ -1,7 +1,7 @@
 import os
 import subprocess
 import signal
-from datetime import datetime
+from datetime import datetime, time
 
 from korail2 import ReserveOption, TrainType
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -30,12 +30,19 @@ def is_negative(data):
 
 def is_valid_time(str):
     try:
-        if not str.isdigit() or len(str) != 4:
+        if not (len(str) == 4 and str.isdigit()):
             return False
-        hour = int(str[:2])
-        minute = int(str[2:])
-        return 0 <= hour <= 23 and 0 <= minute <= 59
-    except:
+
+        hours = int(str[:2])
+        minutes = int(str[2:])
+        if not (0 <= hours <= 23 and 0 <= minutes <= 59):
+            return False
+
+        input_time = time(hours, minutes)
+        current_time = datetime.now().time()
+        return input_time >= current_time
+
+    except ValueError:
         return False
 
 
@@ -374,7 +381,8 @@ class TelegramBot:
         return None
 
     async def _input_max_dep_time(self, chat_id, data):
-        if is_valid_time(str(data)):
+        dep_time = self.userDict[chat_id]["trainInfo"]["depTime"]
+        if is_valid_time(str(data)) and int(data) >= int(dep_time):
             self.userDict[chat_id]["trainInfo"]["maxDepTime"] = data
             self.userDict[chat_id]["lastAction"] = 9
             await self._send_train_type_options(chat_id)
