@@ -17,6 +17,7 @@ from telegram.error import TelegramError
 
 from .korailReserve import ReserveHandler
 from .messages import Messages
+from .calendarKeyboard import create_calendar, handle_calendar_action
 
 
 def is_affirmative(data):
@@ -109,7 +110,7 @@ class TelegramBot:
             1: self._start_accept,
             2: self._input_id,
             3: self._input_pw,
-            4: self._input_date,
+            4: self._input_date_str,
             5: self._input_src_station,
             6: self._input_dst_station,
             7: self._input_dep_time,
@@ -173,6 +174,10 @@ class TelegramBot:
             await self._input_seat_type(chat_id, query.data)
         elif query.data.startswith("confirm_"):
             await self._start_reserve(chat_id, query.data)
+        elif query.data.startswith("calendar_"):
+            selected, date = await handle_calendar_action(update, context)
+            if selected:
+                await self._input_date(chat_id, date)
 
     def _reset_user_state(self, chat_id):
         self.userDict[chat_id]["inProgress"] = False
@@ -216,7 +221,9 @@ class TelegramBot:
         """Send message using telegram bot API"""
         try:
             message = await self.app.bot.send_message(
-                chat_id=chat_id, text=text, reply_markup=reply_markup
+                chat_id=chat_id,
+                text=text,
+                reply_markup=reply_markup,
             )
             self.lastSentMessage = text
             print(f"Send message to {chat_id} : {text}")
@@ -260,10 +267,11 @@ class TelegramBot:
             if reserve_handler.login(username, password):
                 msg = Messages.Info.INPUT_DATE
                 self.userDict[chat_id]["lastAction"] = 4
+                await self.send_message(chat_id, msg, reply_markup=create_calendar())
             else:
                 self._reset_user_state(chat_id)
                 msg = "관리자 계정으로 로그인에 문제가 발생하였습니다."
-            await self.send_message(chat_id, msg)
+                await self.send_message(chat_id, msg)
             return None
 
         if data == "start_yes":
@@ -302,10 +310,10 @@ class TelegramBot:
         if loginSuc:
             msg = Messages.Info.INPUT_DATE
             self.userDict[chat_id]["lastAction"] = 4
-            await self.send_message(chat_id, msg)
+            await self.send_message(chat_id, msg, reply_markup=create_calendar())
         else:
             if is_affirmative(data):
-                await self._start_accept(chat_id)
+                await self._start_accept(chat_id, "start_yes")
             elif is_negative(data):
                 self._reset_user_state(chat_id)
                 msg = Messages.Info.RESERVE_FINISHED
@@ -316,16 +324,27 @@ class TelegramBot:
 
         return None
 
-    # 출발일 입력 함수
-    async def _input_date(self, chat_id, data):
-        today = datetime.today().strftime("%Y%m%d")
-        if str(data).isdigit() and len(str(data)) == 8 and data >= today:
-            self.userDict[chat_id]["trainInfo"]["depDate"] = data
+    # 출발일 입력 함수 (직접 입력시)
+    async def _input_date_str(self, chat_id, data):
+        try:
+            date = datetime.strptime(data, "%Y%m%d")
+            await self._input_date(chat_id, date)
+        except ValueError:
+            msg = Messages.Error.INPUT_DATE_FAILURE
+            await self.send_message(chat_id, msg, reply_markup=create_calendar())
+            return None
+
+    # 출발일 입력 함수 (캘린더 키보드 선택시)
+    async def _input_date(self, chat_id, data: datetime):
+        today = datetime.today().date()
+        if data.date() >= today:
+            self.userDict[chat_id]["trainInfo"]["depDate"] = data.strftime("%Y%m%d")
             self.userDict[chat_id]["lastAction"] = 5
             msg = Messages.Info.INPUT_SRC_STATION
+            await self.send_message(chat_id, msg)
         else:
             msg = Messages.Error.INPUT_DATE_FAILURE
-        await self.send_message(chat_id, msg)
+            await self.send_message(chat_id, msg, reply_markup=create_calendar())
         return None
 
     async def _input_src_station(self, chat_id, data):
