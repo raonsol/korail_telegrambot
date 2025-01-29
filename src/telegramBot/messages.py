@@ -4,11 +4,6 @@ from dataclasses import dataclass
 @dataclass
 class Messages:
     class Info:
-        LOGIN_SUCCESS_PROMPT: str = """
-로그인에 성공하였습니다.
-예매 희망일 8자를 입력해주십시오.
-(ex_ 20210124) <- 2021년 1월 24일
-"""
         START_MESSAGE: str = """
 본 프로그램은 매진 열차 자동 예약을 위해 제작된 프로그램으로, 결제 직전의 단계인 "예약" 까지만 진행해 주며, 이후 결제는 예약이 완료된 이후 20분 내로 사용자가 직접 결제해야 합니다.
 
@@ -21,10 +16,10 @@ class Messages:
 4. 도착 역 입력
 ================
 
-예매를 시작하시려면 "예" 또는 "Y"를 입력해주세요.
+예매를 시작하시려면 "시작하기"을 선택해주세요.
 * 관리자로 바로 로그인하려면 관리자 비밀번호를 입력하세요
 """
-        START_ACCEPT_MESSAGE: str = """
+        INPUT_ID: str = """
 예매를 시작합니다.
 예매 진행중 취소를 원하시면 /cancel 을 입력해주세요.
 
@@ -34,6 +29,11 @@ class Messages:
         INPUT_PW: str = """
 아이디 입력에 성공하였습니다.
 비밀번호를 입력해주십시오.
+"""
+        INPUT_DATE: str = """
+로그인에 성공하였습니다.
+예매 희망일 8자를 입력해주십시오.
+(ex_ 20210124) <- 2021년 1월 24일
 """
         INPUT_SRC_STATION: str = """
 출발일 입력에 성공하였습니다.
@@ -69,27 +69,11 @@ class Messages:
 """
         INPUT_TRAIN_TYPE: str = """
 기준 시각 입력이 완료되었습니다.
-이용할 열차의 타입을 선택해 주십시오.
-
-=================
-1. KTX 및 KTX-산천 열차만 예약
-2. 모든 열차 형식 포함하여 예약
-=================
-
-1 또는 2를 입력해 주십시오.
+이용할 열차의 종류를 선택해 주세요.
 """
         INPUT_SEAT_TYPE: str = """
 이용할 열차의 타입 입력이 완료되었습니다.
-특실 예매에 대한 타입을 입력해 주십시오.
-
-=================
-1. 일반실 우선 예약
-2. 일반실만 예약
-3. 특실 우선 예약
-4. 특실만 예약
-=================
-
-1, 2, 3, 4 중 하나를 선택해 주십시오.
+예약할 객실 종류를 선택해 주세요
 """
         CONFIRM_DETAILS: str = """
 모든 정보 입력이 완료되었습니다.
@@ -100,12 +84,12 @@ class Messages:
 도착역 : {dstLocate}
 검색기준시각 : {depTime}
 검색최대시각 : {maxDepTime}
-열차타입 : {trainTypeShow}
-특실여부 : {specialInfoShow}
+열차종류 : {trainTypeShow}
+객실종류 : {specialInfoShow}
 ===================
 
-'Y'또는 '예'를 입력하시면 예약을 시작합니다.
-'N'또는 '아니오'를 입력하시면 작업을 취소합니다.
+'예'를 선택하시면 예약을 시작합니다.
+'아니오'를 선택하시면 작업을 취소합니다.
 예약 완료에 오랜 시간이 걸릴 수 있습니다.
 """
         RESERVE_STARTED: str = """
@@ -137,9 +121,12 @@ https://www.letskorail.com/ebizprd/EbizPrdTicketpr13500W_pr13510.do
 
     class Error:
         RESERVE_CANCELLED: str = "예약 작업이 취소되었습니다."
-        RESERVE_INIT_CANCELLED: str = "예매 진행을 취소합니다."
-        RESERVE_CANCELLED_BY_ADMIN: str = "관리자에 의해 실행중이던 예약이 강제 종료됩니다."
-        RESERVE_WRONG: str = "차편을 찾을 수 없거나, 검색에 문제가 생겼습니다. 처음부터 다시 시도해 주세요."
+        RESERVE_CANCELLED_BY_ADMIN: str = (
+            "관리자에 의해 실행중이던 예약이 강제 종료됩니다."
+        )
+        RESERVE_WRONG: str = (
+            "차편을 찾을 수 없거나, 검색에 문제가 생겼습니다. 처음부터 다시 시도해 주세요."
+        )
         RESERVE_FAILED: str = """
 알수 없는 오류로 예매에 실패했습니다. 처음부터 다시 시도해주세요.
 * 문제가 없는데 계속 반복되는 경우, 이미 해당 열차 예약을 성공한 상태일 수 있습니다. 장바구니를 확인해 보세요.
@@ -165,7 +152,9 @@ https://www.letskorail.com/ebizprd/EbizPrdTicketpr13500W_pr13510.do
 예매 희망일 8자를 입력해주십시오.
 (ex_ 20210124) <- 2021년 1월 24일
 """
-        INPUT_DEP_TIME_FAILURE: str = "입력하신 값이 HHMM 형식에 맞지 않습니다. 다시 입력해주세요."
+        INPUT_DEP_TIME_FAILURE: str = (
+            "입력하신 값이 HHMM 형식에 맞지 않습니다. 다시 입력해주세요."
+        )
         RESERVE_ALREADY_DOING: str = """
 현재 예매가 이미 진행중입니다.
 ===================

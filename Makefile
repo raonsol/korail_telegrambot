@@ -15,7 +15,7 @@ install:	## Install dependencies
 
 .PHONY: dev
 dev:  ## Run application in development mode (port: 8390)
-	pipenv run fastapi dev src/app.py --host 0.0.0.0 --port 8391
+	pipenv run fastapi dev src/app.py --port 8390
 
 .PHONY: run
 run:	## Run application (port:8391)
