@@ -137,25 +137,20 @@ class ReserveHandler:
             return None
 
     def sendReservationStatus(self, reserveInfo):
-        print(reserveInfo)
         result = self.reserveInfo["reserveSuc"]
-        chatId = self.chatId
 
         if result == "wrong":
-            msg = Messages.Error.RESERVE_WRONG
+            status = -1  # Error status
         elif result:
-            msg = Messages.Info.RESERVE_SUCCESS.format(reserveInfo=reserveInfo)
+            status = 1  # Success status
         else:
-            msg = Messages.Error.RESERVE_FAILED
-        self.sendBotStateChange(chatId, msg, 0)
-        return None
+            status = 0  # Failed status
 
-    def sendBotStateChange(self, chatId, msg, status):
         port = 8390 if os.getenv("IS_DEV", "false") == "true" else 8391
         # port = 8391
-        callbackUrl = f"http://127.0.0.1:{port}/telebot/completion/{chatId}"
-        print(chatId, msg, status)
-        param = {"msg": msg, "status": status}
+        callbackUrl = f"http://127.0.0.1:{port}/completion/{self.chatId}"
+        print(self.chatId, reserveInfo, status)
+        param = {"status": status, "reserveInfo": str(reserveInfo)}
         s = requests.session()
         s.post(callbackUrl, params=param, verify=False)
         return None

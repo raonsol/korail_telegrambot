@@ -80,9 +80,15 @@ class TelegramBot:
         self.app.set_webhook(url)
         print(f"Webhook set to {url}")
 
-    def delete_webhook(self):
-        self.app.delete_webhook()
+    async def delete_webhook(self):
+        await self.app.bot.delete_webhook()
         print("Webhook deleted")
+    
+    def start(self):
+        self.app.start()
+    
+    def stop(self):
+        self.app.stop()
 
     def _register_handlers(self):
         """Register all bot command handlers"""
