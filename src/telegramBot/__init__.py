@@ -1,2 +1,2 @@
-from .korailReserve import ReserveHandler
+from .korail_client import ReserveHandler
 from .bot import TelegramBot

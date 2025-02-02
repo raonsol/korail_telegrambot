@@ -15,9 +15,9 @@ from telegram.ext import (
 )
 from telegram.error import TelegramError
 
-from .korailReserve import ReserveHandler
+from .korail_client import ReserveHandler
 from .messages import Messages
-from .calendarKeyboard import create_calendar, handle_calendar_action
+from .calendar_keyboard import create_calendar, handle_calendar_action
 
 
 def is_affirmative(data):
@@ -566,7 +566,7 @@ class TelegramBot:
 
     def _start_background_process(self, arguments):
         try:
-            cmd = ["python", "-m", "telegramBot.telebotBackProcess"] + arguments
+            cmd = ["python", "-m", "telegramBot.worker"] + arguments
             cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
             process = subprocess.Popen(

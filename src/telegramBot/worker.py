@@ -1,5 +1,5 @@
 import sys
-from .korailReserve import ReserveHandler
+from .korail_client import ReserveHandler
 
 sys.setrecursionlimit(10**7)
 
