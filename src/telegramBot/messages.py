@@ -156,6 +156,12 @@ https://www.letskorail.com/ebizprd/EbizPrdTicketpr13500W_pr13510.do
         INPUT_DEP_TIME_FAILURE: str = (
             "입력하신 값이 HHMM 형식에 맞지 않습니다. 다시 입력해주세요."
         )
+        INPUT_DEP_TIME_PAST_FAILURE: str = (
+                "입력하신 값이 현재 시각보다 이전입니다. 다시 입력해주세요."
+        )
+        INPUT_DEP_TIME_MAX_PAST_FAILURE: str = (
+                "입력하신 값이 출발 시각보다 이전입니다. 다시 입력해주세요."
+        )
         RESERVE_ALREADY_DOING: str = """
 현재 예매가 이미 진행중입니다.
 ===================

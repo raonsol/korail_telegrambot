@@ -30,6 +30,7 @@ def is_negative(data):
 
 def is_valid_time(str):
     try:
+        print("time: ", str)
         if not (len(str) == 4 and str.isdigit()):
             return False
 
@@ -37,13 +38,23 @@ def is_valid_time(str):
         minutes = int(str[2:])
         if not (0 <= hours <= 23 and 0 <= minutes <= 59):
             return False
-
-        input_time = time(hours, minutes)
-        current_time = datetime.now().time()
-        return input_time >= current_time
+        else:
+            return True
 
     except ValueError:
         return False
+
+
+def is_today(date: str):
+    date_alt = datetime.strptime(date, "%Y%m%d")
+    today = datetime.today().strftime("%Y%m%d")
+    return date_alt == today
+
+
+def is_past_time(time: str):
+    time_alt = datetime.strptime(time, "%H%M")
+    current_time = datetime.now().time()
+    return time_alt < current_time
 
 
 class TelegramBot:
@@ -76,8 +87,8 @@ class TelegramBot:
     # Group for get notification
     subscribes = []
 
-    def set_webhook(self, url):
-        self.app.set_webhook(url)
+    async def set_webhook(self, url):
+        await self.app.bot.set_webhook(url)
         print(f"Webhook set to {url}")
 
     async def delete_webhook(self):
@@ -376,25 +387,30 @@ class TelegramBot:
         return None
 
     async def _input_dep_time(self, chat_id, data):
-        if is_valid_time(str(data)):
+        dep_date = self.userDict[chat_id]["trainInfo"]["depDate"]
+        if not is_valid_time(str(data)):
+            msg = Messages.Error.INPUT_DEP_TIME_FAILURE
+        elif is_today(dep_date) and is_past_time(str(data)):
+            msg = Messages.Error.INPUT_DEP_TIME_PAST_FAILURE
+        else:
             self.userDict[chat_id]["trainInfo"]["depTime"] = data
             self.userDict[chat_id]["lastAction"] = 8
             msg = Messages.Info.INPUT_MAX_DEP_TIME
-        else:
-            msg = Messages.Error.INPUT_DEP_TIME_FAILURE
-
         await self.send_message(chat_id, msg)
         return None
 
     async def _input_max_dep_time(self, chat_id, data):
         dep_time = self.userDict[chat_id]["trainInfo"]["depTime"]
-        if is_valid_time(str(data)) and int(data) >= int(dep_time):
+        if not is_valid_time(str(data)):
+            msg = Messages.Error.INPUT_DEP_TIME_FAILURE
+            await self.send_message(chat_id, msg)
+        elif int(data) < int(dep_time):
+            msg = Messages.Error.INPUT_DEP_TIME_MAX_PAST_FAILURE
+            await self.send_message(chat_id, msg)
+        else:
             self.userDict[chat_id]["trainInfo"]["maxDepTime"] = data
             self.userDict[chat_id]["lastAction"] = 9
             await self._send_train_type_options(chat_id)
-        else:
-            msg = Messages.Error.INPUT_DEP_TIME_FAILURE
-            await self.send_message(chat_id, msg)
         return None
 
     async def _send_train_type_options(self, chat_id):
