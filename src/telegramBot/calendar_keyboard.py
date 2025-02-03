@@ -38,16 +38,17 @@ def create_calendar(year=None, month=None):
     row = []
     row.append(
         InlineKeyboardButton(
-            calendar.month_name[month] + " " + str(year), callback_data=data_ignore
+            f"{str(year)} {month}월", callback_data=data_ignore
         )
     )
     keyboard.append(row)
     # Second row - Week Days
     row = []
-    for day in ["월", "화", "수", "목", "금", "토", "일"]:
+    for day in ["일", "월", "화", "수", "목", "금", "토"]:
         row.append(InlineKeyboardButton(day, callback_data=data_ignore))
     keyboard.append(row)
 
+    calendar.setfirstweekday(calendar.SUNDAY)
     my_calendar = calendar.monthcalendar(year, month)
     for week in my_calendar:
         row = []
