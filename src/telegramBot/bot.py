@@ -19,6 +19,11 @@ from telegram.error import TelegramError
 from .korail_client import ReserveHandler
 from .messages import Messages
 from .calendar_keyboard import create_calendar, handle_calendar_action
+from .time_keyboard import (
+    create_time_keyboard,
+    create_max_time_keyboard,
+    handle_time_action,
+)
 
 
 def is_affirmative(data):
@@ -203,6 +208,13 @@ class TelegramBot:
             selected, date = await handle_calendar_action(update, context)
             if selected:
                 await self._input_date(chat_id, date)
+        else:
+            selected, time = handle_time_action(query.data)
+            if selected:
+                if query.data.startswith("time;"):
+                    await self._input_dep_time(chat_id, time)
+                elif query.data.startswith("maxtime;"):
+                    await self._input_max_dep_time(chat_id, time)
 
     def _reset_user_state(self, chat_id):
         self.userDict[chat_id]["inProgress"] = False
@@ -363,9 +375,12 @@ class TelegramBot:
     async def _input_date(self, chat_id, data: datetime):
         today = datetime.today().date()
         if data.date() >= today:
+            formatted_date = data.strftime("%Y년 %m월 %d일")
             self.userDict[chat_id]["trainInfo"]["depDate"] = data.strftime("%Y%m%d")
             self.userDict[chat_id]["lastAction"] = 5
-            msg = Messages.Info.INPUT_SRC_STATION
+            msg = (
+                f"선택하신 날짜: {formatted_date}\n\n{Messages.Info.INPUT_SRC_STATION}"
+            )
             await self.send_message(chat_id, msg)
         else:
             msg = Messages.Error.INPUT_DATE_FAILURE
@@ -375,16 +390,15 @@ class TelegramBot:
     async def _input_src_station(self, chat_id, data):
         self.userDict[chat_id]["trainInfo"]["srcLocate"] = data
         self.userDict[chat_id]["lastAction"] = 6
-        msg = Messages.Info.INPUT_DST_STATION
+        msg = f"선택하신 출발역: {data}\n\n{Messages.Info.INPUT_DST_STATION}"
         await self.send_message(chat_id, msg)
         return None
 
     async def _input_dst_station(self, chat_id, data):
         self.userDict[chat_id]["trainInfo"]["dstLocate"] = data
         self.userDict[chat_id]["lastAction"] = 7
-        msg = Messages.Info.INPUT_DEP_TIME
-
-        await self.send_message(chat_id, msg)
+        msg = f"선택하신 도착역: {data}\n\n{Messages.Info.INPUT_DEP_TIME}"
+        await self.send_message(chat_id, msg, reply_markup=create_time_keyboard())
         return None
 
     async def _input_dep_time(self, chat_id, data):
@@ -396,8 +410,10 @@ class TelegramBot:
         else:
             self.userDict[chat_id]["trainInfo"]["depTime"] = data
             self.userDict[chat_id]["lastAction"] = 8
-            msg = Messages.Info.INPUT_MAX_DEP_TIME
-        await self.send_message(chat_id, msg)
+            msg = f"선택하신 출발 시간: {data[:2]}:{data[2:]}\n\n{Messages.Info.INPUT_MAX_DEP_TIME}"
+            await self.send_message(
+                chat_id, msg, reply_markup=create_max_time_keyboard(data)
+            )
         return None
 
     async def _input_max_dep_time(self, chat_id, data):
@@ -411,10 +427,11 @@ class TelegramBot:
         else:
             self.userDict[chat_id]["trainInfo"]["maxDepTime"] = data
             self.userDict[chat_id]["lastAction"] = 9
-            await self._send_train_type_options(chat_id)
+            msg = f"선택하신 최대 출발 시간: {data[:2]}:{data[2:]}\n\n"
+            await self._send_train_type_options(chat_id, msg)
         return None
 
-    async def _send_train_type_options(self, chat_id):
+    async def _send_train_type_options(self, chat_id, prefix_msg=""):
         """기차 옵션 선택을 위해 인라인 키보드 전송"""
         keyboard = [
             [
@@ -425,7 +442,7 @@ class TelegramBot:
         reply_markup = InlineKeyboardMarkup(keyboard)
         await self.send_message(
             chat_id=chat_id,
-            text=Messages.Info.INPUT_TRAIN_TYPE,
+            text=prefix_msg + Messages.Info.INPUT_TRAIN_TYPE,
             reply_markup=reply_markup,
         )
 
