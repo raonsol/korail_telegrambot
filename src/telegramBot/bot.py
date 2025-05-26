@@ -2,6 +2,7 @@ import os
 import subprocess
 import signal
 from datetime import datetime, time
+import threading
 
 from korail2 import ReserveOption, TrainType
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -94,10 +95,10 @@ class TelegramBot:
     async def delete_webhook(self):
         await self.app.bot.delete_webhook()
         print("Webhook deleted")
-    
+
     def start(self):
         self.app.start()
-    
+
     def stop(self):
         self.app.stop()
 
@@ -569,9 +570,38 @@ class TelegramBot:
             cmd = ["python", "-m", "telegramBot.worker"] + arguments
             cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
+            # Create a log file for the process
+            log_file = open(f"worker_{arguments[-2]}.log", "a")
+
             process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=cwd
+                cmd,
+                stdout=log_file,
+                stderr=log_file,
+                text=True,
+                cwd=cwd,
+                start_new_session=True,  # Create new process group
             )
+
+            # Start a monitoring thread
+            def monitor_process(pid, chat_id):
+                while True:
+                    try:
+                        # Check if process is still running
+                        if os.kill(pid, 0):
+                            time.sleep(5)  # Check every 5 seconds
+                            continue
+                    except OSError:
+                        # Process is dead
+                        if chat_id in self.runningStatus:
+                            del self.runningStatus[chat_id]
+                        if chat_id in self.userDict:
+                            self._reset_user_state(chat_id)
+                        break
+
+            monitor_thread = threading.Thread(
+                target=monitor_process, args=(process.pid, arguments[-2]), daemon=True
+            )
+            monitor_thread.start()
 
             return process.pid
 
@@ -599,18 +629,41 @@ class TelegramBot:
         if chat_id not in self.runningStatus:
             msg = "진행중인 예약이 없습니다."
             await self.send_message(chat_id, msg)
+            return None
 
         elif userPid != 9999999:
-            os.kill(userPid, signal.SIGTERM)
-            print(f"실행중인 프로세스 {userPid}를 종료합니다.")
+            try:
+                # Try graceful termination first
+                os.kill(userPid, signal.SIGTERM)
 
-            del self.runningStatus[chat_id]
-            msgToSubscribers = f'{self.userDict[chat_id]["userInfo"]["korailId"]}의 예약이 종료되었습니다.'
-            await self.broadcast_message(msgToSubscribers)
+                # Wait for process to terminate
+                for _ in range(5):  # Wait up to 5 seconds
+                    try:
+                        os.kill(userPid, 0)
+                        time.sleep(1)
+                    except OSError:
+                        break
+                else:
+                    # If process is still running, force kill
+                    os.kill(userPid, signal.SIGKILL)
 
-            self._reset_user_state(chat_id)
-            msg = Messages.Info.RESERVE_FINISHED
-            await self.send_message(chat_id, msg)
+                print(f"실행중인 프로세스 {userPid}를 종료했습니다.")
+
+                # Clean up resources
+                if chat_id in self.runningStatus:
+                    del self.runningStatus[chat_id]
+
+                msgToSubscribers = f'{self.userDict[chat_id]["userInfo"]["korailId"]}의 예약이 종료되었습니다.'
+                await self.broadcast_message(msgToSubscribers)
+
+                self._reset_user_state(chat_id)
+                msg = Messages.Info.RESERVE_FINISHED
+                await self.send_message(chat_id, msg)
+
+            except OSError as e:
+                print(f"프로세스 종료 중 오류 발생: {str(e)}")
+                msg = "프로세스 종료 중 오류가 발생했습니다. 관리자에게 문의하세요."
+                await self.send_message(chat_id, msg)
 
         return None
 
