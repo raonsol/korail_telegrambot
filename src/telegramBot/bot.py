@@ -208,6 +208,8 @@ class TelegramBot:
             selected, date = await handle_calendar_action(update, context)
             if selected:
                 await self._input_date(chat_id, date)
+        elif query.data.startswith("login_"):
+            await self._handle_login_callback(chat_id, query.data)
         else:
             selected, time = handle_time_action(query.data)
             if selected:
@@ -215,6 +217,16 @@ class TelegramBot:
                     await self._input_dep_time(chat_id, time)
                 elif query.data.startswith("maxtime;"):
                     await self._input_max_dep_time(chat_id, time)
+
+    async def _handle_login_callback(self, chat_id, callback_data):
+        """로그인 실패 후 사용자 선택 처리"""
+        if callback_data == "login_back":
+            # 전화번호 입력 단계로 돌아가기
+            self.userDict[chat_id]["userInfo"]["korailId"] = "no-login-yet"
+            self.userDict[chat_id]["userInfo"]["korailPw"] = "no-login-yet"
+            self.userDict[chat_id]["lastAction"] = 2
+            msg = Messages.Info.INPUT_ID
+            await self.send_message(chat_id, msg)
 
     def _reset_user_state(self, chat_id):
         self.userDict[chat_id]["inProgress"] = False
@@ -322,14 +334,30 @@ class TelegramBot:
 
     async def _input_id(self, chat_id, data):
         allowList = os.environ.get("ALLOW_LIST", "").split(",")
-        if "-" not in data:
-            msg = "'-'를 포함한 전화번호를 입력해주세요. 다시 입력 바랍니다."
-        elif data not in allowList:
+        # Normalize input: remove hyphens for comparison
+        normalized_data = data.replace("-", "")
+        normalized_allow_list = [phone.replace("-", "") for phone in allowList]
+
+        # Validate phone number format (010xxxxxxxx - 11 digits starting with 010)
+        if not (
+            normalized_data.isdigit()
+            and len(normalized_data) == 11
+            and normalized_data.startswith("010")
+        ):
+            msg = (
+                "올바른 전화번호 형식을 입력해주세요. (010-xxxx-xxxx 또는 010xxxxxxxx)"
+            )
+        elif normalized_data not in normalized_allow_list:
             msgToSubscribers = f"{data}는 등록되지 않은 사용자입니다."
             await self.broadcast_message(msgToSubscribers)
             self._reset_user_state(chat_id)
+            msg = "등록되지 않은 사용자입니다."
         else:
-            self.userDict[chat_id]["userInfo"]["korailId"] = data
+            # Format phone number with hyphens for Korail API
+            formatted_phone = (
+                f"{normalized_data[:3]}-{normalized_data[3:7]}-{normalized_data[7:]}"
+            )
+            self.userDict[chat_id]["userInfo"]["korailId"] = formatted_phone
             self.userDict[chat_id]["lastAction"] = 3
             msg = Messages.Info.INPUT_PW
         await self.send_message(chat_id, msg)
@@ -349,15 +377,21 @@ class TelegramBot:
             self.userDict[chat_id]["lastAction"] = 4
             await self.send_message(chat_id, msg, reply_markup=create_calendar())
         else:
-            if is_affirmative(data):
-                await self._start_accept(chat_id, "start_yes")
-            elif is_negative(data):
-                self._reset_user_state(chat_id)
-                msg = Messages.Info.RESERVE_FINISHED
-                await self.send_message(chat_id, msg)
-            else:
-                msg = Messages.Error.INPUT_PW_FAILURE.format(username)
-                await self.send_message(chat_id, msg)
+            # 로그인 실패 시 비밀번호 재입력 또는 뒤로가기 선택지 제공
+            msg = f"""로그인에 실패하였습니다. 로그인에 사용한 정보는 다음과 같습니다.
+==============
+아이디 : {username}
+==============
+
+비밀번호를 다시 입력하거나 "뒤로 돌아가기"를 선택해주세요.
+
+5회 이상 로그인 실패할 경우, 홈페이지를 통해 비밀번호를 재설정하셔야합니다."""
+
+            keyboard = [
+                [InlineKeyboardButton("뒤로 돌아가기", callback_data="login_back")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await self.send_message(chat_id, msg, reply_markup=reply_markup)
 
         return None
 
@@ -398,7 +432,9 @@ class TelegramBot:
         self.userDict[chat_id]["trainInfo"]["dstLocate"] = data
         self.userDict[chat_id]["lastAction"] = 7
         msg = f"선택하신 도착역: {data}\n\n{Messages.Info.INPUT_DEP_TIME}"
-        await self.send_message(chat_id, msg, reply_markup=create_time_keyboard())
+        await self.send_message(
+            chat_id, msg, reply_markup=create_time_keyboard(action="time")
+        )
         return None
 
     async def _input_dep_time(self, chat_id, data):
@@ -412,7 +448,9 @@ class TelegramBot:
             self.userDict[chat_id]["lastAction"] = 8
             msg = f"선택하신 출발 시간: {data[:2]}:{data[2:]}\n\n{Messages.Info.INPUT_MAX_DEP_TIME}"
             await self.send_message(
-                chat_id, msg, reply_markup=create_max_time_keyboard(data)
+                chat_id,
+                msg,
+                reply_markup=create_time_keyboard(action="maxtime", min_time=data),
             )
         return None
 
