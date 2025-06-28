@@ -21,7 +21,7 @@ def create_time_keyboard(action="time", min_time=None):
         # 일반 시간 선택 (출발시간)
         start_hour = 6
         end_hour = 24
-        hour_interval = 2
+        hour_interval = 1
         minute_interval = 30
         start_minute = 0
     else:
@@ -35,8 +35,22 @@ def create_time_keyboard(action="time", min_time=None):
         start_minute = min_minute
 
     keyboard = []
+    buttons = []
+
+    # "time" 액션일 때만 현재 시간 버튼을 맨 위에 추가
+    if action == "time":
+        current_time = datetime.datetime.now()
+        current_time_str = current_time.strftime("%H%M")
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "현재 시간",
+                    callback_data=create_callback_data(action, current_time_str),
+                )
+            ]
+        )
+
     for hour in range(start_hour, end_hour, hour_interval):
-        row = []
         if min_time and hour == start_hour:
             # 최소 시간이 있고 첫 번째 시간인 경우, 최소 분부터 시작
             current_start_minute = start_minute
@@ -52,14 +66,17 @@ def create_time_keyboard(action="time", min_time=None):
         for minute in minute_range:
             if hour < 24:  # 24시는 제외
                 time_str = f"{hour:02d}{minute:02d}"
-                row.append(
+                buttons.append(
                     InlineKeyboardButton(
                         f"{hour:02d}:{minute:02d}",
                         callback_data=create_callback_data(action, time_str),
                     )
                 )
-        if row:  # 빈 행이 아닌 경우에만 추가
-            keyboard.append(row)
+
+    # 버튼들을 4개씩 묶어서 행으로 만들기
+    for i in range(0, len(buttons), 4):
+        row = buttons[i : i + 4]
+        keyboard.append(row)
 
     # 23:59 추가 (하루 끝) - maxtime인 경우에만
     if action == "maxtime" and (
@@ -70,7 +87,7 @@ def create_time_keyboard(action="time", min_time=None):
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    "23:59",
+                    "하루 전체",
                     callback_data=create_callback_data(action, "2359"),
                 )
             ]
@@ -95,18 +112,33 @@ def handle_time_action(query_data):
     """시간 선택 callback handler
 
     Args:
-        query_data (str): 콜백 데이터 문자열 (action;time)
+        query_data (str): 콜백 데이터 문자열 (action;time 또는 reselect_time)
 
     Returns:
         tuple[bool, str | None]: 시간 선택 여부와 선택된 시간을 포함하는 튜플
             - 첫 번째 요소는 시간이 선택되었는지 여부(bool)
-            - 두 번째 요소는 선택된 시간(HHMM 형식) 또는 None
+            - 두 번째 요소는 선택된 시간(HHMM 형식) 또는 "reselect" 또는 None
     """
     ret_data = (False, None)
     try:
-        action, time_str = query_data.split(";")
-        if action in ["time", "maxtime"]:
-            ret_data = True, time_str
+        if query_data == "reselect_time":
+            ret_data = True, "reselect"
+        else:
+            action, time_str = query_data.split(";")
+            if action in ["time", "maxtime"]:
+                ret_data = True, time_str
     except ValueError:
         pass
     return ret_data
+
+
+def create_time_reselect_keyboard():
+    """시간 선택 다시하기 버튼이 포함된 키보드 생성
+
+    Returns:
+        InlineKeyboardMarkup: 시간 선택 다시하기 버튼이 포함된 인라인 키보드
+    """
+    keyboard = [
+        [InlineKeyboardButton("⬅️시간선택 다시하기", callback_data="reselect_time")]
+    ]
+    return InlineKeyboardMarkup(keyboard)

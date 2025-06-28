@@ -81,8 +81,7 @@ class Messages:
 출발일 : {depDate}
 출발역 : {srcLocate}
 도착역 : {dstLocate}
-검색기준시각 : {depTime}
-검색최대시각 : {maxDepTime}
+검색시간 범위(출발 기준) : {depTime} ~ {maxDepTime}
 열차종류 : {trainTypeShow}
 객실종류 : {specialInfoShow}
 ===================

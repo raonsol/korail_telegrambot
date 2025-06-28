@@ -23,6 +23,7 @@ from .time_keyboard import (
     create_time_keyboard,
     create_max_time_keyboard,
     handle_time_action,
+    create_time_reselect_keyboard,
 )
 
 
@@ -211,12 +212,27 @@ class TelegramBot:
         elif query.data.startswith("login_"):
             await self._handle_login_callback(chat_id, query.data)
         else:
-            selected, time = handle_time_action(query.data)
+            selected, time_result = handle_time_action(query.data)
             if selected:
-                if query.data.startswith("time;"):
-                    await self._input_dep_time(chat_id, time)
+                if time_result == "reselect":
+                    # 시간 선택 다시하기
+                    self.userDict[chat_id]["lastAction"] = 7
+                    msg = (
+                        "시간 선택을 다시 시작합니다.\n\n"
+                        + Messages.Info.INPUT_DEP_TIME
+                    )
+                    current_time = datetime.now().strftime("%H%M")
+                    await self.send_message(
+                        chat_id,
+                        msg,
+                        reply_markup=create_time_keyboard(
+                            action="time", min_time=current_time
+                        ),
+                    )
+                elif query.data.startswith("time;"):
+                    await self._input_dep_time(chat_id, time_result)
                 elif query.data.startswith("maxtime;"):
-                    await self._input_max_dep_time(chat_id, time)
+                    await self._input_max_dep_time(chat_id, time_result)
 
     async def _handle_login_callback(self, chat_id, callback_data):
         """로그인 실패 후 사용자 선택 처리"""
@@ -432,8 +448,12 @@ class TelegramBot:
         self.userDict[chat_id]["trainInfo"]["dstLocate"] = data
         self.userDict[chat_id]["lastAction"] = 7
         msg = f"선택하신 도착역: {data}\n\n{Messages.Info.INPUT_DEP_TIME}"
+
+        current_time = datetime.now().strftime("%H%M")
         await self.send_message(
-            chat_id, msg, reply_markup=create_time_keyboard(action="time")
+            chat_id,
+            msg,
+            reply_markup=create_time_keyboard(action="time", min_time=current_time),
         )
         return None
 
@@ -465,8 +485,13 @@ class TelegramBot:
         else:
             self.userDict[chat_id]["trainInfo"]["maxDepTime"] = data
             self.userDict[chat_id]["lastAction"] = 9
-            msg = f"선택하신 최대 출발 시간: {data[:2]}:{data[2:]}\n\n"
-            await self._send_train_type_options(chat_id, msg)
+
+            # 시간 범위 메시지 생성
+            start_formatted = f"{dep_time[:2]}:{dep_time[2:]}"
+            end_formatted = f"{data[:2]}:{data[2:]}"
+            time_range_msg = f"검색 시간 범위: {start_formatted} ~ {end_formatted}"
+
+            await self._send_train_type_options(chat_id, time_range_msg)
         return None
 
     async def _send_train_type_options(self, chat_id, prefix_msg=""):
@@ -475,7 +500,12 @@ class TelegramBot:
             [
                 InlineKeyboardButton("KTX", callback_data="train_type_1"),
                 InlineKeyboardButton("모든 열차", callback_data="train_type_2"),
-            ]
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️시간 다시 선택하기", callback_data="reselect_time"
+                )
+            ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await self.send_message(
@@ -542,6 +572,7 @@ class TelegramBot:
 
     async def _send_confirm_reserve(self, chat_id):
         train_info = self.userDict[chat_id]["trainInfo"]
+
         msg = Messages.Info.CONFIRM_DETAILS.format(
             depDate=train_info["depDate"],
             srcLocate=train_info["srcLocate"],
@@ -551,11 +582,17 @@ class TelegramBot:
             trainTypeShow=train_info["trainTypeShow"],
             specialInfoShow=train_info["specialInfoShow"],
         )
+
         keyboard = [
             [
                 InlineKeyboardButton("예", callback_data="confirm_yes"),
                 InlineKeyboardButton("아니오", callback_data="confirm_no"),
-            ]
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️시간 다시 선택하기", callback_data="reselect_time"
+                )
+            ],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await self.send_message(
