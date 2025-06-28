@@ -662,8 +662,13 @@ class TelegramBot:
             cmd = ["python", "-m", "telegramBot.worker"] + arguments
             cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
+            # Create logs directory if it doesn't exist
+            logs_dir = os.path.join(os.path.dirname(__file__), "..", "..", "logs")
+            os.makedirs(logs_dir, exist_ok=True)
+
             # Create a log file for the process
-            log_file = open(f"worker_{arguments[-2]}.log", "a")
+            log_file_path = os.path.join(logs_dir, f"worker_{arguments[-2]}.log")
+            log_file = open(log_file_path, "a")
 
             process = subprocess.Popen(
                 cmd,

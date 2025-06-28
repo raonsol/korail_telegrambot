@@ -1,15 +1,24 @@
 import sys
 import signal
 import logging
+import os
 from datetime import datetime
 from .korail_client import ReserveHandler
 
 # Configure logging
+# Create logs directory if it doesn't exist
+logs_dir = os.path.join(os.path.dirname(__file__), "..", "..", "logs")
+os.makedirs(logs_dir, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler(f'worker_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'),
+        logging.FileHandler(
+            os.path.join(
+                logs_dir, f'worker_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+            )
+        ),
         logging.StreamHandler(),
     ],
 )
