@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from telegram import Update
 from telegramBot.bot import TelegramBot
 from telegramBot.messages import Messages
+from config import settings
 
 
 # Configure logging
@@ -18,16 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 # set environment variable for development
-os.environ["IS_DEV"] = "true" if "dev" in sys.argv else "false"
-print(
-    f"Setting env as {'development' if os.environ.get('IS_DEV')=="true" else 'production'}"
-)
+settings.is_dev = "dev" in sys.argv
+print(f"Setting env as {'development' if settings.is_dev else 'production'}")
 
-bot_token = (
-    os.environ.get("BOTTOKEN_DEV")
-    if os.environ.get("IS_DEV") == "true"
-    else os.environ.get("BOTTOKEN")
-)
+bot_token = settings.bot_token
 
 if not bot_token:
     logger.error("Bot token not found in environment variables")
@@ -40,11 +35,7 @@ bot = TelegramBot(bot_token)
 # webhook 등록 및 lifespan 설정
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    url = (
-        os.environ.get("WEBHOOK_URL_DEV")
-        if os.environ.get("IS_DEV") == "true"
-        else os.environ.get("WEBHOOK_URL")
-    )
+    url = settings.webhook_url_by_env
 
     if not url:
         logger.error("Webhook URL not found in environment variables")

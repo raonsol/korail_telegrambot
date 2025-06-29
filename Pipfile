@@ -9,6 +9,7 @@ requests = "*"
 python-telegram-bot = "*"
 pyopenssl = "*"
 korail2 = "0.4.0"
+pydantic-settings = "*"
 
 [dev-packages]
 black = "*"

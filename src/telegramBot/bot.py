@@ -25,6 +25,7 @@ from .time_keyboard import (
     handle_time_action,
     create_time_reselect_keyboard,
 )
+from config import settings
 
 
 def is_affirmative(data):
@@ -317,9 +318,9 @@ class TelegramBot:
         return None
 
     async def _start_accept(self, chat_id, data):
-        if data == os.environ.get("ADMINPW"):
-            username = os.environ.get("USERID")
-            password = os.environ.get("USERPW")
+        if data == settings.admin_password:
+            username = settings.admin_korail_id
+            password = settings.admin_korail_pw
 
             if not (username and password):
                 self._reset_user_state(chat_id)
@@ -352,7 +353,7 @@ class TelegramBot:
         return None
 
     async def _input_id(self, chat_id, data):
-        allowList = os.environ.get("ALLOW_LIST", "").split(",")
+        allowList = settings.allow_list.split(",") if settings.allow_list else []
         # Normalize input: remove hyphens for comparison
         normalized_data = data.replace("-", "")
         normalized_allow_list = [phone.replace("-", "") for phone in allowList]

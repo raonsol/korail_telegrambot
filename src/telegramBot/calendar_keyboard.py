@@ -37,9 +37,7 @@ def create_calendar(year=None, month=None):
     # First row - Month and Year
     row = []
     row.append(
-        InlineKeyboardButton(
-            f"{str(year)} {month}월", callback_data=data_ignore
-        )
+        InlineKeyboardButton(f"{str(year)} {month}월", callback_data=data_ignore)
     )
     keyboard.append(row)
     # Second row - Week Days

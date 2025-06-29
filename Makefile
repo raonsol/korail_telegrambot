@@ -10,7 +10,7 @@ setup-pipenv:  ## Install pipenv globally
 	pip install --user pipenv --break-system-packages
 
 .PHONY: install
-install:	## Install dependencies
+install:	## Install dependencies and create virtual environment
 	pipenv install --dev
 
 .PHONY: dev

@@ -17,11 +17,11 @@
 `.env.example` 파일을 참조하여 아래와 같이 `.env` 파일을 생성합니다.
 
 ```bash
-USERID # 코레일 아이디
-USERPW # 코레일 비밀번호
 BOTTOKEN # 텔레그램 봇 토큰
-ALLOW_LIST # 예약을 허용할 계정 전화번호(콤마로 구분)
-ADMIN_PW # 관리자 비밀번호
+ALLOW_LIST # 로그인을 허용할 계정 전화번호(콤마로 구분)
+ADMIN_KORAIL_ID # 관리자 코레일 아이디
+ADMIN_KORAIL_PW # 관리자 코레일 비밀번호
+ADMIN_PW # 관리자 로그인에 사용할 비밀번호
 ```
 
 ### 텔레그램 설정
