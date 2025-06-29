@@ -95,8 +95,11 @@ class TelegramBot:
     subscribes = []
 
     async def set_webhook(self, url):
-        await self.app.bot.set_webhook(url)
-        print(f"Webhook set to {url}")
+        try:
+            result = await self.app.bot.set_webhook(url)
+            return result
+        except Exception as e:
+            raise e
 
     async def delete_webhook(self):
         await self.app.bot.delete_webhook()

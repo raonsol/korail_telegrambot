@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +8,13 @@ from pydantic import BaseModel
 from telegram import Update
 from telegramBot.bot import TelegramBot
 from telegramBot.messages import Messages
+
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 
 # set environment variable for development
@@ -20,6 +28,12 @@ bot_token = (
     if os.environ.get("IS_DEV") == "true"
     else os.environ.get("BOTTOKEN")
 )
+
+if not bot_token:
+    logger.error("Bot token not found in environment variables")
+    raise ValueError("Bot token is required")
+
+logger.info(f"Using bot token: {bot_token[:10]}...")
 bot = TelegramBot(bot_token)
 
 
@@ -31,11 +45,35 @@ async def lifespan(_: FastAPI):
         if os.environ.get("IS_DEV") == "true"
         else os.environ.get("WEBHOOK_URL")
     )
-    print(f"Setting webhook to {url}")
-    await bot.set_webhook(url=f"{url}/message")
+
+    if not url:
+        logger.error("Webhook URL not found in environment variables")
+        raise ValueError("Webhook URL is required")
+
+    webhook_url = f"{url}/message"
+    logger.info(f"Setting webhook to {webhook_url}")
+
+    try:
+        # webhook 등록 시도
+        result = await bot.set_webhook(url=webhook_url)
+        if result:
+            logger.info("Webhook set successfully")
+        else:
+            logger.error("Failed to set webhook")
+
+        # 현재 webhook 정보 확인
+        webhook_info = await bot.app.bot.get_webhook_info()
+        logger.info(f"Current webhook info: {webhook_info}")
+
+    except Exception as e:
+        logger.error(f"Error setting webhook: {e}")
+        # webhook 설정 실패해도 서버는 계속 실행되도록 함
+
     async with bot.app:
         await bot.app.start()
+        logger.info("Bot application started")
         yield
+        logger.info("Shutting down bot application")
         await bot.app.stop()
 
 
@@ -47,6 +85,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "korail_telegrambot"}
 
 
 class Chat(BaseModel):

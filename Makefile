@@ -44,5 +44,6 @@ docker-run:	## Run Docker container
 		-e BOTTOKEN=${BOTTOKEN} \
 		-e ALLOW_LIST=${ALLOW_LIST} \
 		-e ADMINPW=${ADMINPW} \
+		-e WEBHOOK_URL=${WEBHOOK_URL} \
 		-p 8391:8391 \
 		${IMAGE_NAME}
