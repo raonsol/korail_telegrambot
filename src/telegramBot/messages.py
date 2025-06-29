@@ -5,6 +5,7 @@ from dataclasses import dataclass
 class Messages:
     class Info:
         START_MESSAGE: str = """
+[rs-korailbot:v0.7]
 본 프로그램은 매진 열차 자동 예약을 위해 제작된 프로그램으로, 결제 직전의 단계인 "예약" 까지만 진행해 주며, 이후 결제는 예약이 완료된 이후 20분 내로 사용자가 직접 결제해야 합니다.
 
 예매 프로그램을 시작하기 위해 정보를 입력받겠습니다.
