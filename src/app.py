@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from telegram import Update
 from telegramBot.bot import TelegramBot
 from telegramBot.messages import Messages
-from config import settings
+from config import web_settings as settings
 
 
 # Configure logging
@@ -29,7 +29,16 @@ if not bot_token:
     raise ValueError("Bot token is required")
 
 logger.info(f"Using bot token: {bot_token[:10]}...")
-bot = TelegramBot(bot_token)
+
+# Check if Celery should be used via environment variable
+use_celery = os.getenv("USE_CELERY", "false").lower() == "true"
+
+if use_celery:
+    logger.info("Using Celery for background tasks")
+else:
+    logger.info("Using subprocess for background tasks")
+
+bot = TelegramBot(bot_token, enable_redis_celery=use_celery)
 
 
 # webhook 등록 및 lifespan 설정
@@ -143,6 +152,51 @@ async def send_reservation_status(
     del bot.runningStatus[chat_id]
     # msgToSubscribers = f'{telebot_handler.userDict[chatId]["userInfo"]["korailId"]}의 예약이 종료되었습니다.'
     # telebot_handler.sendToSubscribers(msgToSubscribers)
+
+
+@app.post("/reservation_callback")
+async def handle_reservation_callback(request: Request):
+    """Handle callbacks from Celery reservation tasks"""
+    try:
+        data = await request.json()
+        user_id = data.get("user_id")
+        status_val = data.get("status")
+        # task_id = data.get("task_id")  # Not used but available for future use
+
+        if not user_id:
+            return Response(status_code=status.HTTP_400_BAD_REQUEST)
+
+        # Convert user_id to int for consistency
+        chat_id = int(user_id)
+
+        if status_val == "success":
+            train_info = data.get("train_info", "")
+            msg = Messages.Info.RESERVE_SUCCESS.format(reserveInfo=train_info)
+            await bot.send_message(chat_id, msg)
+
+            # Clean up state
+            if chat_id in bot.runningStatus:
+                del bot.runningStatus[chat_id]
+            bot._reset_user_state(chat_id)
+
+        elif status_val == "failed":
+            error = data.get("error", "알 수 없는 오류")
+            if "최대 시도 횟수" in error:
+                msg = Messages.Error.RESERVE_FAILED
+            else:
+                msg = Messages.Error.RESERVE_WRONG
+            await bot.send_message(chat_id, msg)
+
+            # Clean up state
+            if chat_id in bot.runningStatus:
+                del bot.runningStatus[chat_id]
+            bot._reset_user_state(chat_id)
+
+        return Response(status_code=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error handling reservation callback: {e}")
+        return Response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 if __name__ == "__main__":

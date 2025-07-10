@@ -5,9 +5,40 @@
 from pydantic_settings import BaseSettings
 from pydantic import Field
 from typing import Optional
+import os
 
 
-class Settings(BaseSettings):
+class BaseAppSettings(BaseSettings):
+    """Common settings shared by all services"""
+    # Infrastructure settings
+    redis_url: str = "redis://localhost:6379"
+    redis_db: int = 0
+    database_url: str = "sqlite:///./korail_bot.db"
+    
+    # Application settings
+    debug: bool = False
+    is_dev: bool = False
+    log_level: str = "INFO"
+    
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+        extra = "ignore"
+
+
+class CelerySettings(BaseAppSettings):
+    """Settings for Celery workers - only what they actually need"""
+    # Celery configuration
+    celery_broker: str = Field(default="redis://localhost:6379", alias="CELERY_BROKER")
+    celery_result_backend: str = Field(default="redis://localhost:6379", alias="CELERY_RESULT_BACKEND")
+    
+    # Worker settings
+    max_concurrent_reservations: int = 10
+    reservation_timeout: int = 3600  # 1시간
+
+
+class WebSettings(BaseAppSettings):
+    """Settings for web service - bot and API related"""
     # Telegram Bot 설정 (기존 BOTTOKEN과 호환)
     telegram_token: str = Field(alias="BOTTOKEN")
     telegram_token_dev: Optional[str] = Field(default=None, alias="BOTTOKEN_DEV")
@@ -20,31 +51,16 @@ class Settings(BaseSettings):
     admin_password: str = Field(alias="ADMINPW")
     allow_list: str
 
-    # Redis 설정
-    redis_url: str = "redis://localhost:6379"
-    redis_db: int = 0
-
-    # Database 설정
-    database_url: str = "sqlite:///./korail_bot.db"
-
-    # Celery 설정
-    celery_broker: str = "redis://localhost:6379"
-    celery_result_backend: str = "redis://localhost:6379"
-
-    # 애플리케이션 설정
-    debug: bool = False
-    is_dev: bool = False  # 개발 환경 여부
-    log_level: str = "INFO"
+    # Celery configuration (needed for task dispatch)
+    celery_broker: str = Field(default="redis://localhost:6379", alias="CELERY_BROKER")
+    celery_result_backend: str = Field(default="redis://localhost:6379", alias="CELERY_RESULT_BACKEND")
+    
+    # Worker settings
     max_concurrent_reservations: int = 10
     reservation_timeout: int = 3600  # 1시간
 
     # 보안 설정
     secret_key: str = "your-secret-key-here"
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"  # 추가 필드 무시
 
     @property
     def bot_token(self) -> str:
@@ -65,5 +81,17 @@ class Settings(BaseSettings):
         )
 
 
-# 싱글톤 설정 인스턴스
-settings = Settings()
+# Settings instances - use appropriate one based on service type
+celery_settings = CelerySettings()
+web_settings = WebSettings()
+
+# Backward compatibility - determine which settings to use based on context
+def get_settings():
+    """Return appropriate settings based on service context"""
+    # Check if running in Celery worker context
+    if os.getenv('CELERY_WORKER_NAME') or 'celery' in os.getenv('_', '').lower():
+        return celery_settings
+    return web_settings
+
+# Default settings for backward compatibility
+settings = get_settings()

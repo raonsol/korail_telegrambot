@@ -4,6 +4,12 @@ import signal
 from datetime import datetime, time
 import threading
 
+try:
+    import redis
+    REDIS_AVAILABLE = True
+except ImportError:
+    REDIS_AVAILABLE = False
+
 from korail2 import ReserveOption, TrainType
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -25,7 +31,7 @@ from .time_keyboard import (
     handle_time_action,
     create_time_reselect_keyboard,
 )
-from config import settings
+from config import settings, web_settings
 
 
 def is_affirmative(data):
@@ -66,11 +72,44 @@ def is_past_time(time: str):
 
 
 class TelegramBot:
-    def __init__(self, token: str):
+    def __init__(self, token: str, enable_redis_celery: bool = False):
         self.token = token
         self.app = ApplicationBuilder().token(self.token).build()
         self._register_handlers()
         self.lastSentMessage = None
+
+        # Initialize Redis and Celery based on configuration
+        self.use_celery = enable_redis_celery
+        self.redis_client = None
+        self.celery_app = None
+        
+        if self.use_celery:
+            if not REDIS_AVAILABLE:
+                print("Redis not available, falling back to subprocess mode")
+                self.use_celery = False
+                self.redis_client = None
+                self.celery_app = None
+            else:
+                try:
+                    # Initialize Redis client
+                    self.redis_client = redis.Redis.from_url(
+                        web_settings.redis_url,
+                        db=web_settings.redis_db,
+                        decode_responses=True
+                    )
+                    # Test Redis connection
+                    self.redis_client.ping()
+                    
+                    # Initialize Celery app
+                    from .tasks import app as celery_app
+                    self.celery_app = celery_app
+                    
+                    print("Redis and Celery initialized successfully")
+                except Exception as e:
+                    print(f"Failed to initialize Redis/Celery: {e}")
+                    self.use_celery = False
+                    self.redis_client = None
+                    self.celery_app = None
 
     # userDict : Use like DB.
     # {
@@ -627,13 +666,24 @@ class TelegramBot:
                 arguments = [str(argument) for argument in arguments]
                 print(f"Starting reservation, arguments: {arguments}")
 
-                pid = self._start_background_process(arguments)
-
-                self.userDict[chat_id]["pid"] = pid
-                self.runningStatus[chat_id] = {
-                    "pid": pid,
-                    "korailId": user_info["korailId"],
-                }
+                if self.use_celery:
+                    # Use Celery for background processing
+                    task_id = self._start_celery_task(train_info, user_info, chat_id)
+                    self.userDict[chat_id]["task_id"] = task_id
+                    self.runningStatus[chat_id] = {
+                        "task_id": task_id,
+                        "korailId": user_info["korailId"],
+                        "method": "celery",
+                    }
+                else:
+                    # Use subprocess for background processing
+                    pid = self._start_background_process(arguments)
+                    self.userDict[chat_id]["pid"] = pid
+                    self.runningStatus[chat_id] = {
+                        "pid": pid,
+                        "korailId": user_info["korailId"],
+                        "method": "subprocess",
+                    }
 
                 # msgToSubscribers = f"{user_info['korailId']}의 {train_info['srcLocate']}에서 {train_info['dstLocate']}로 {train_info['depDate']}에 출발하는 열차 예약이 시작되었습니다."
                 # self.sendToSubscribers(msgToSubscribers)
@@ -710,6 +760,95 @@ class TelegramBot:
             print(f"Failed to start process: {str(e)}")
             return False, str(e)
 
+    def _start_celery_task(self, train_info, user_info, chat_id):
+        """Start Celery task for reservation"""
+        try:
+            from .tasks import reservation_task
+
+            # Prepare reservation data for Celery task
+            reservation_data = {
+                "korail_id": user_info["korailId"],
+                "korail_pw": user_info["korailPw"],
+                "dep_date": train_info["depDate"],
+                "dep_station": train_info["srcLocate"],
+                "arr_station": train_info["dstLocate"],
+                "dep_time": f"{train_info['depTime']}00",
+                "arr_time": train_info.get("maxDepTime"),
+                "train_type": train_info["trainType"],
+                "prefer_seat_type": (
+                    "special" if train_info["specialInfo"] == "Y" else "general"
+                ),
+                "attempts": 0,
+            }
+
+            # Generate callback URL for status updates
+            callback_url = f"{settings.webhook_url_by_env}/reservation_callback"
+
+            # Start Celery task
+            task = reservation_task.delay(int(chat_id), reservation_data, callback_url)
+
+            # Store task info in Redis
+            if self.redis_client:
+                self.redis_client.hset(
+                    f"reservation:{chat_id}",
+                    mapping={
+                        "status": "started",
+                        "task_id": task.id,
+                        "started_at": datetime.now().isoformat(),
+                        "korail_id": user_info["korailId"],
+                    },
+                )
+
+            print(f"Started Celery task: {task.id} for user {chat_id}")
+            return task.id
+
+        except Exception as e:
+            print(f"Failed to start Celery task: {str(e)}")
+            return None
+
+    async def _cancel_reservation(self, chat_id):
+        """Cancel ongoing reservation (works with both subprocess and Celery)"""
+        try:
+            if chat_id not in self.runningStatus:
+                return False
+
+            status = self.runningStatus[chat_id]
+            method = status.get("method", "subprocess")
+
+            if method == "celery" and self.celery_app:
+                # Cancel Celery task
+                task_id = status.get("task_id")
+                if task_id:
+                    self.celery_app.control.revoke(task_id, terminate=True)
+                    print(f"Cancelled Celery task: {task_id}")
+
+                # Clean up Redis data
+                if self.redis_client:
+                    self.redis_client.delete(f"reservation:{chat_id}")
+
+            else:
+                # Cancel subprocess
+                pid = status.get("pid")
+                if pid:
+                    try:
+                        os.killpg(os.getpgid(pid), signal.SIGTERM)
+                        print(f"Terminated process group for PID: {pid}")
+                    except ProcessLookupError:
+                        print(f"Process {pid} already terminated")
+                    except Exception as e:
+                        print(f"Error terminating process {pid}: {e}")
+
+            # Clean up local state
+            del self.runningStatus[chat_id]
+            if chat_id in self.userDict:
+                self._reset_user_state(chat_id)
+
+            return True
+
+        except Exception as e:
+            print(f"Error cancelling reservation for {chat_id}: {e}")
+            return False
+
     async def _already_doing(self, chat_id):
         train_info = self.userDict[chat_id]["trainInfo"]
         msg = Messages.Error.RESERVE_ALREADY_DOING.format(
@@ -725,46 +864,30 @@ class TelegramBot:
     async def cancel_func(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.message.chat_id
         self.ensure_user_exists(chat_id)
-        userPid = self.userDict[chat_id]["pid"]
 
         if chat_id not in self.runningStatus:
             msg = "진행중인 예약이 없습니다."
             await self.send_message(chat_id, msg)
             return None
 
-        elif userPid != 9999999:
-            try:
-                # Try graceful termination first
-                os.kill(userPid, signal.SIGTERM)
+        try:
+            # Use the unified cancellation method
+            success = await self._cancel_reservation(chat_id)
 
-                # Wait for process to terminate
-                for _ in range(5):  # Wait up to 5 seconds
-                    try:
-                        os.kill(userPid, 0)
-                        time.sleep(1)
-                    except OSError:
-                        break
-                else:
-                    # If process is still running, force kill
-                    os.kill(userPid, signal.SIGKILL)
-
-                print(f"실행중인 프로세스 {userPid}를 종료했습니다.")
-
-                # Clean up resources
-                if chat_id in self.runningStatus:
-                    del self.runningStatus[chat_id]
-
+            if success:
                 msgToSubscribers = f'{self.userDict[chat_id]["userInfo"]["korailId"]}의 예약이 종료되었습니다.'
                 await self.broadcast_message(msgToSubscribers)
 
-                self._reset_user_state(chat_id)
                 msg = Messages.Info.RESERVE_FINISHED
                 await self.send_message(chat_id, msg)
-
-            except OSError as e:
-                print(f"프로세스 종료 중 오류 발생: {str(e)}")
-                msg = "프로세스 종료 중 오류가 발생했습니다. 관리자에게 문의하세요."
+            else:
+                msg = "예약 취소 중 오류가 발생했습니다."
                 await self.send_message(chat_id, msg)
+
+        except Exception as e:
+            print(f"예약 취소 중 오류 발생: {str(e)}")
+            msg = "예약 취소 중 오류가 발생했습니다. 관리자에게 문의하세요."
+            await self.send_message(chat_id, msg)
 
         return None
 
@@ -797,25 +920,26 @@ class TelegramBot:
         chat_id = update.message.chat_id
         self.ensure_user_exists(chat_id)
         count = len(self.runningStatus)
-        pids = [state["pid"] for state in dict.values(self.runningStatus)]
         usersKorailIds = [
             state["korailId"] for state in dict.values(self.runningStatus)
         ]
-        userschat_id = dict.keys(self.runningStatus)
+        userschat_ids = list(self.runningStatus.keys())
 
-        for pid in pids:
-            os.kill(pid, signal.SIGTERM)
-            print(f"프로세스 {pid}가 종료되었습니다.")
+        # Cancel all reservations using unified method
+        cancelled_count = 0
+        for user_chat_id in userschat_ids:
+            success = await self._cancel_reservation(user_chat_id)
+            if success:
+                cancelled_count += 1
 
-        dataForManager = f"총 {count}개의 진행중인 예약을 종료했습니다. 이용중이던 사용자 : {usersKorailIds}"
+        dataForManager = f"총 {cancelled_count}/{count}개의 진행중인 예약을 종료했습니다. 이용중이던 사용자 : {usersKorailIds}"
         await self.send_message(chat_id, dataForManager)
 
         dataForUser = Messages.Error.RESERVE_CANCELLED_BY_ADMIN
-        for user in userschat_id:
-            await self.send_message(user, dataForUser)
-            self.handle_progress(user, 0)
-
-        self.runningStatus = {}
+        for user_chat_id in userschat_ids:
+            await self.send_message(user_chat_id, dataForUser)
+            if user_chat_id in self.userDict:
+                self._reset_user_state(user_chat_id)
 
     async def get_all_users(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.message.chat_id

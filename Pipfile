@@ -10,6 +10,10 @@ python-telegram-bot = "*"
 pyopenssl = "*"
 korail2 = "0.4.0"
 pydantic-settings = "*"
+redis = "*"
+celery = "*"
+flower = "*"
+sqlalchemy = "*"
 
 [dev-packages]
 black = "*"
