@@ -6,6 +6,7 @@ import threading
 
 try:
     import redis
+
     REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
@@ -82,7 +83,7 @@ class TelegramBot:
         self.use_celery = enable_redis_celery
         self.redis_client = None
         self.celery_app = None
-        
+
         if self.use_celery:
             if not REDIS_AVAILABLE:
                 print("Redis not available, falling back to subprocess mode")
@@ -95,15 +96,16 @@ class TelegramBot:
                     self.redis_client = redis.Redis.from_url(
                         web_settings.redis_url,
                         db=web_settings.redis_db,
-                        decode_responses=True
+                        decode_responses=True,
                     )
                     # Test Redis connection
                     self.redis_client.ping()
-                    
+
                     # Initialize Celery app
                     from .tasks import app as celery_app
+
                     self.celery_app = celery_app
-                    
+
                     print("Redis and Celery initialized successfully")
                 except Exception as e:
                     print(f"Failed to initialize Redis/Celery: {e}")
@@ -334,7 +336,7 @@ class TelegramBot:
                 reply_markup=reply_markup,
             )
             self.lastSentMessage = text
-            print(f"Send message to {chat_id} : {text}")
+            # print(f"Send message to {chat_id} : {text}")
             return message
         except TelegramError as e:
             print(f"Failed to send message to {chat_id}: {e}")
@@ -493,10 +495,16 @@ class TelegramBot:
         msg = f"선택하신 도착역: {data}\n\n{Messages.Info.INPUT_DEP_TIME}"
 
         current_time = datetime.now().strftime("%H%M")
+        if self.userDict[chat_id]["trainInfo"]["depDate"] == datetime.now().strftime(
+            "%Y%m%d"
+        ):
+            min_time = current_time
+        else:
+            min_time = None
         await self.send_message(
             chat_id,
             msg,
-            reply_markup=create_time_keyboard(action="time", min_time=current_time),
+            reply_markup=create_time_keyboard(action="time", min_time=min_time),
         )
         return None
 
