@@ -6,4 +6,6 @@
 
 # Logs
 logs/
-*.log
+*.log.celery-worker.pid
+.celery-flower.pid
+.celery-worker.pid

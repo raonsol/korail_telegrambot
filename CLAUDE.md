@@ -178,43 +178,53 @@ Bot -> Celery task -> Redis queue -> Worker process -> HTTP callback -> Bot
 
 ### Setup and Installation
 ```bash
-make install          # Install dependencies with pipenv
 make setup-pipenv     # Install pipenv globally
+make install          # Install dependencies with pipenv
 ```
 
-### Local Development
+### Local Development (Port 8390, IS_DEV=true, uses BOTTOKEN_DEV)
 ```bash
-make dev              # Local execution, subprocess (port 8390)
-make dev-celery       # Local execution, Celery (port 8390)
-make run              # Production mode, subprocess (port 8391)
-make run-celery       # Production mode, Celery (port 8391)
+# Development - Subprocess mode (simple, single process)
+make dev              # Run development server
+
+# Development - Celery mode (distributed, multiple processes)
+make dev-celery       # Starts Redis + Worker + Flower + Web (ALL-IN-ONE)
+make dev-celery-stop  # Stop Worker + Flower (Redis stays running)
 ```
 
-### Celery Operations
+### Local Production (Port 8391, IS_DEV=false, uses BOTTOKEN)
 ```bash
-make celery-worker    # Start Celery worker
-make celery-beat      # Start Celery scheduler
-make celery-flower    # Start Flower monitoring
+# Production - Subprocess mode
+make run              # Run production server
+
+# Production - Celery mode
+make run-celery       # Starts Redis + Worker + Flower + Web (ALL-IN-ONE)
+make run-celery-stop  # Stop Worker + Flower (Redis stays running)
 ```
 
-### Docker Operations
+### Individual Service Management (Advanced)
 ```bash
-make docker-build     # Build Docker image
-make docker-run       # Single container (subprocess)
-make docker-run-celery # Single container (Celery)
+make redis-start           # Start local Redis server
+make redis-stop            # Stop local Redis server
+make celery-worker-start   # Start Celery worker in background
+make celery-worker-stop    # Stop Celery worker
+make celery-flower-start   # Start Flower monitoring UI (http://localhost:5555)
+make celery-flower-stop    # Stop Flower monitoring UI
 ```
 
-### Docker Compose Operations
+### Docker Compose Operations (Production)
 ```bash
-# Production
-make docker-compose-up         # Subprocess mode
-make docker-compose-up-celery  # Celery mode
+make docker-build              # Build Docker image
+make docker-push               # Publish Docker image
+
+make docker-compose-up         # Start subprocess mode
+make docker-compose-up-celery  # Start Celery mode (RECOMMENDED for production)
 make docker-compose-down       # Stop all services
-
+make docker-compose-logs       # Show logs from running services
 
 # Code Changes - IMPORTANT: Always use --build when code changes
 docker compose down
-docker compose --profile celery up -d --build    # Rebuild and start Celery mode
+docker compose --profile celery up -d --build     # Rebuild and start Celery mode
 docker compose --profile subprocess up -d --build # Rebuild and start subprocess mode
 ```
 
@@ -222,6 +232,54 @@ docker compose --profile subprocess up -d --build # Rebuild and start subprocess
 ```bash
 make lint             # Format code with black
 ```
+
+### Important Notes About Local Celery Mode
+
+When running `make dev-celery` or `make run-celery`:
+1. **Redis** starts automatically (local daemon process)
+2. **Celery worker** starts automatically in background
+3. **Flower UI** starts automatically in background (port 5555)
+4. **FastAPI web** starts in foreground (you'll see logs)
+5. Press `Ctrl+C` to stop web server
+6. **IMPORTANT**: Run `make dev-celery-stop` or `make run-celery-stop` to cleanup
+
+**Cleanup behavior:**
+- `make dev-celery-stop` or `make run-celery-stop` stops **Worker + Flower only**
+- **Redis stays running** for faster subsequent startups
+- To stop Redis manually: `make redis-stop`
+
+If you forget to run the stop command:
+- **Redis** will keep running (can be stopped with `make redis-stop`)
+- **Celery worker** will keep running in background
+- **Flower** will keep running in background
+- Run the cleanup command to stop worker and Flower
+
+### Prerequisites for Local Celery Mode
+
+You must have Redis installed on your system:
+```bash
+# Ubuntu/Debian
+sudo apt install redis-server
+
+# macOS
+brew install redis
+```
+
+**Redis Management:**
+- Use `make redis-start` to start Redis (runs as daemon process)
+- Use `make redis-stop` to stop Redis when needed
+- Redis will automatically start when running `make dev-celery` or `make run-celery`
+- Redis persists between development sessions for faster startups (stop manually if needed)
+
+### Command Summary
+
+| Command | Mode | Port | Bot Token | Services Started |
+|---------|------|------|-----------|------------------|
+| `make dev` | Development | 8390 | DEV | Web only (subprocess) |
+| `make dev-celery` | Development | 8390 | DEV | Redis + Worker + Flower + Web |
+| `make run` | Production | 8391 | PRODUCTION | Web only (subprocess) |
+| `make run-celery` | Production | 8391 | PRODUCTION | Redis + Worker + Flower + Web |
+| `make docker-compose-up-celery` | Production | 8391 | PRODUCTION | All services in Docker |
 
 ## Environment Variables
 
