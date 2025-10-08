@@ -35,19 +35,19 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 
 ### Environment Configurations
 
-#### Development Mode (`IS_DEV=true`)
-- **Port**: 8390
-- **Bot Token**: `BOTTOKEN_DEV`
+#### Local Execution (Port 8390)
+- **Bot Token**: `BOTTOKEN_DEV` (development bot)
 - **Webhook URL**: `WEBHOOK_URL_DEV`
-- **Features**: Hot reload, source code mounting, separate dev infrastructure
-- **Docker**: Uses `docker-compose.dev.yml` overrides
+- **Environment**: `IS_DEV=true` automatically set by Makefile
+- **Purpose**: Local development and testing
+- **Commands**: `make dev` (subprocess) / `make dev-celery` (Celery)
 
-#### Production Mode (`IS_DEV=false`)
-- **Port**: 8391
-- **Bot Token**: `BOTTOKEN`
+#### Docker/Production (Port 8391)
+- **Bot Token**: `BOTTOKEN` (production bot)
 - **Webhook URL**: `WEBHOOK_URL`
-- **Features**: Optimized for performance and stability
-- **Docker**: Uses base `docker-compose.yml` configuration
+- **Environment**: `IS_DEV` not set (defaults to production)
+- **Purpose**: Production deployment via Docker containers
+- **Commands**: `make docker-compose-up` / `make docker-compose-up-celery`
 
 ### Key Components
 
@@ -94,24 +94,29 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 - **`subprocess` Profile**: Lightweight web service only
 - **`celery` Profile**: Full stack with Redis, PostgreSQL, workers
 
-#### Container Configurations
-- **Production**: Uses `docker-compose.yml` with `korail_prod_network`
-- **Development**: Adds `docker-compose.dev.yml` with `korail_dev_network`
-- **Port Mapping**: Separate ports to prevent conflicts (8390 dev, 8391 prod)
+#### Container Configuration
+- **Network**: Uses `korail_prod_network` bridge network
+- **Port Mapping**: Port 8391 for production Docker deployment
+- **Note**: Local execution uses port 8390 (non-Docker)
 
 #### Service Definitions
 ```yaml
 # Subprocess Mode Services
 web: FastAPI application (subprocess mode)
 
-# Celery Mode Services  
+# Celery Mode Services
 web_celery: FastAPI application (Celery mode)
-redis: Message broker and state storage
-postgres: Optional persistent database
-worker: Celery worker processes
-beat: Celery scheduler (optional)
-flower: Web-based monitoring (optional)
+redis: Message broker and state storage (REQUIRED for Celery)
+postgres: Persistent database (CURRENTLY UNUSED - reserved for future use)
+worker: Celery worker processes (REQUIRED for Celery)
+beat: Celery scheduler (NOT NEEDED - no periodic tasks defined)
+flower: Web-based monitoring (OPTIONAL - for debugging)
 ```
+
+**Important Notes:**
+- **PostgreSQL**: Currently not used in the codebase. Celery uses Redis for both broker and result backend. Can be removed to save resources or kept for future development.
+- **Beat**: No periodic tasks (`@periodic_task`) are defined, so this service is unused. Can be removed.
+- **Flower**: Only needed during development/debugging to monitor Celery tasks.
 
 ### State Management Architecture
 
@@ -179,8 +184,8 @@ make setup-pipenv     # Install pipenv globally
 
 ### Local Development
 ```bash
-make dev              # Development mode, subprocess (port 8390)
-make dev-celery       # Development mode, Celery (port 8390)
+make dev              # Local execution, subprocess (port 8390)
+make dev-celery       # Local execution, Celery (port 8390)
 make run              # Production mode, subprocess (port 8391)
 make run-celery       # Production mode, Celery (port 8391)
 ```
@@ -206,10 +211,11 @@ make docker-compose-up         # Subprocess mode
 make docker-compose-up-celery  # Celery mode
 make docker-compose-down       # Stop all services
 
-# Development  
-make docker-compose-dev        # Subprocess mode
-make docker-compose-dev-celery # Celery mode
-make docker-compose-down-dev   # Stop all dev services
+
+# Code Changes - IMPORTANT: Always use --build when code changes
+docker compose down
+docker compose --profile celery up -d --build    # Rebuild and start Celery mode
+docker compose --profile subprocess up -d --build # Rebuild and start subprocess mode
 ```
 
 ### Code Quality
@@ -219,19 +225,18 @@ make lint             # Format code with black
 
 ## Environment Variables
 
-### Required Variables
+### Required Variables for Local Execution
 ```bash
-BOTTOKEN              # Production Telegram bot token
-WEBHOOK_URL           # Production webhook URL
+BOTTOKEN_DEV          # Development Telegram bot token (for local execution)
+WEBHOOK_URL_DEV       # Development webhook URL (for local execution)
 ALLOW_LIST            # Comma-separated phone numbers
 ADMINPW               # Admin password for privileged access
 ```
 
-### Development Variables  
+### Production Variables (Docker Environment)
 ```bash
-BOTTOKEN_DEV          # Development Telegram bot token
-WEBHOOK_URL_DEV       # Development webhook URL
-IS_DEV                # Enable development mode
+BOTTOKEN              # Production Telegram bot token
+WEBHOOK_URL           # Production webhook URL
 ```
 
 ### Celery Mode Variables
@@ -244,8 +249,8 @@ CELERY_RESULT_BACKEND # Celery result backend URL
 
 ### Optional Variables
 ```bash
-USERID                # Default Korail username for admin mode
-USERPW                # Default Korail password for admin mode
+ADMIN_KORAIL_ID       # Default Korail username for admin quick-login
+ADMIN_KORAIL_PW       # Default Korail password for admin quick-login
 ```
 
 ## Testing and Quality Assurance
@@ -289,11 +294,36 @@ USERPW                # Default Korail password for admin mode
 
 Always run `make lint` before committing changes to maintain code formatting consistency.
 
+## Service Optimization Recommendations
+
+### Services That Can Be Removed (Celery Profile)
+1. **PostgreSQL (`postgres`)**: Not used anywhere in the codebase. Celery uses Redis for results.
+   - Remove to save ~50MB RAM and disk space
+   - Keep if planning to add persistent data storage in future
+
+2. **Beat (`beat`)**: No periodic tasks defined in the application.
+   - Remove to save ~100MB RAM
+   - Only add back if implementing scheduled tasks
+
+### Minimal Celery Profile (Recommended)
+```yaml
+Services needed: web_celery, redis, worker
+Optional: flower (for debugging only)
+Remove: postgres, beat
+```
+
 ## Important Notes for AI Assistant
 
 1. **Mode Selection**: Always consider whether changes affect subprocess mode, Celery mode, or both
-2. **Environment Awareness**: Be mindful of dev vs production configurations
+2. **Environment Awareness**: Be mindful of local (IS_DEV=true) vs Docker/production configurations
 3. **Docker Profiles**: Remember to use appropriate profiles when testing Docker setups
 4. **State Management**: Understand the different storage mechanisms for each mode
 5. **Configuration Over Detection**: Use configuration parameters instead of ImportError patterns
 6. **Resource Considerations**: Subprocess mode should remain lightweight, Celery mode can use more resources
+7. **PostgreSQL**: Currently unused - Celery uses Redis for all storage needs
+7. **Docker Build Strategy**: **CRITICAL** - When code changes, ALWAYS use `docker compose up -d --build` to ensure containers get updated code. All services use `build: .` context and share the same codebase. Never manually rebuild individual services or use complex docker build/tag workflows. The correct process is:
+   ```bash
+   docker compose down
+   docker compose --profile celery up -d --build     # For Celery mode
+   docker compose --profile subprocess up -d --build # For subprocess mode
+   ```

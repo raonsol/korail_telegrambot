@@ -14,19 +14,19 @@ install:	## Install dependencies and create virtual environment
 	pipenv install --dev
 
 .PHONY: dev
-dev:  ## Run application in development mode (port: 8390)
-	USE_CELERY=false pipenv run fastapi dev src/app.py --port 8390
+dev:  ## Run application locally (port: 8390)
+	IS_DEV=true USE_CELERY=false pipenv run fastapi dev src/app.py --port 8390
 
 .PHONY: dev-celery
-dev-celery:  ## Run application in development mode with Celery (port: 8390)
-	USE_CELERY=true pipenv run fastapi dev src/app.py --port 8390
+dev-celery:  ## Run application locally with Celery (port: 8390)
+	IS_DEV=true USE_CELERY=true pipenv run fastapi dev src/app.py --port 8390
 
 .PHONY: run
-run:	## Run application (port:8391)
+run:	## Run application in production mode (port:8391)
 	USE_CELERY=false pipenv run fastapi run src/app.py --host 0.0.0.0 --port 8391
 
 .PHONY: run-celery
-run-celery:	## Run application with Celery (port:8391)
+run-celery:	## Run application in production mode with Celery (port:8391)
 	USE_CELERY=true pipenv run fastapi run src/app.py --host 0.0.0.0 --port 8391
 
 .PHONY: celery-worker
@@ -59,8 +59,8 @@ docker-run:	## Run Docker container (subprocess mode)
 		--name korailbot \
 		--restart unless-stopped \
 		-e TZ=Asia/Seoul \
-		-e USERID=${USERID} \
-		-e USERPW=${USERPW} \
+		-e ADMIN_KORAIL_ID=${ADMIN_KORAIL_ID} \
+		-e ADMIN_KORAIL_PW=${ADMIN_KORAIL_PW} \
 		-e BOTTOKEN=${BOTTOKEN} \
 		-e ALLOW_LIST=${ALLOW_LIST} \
 		-e ADMINPW=${ADMINPW} \
@@ -75,13 +75,16 @@ docker-run-celery:	## Run Docker container (Celery mode)
 		--name korailbot \
 		--restart unless-stopped \
 		-e TZ=Asia/Seoul \
-		-e USERID=${USERID} \
-		-e USERPW=${USERPW} \
+		-e ADMIN_KORAIL_ID=${ADMIN_KORAIL_ID} \
+		-e ADMIN_KORAIL_PW=${ADMIN_KORAIL_PW} \
 		-e BOTTOKEN=${BOTTOKEN} \
 		-e ALLOW_LIST=${ALLOW_LIST} \
 		-e ADMINPW=${ADMINPW} \
 		-e WEBHOOK_URL=${WEBHOOK_URL} \
 		-e USE_CELERY=true \
+		-e REDIS_URL=redis://localhost:6379 \
+		-e CELERY_BROKER=redis://localhost:6379 \
+		-e CELERY_RESULT_BACKEND=redis://localhost:6379 \
 		-p 8391:8391 \
 		${IMAGE_NAME}
 
@@ -91,20 +94,8 @@ docker-compose-up:	## Start all services with Docker Compose (subprocess mode)
 
 .PHONY: docker-compose-up-celery
 docker-compose-up-celery:	## Start all services with Docker Compose (Celery enabled)
-	USE_CELERY=true docker compose --profile celery up -d
-
-.PHONY: docker-compose-dev
-docker-compose-dev:	## Start all services in dev mode (port 8390, subprocess mode)
-	USE_CELERY=false docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile subprocess up -d
-
-.PHONY: docker-compose-dev-celery
-docker-compose-dev-celery:	## Start all services in dev mode with Celery (port 8390)
-	USE_CELERY=true docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile celery up -d
+	docker compose --profile celery up -d
 
 .PHONY: docker-compose-down
 docker-compose-down:	## Stop all Docker Compose services
 	docker compose --profile subprocess --profile celery down
-
-.PHONY: docker-compose-down-dev
-docker-compose-down-dev:	## Stop all dev Docker Compose services
-	docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile subprocess --profile celery down

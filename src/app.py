@@ -18,9 +18,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# set environment variable for development
-settings.is_dev = "dev" in sys.argv
-print(f"Setting env as {'development' if settings.is_dev else 'production'}")
+# Local execution uses dev bot token
+print("Using development bot token for local execution")
 
 bot_token = settings.bot_token
 

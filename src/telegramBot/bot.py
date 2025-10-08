@@ -773,6 +773,11 @@ class TelegramBot:
         try:
             from .tasks import reservation_task
 
+            # Convert TrainType enum to string for Celery serialization
+            train_type_str = (
+                "KTX" if train_info["trainType"] == TrainType.KTX else "ALL"
+            )
+
             # Prepare reservation data for Celery task
             reservation_data = {
                 "korail_id": user_info["korailId"],
@@ -782,15 +787,21 @@ class TelegramBot:
                 "arr_station": train_info["dstLocate"],
                 "dep_time": f"{train_info['depTime']}00",
                 "arr_time": train_info.get("maxDepTime"),
-                "train_type": train_info["trainType"],
+                "train_type": train_type_str,
                 "prefer_seat_type": (
                     "special" if train_info["specialInfo"] == "Y" else "general"
                 ),
                 "attempts": 0,
             }
 
-            # Generate callback URL for status updates
-            callback_url = f"{settings.webhook_url_by_env}/reservation_callback"
+            # Generate callback URL for status updates (use internal network in Docker)
+            if self.use_celery:
+                # In Celery mode (Docker), use internal service name
+                callback_url = "http://web_celery:8391/reservation_callback"
+            else:
+                # In subprocess mode, use localhost
+                port = 8390 if settings.is_dev else 8391
+                callback_url = f"http://127.0.0.1:{port}/reservation_callback"
 
             # Start Celery task
             task = reservation_task.delay(int(chat_id), reservation_data, callback_url)

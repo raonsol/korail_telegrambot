@@ -104,7 +104,7 @@ services:
     environment:
       - TZ=Asia/Seoul
       - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql://korail:password@postgres:5432
+      - DATABASE_URL=postgresql://korail:password@postgres:5432/korail_bot
       - CELERY_BROKER=redis://redis:6379
       - CELERY_RESULT_BACKEND=redis://redis:6379
       - USE_CELERY=true
