@@ -116,6 +116,52 @@ celery-flower-stop:  ## Stop Flower monitoring UI
 lint:	## Run lint
 	pipenv run black .
 
+.PHONY: test
+test:	## Run all tests
+	pipenv run pytest
+
+.PHONY: test-unit
+test-unit:	## Run unit tests only
+	pipenv run pytest -m unit -v
+
+.PHONY: test-integration
+test-integration:	## Run integration tests only
+	pipenv run pytest -m integration -v
+
+.PHONY: test-e2e
+test-e2e:	## Run end-to-end tests only
+	pipenv run pytest -m e2e -v
+
+.PHONY: test-subprocess
+test-subprocess:	## Run subprocess mode tests
+	pipenv run pytest -m subprocess -v
+
+.PHONY: test-celery
+test-celery:	## Run Celery mode tests (requires Redis)
+	pipenv run pytest -m celery -v
+
+.PHONY: test-fast
+test-fast:	## Run fast tests only (skip slow E2E tests)
+	pipenv run pytest -m "not slow" -v
+
+.PHONY: test-coverage
+test-coverage:	## Run tests with coverage report
+	pipenv run pytest --cov=src --cov-report=html --cov-report=term-missing --cov-report=xml
+
+.PHONY: test-verbose
+test-verbose:	## Run tests with verbose output
+	pipenv run pytest -vv -s
+
+.PHONY: test-watch
+test-watch:	## Run tests in watch mode (requires pytest-watch)
+	pipenv run ptw
+
+.PHONY: coverage-html
+coverage-html:	## Generate HTML coverage report and open in browser
+	pipenv run pytest --cov=src --cov-report=html
+	@echo "Opening coverage report..."
+	@which xdg-open > /dev/null && xdg-open htmlcov/index.html || open htmlcov/index.html || echo "Please open htmlcov/index.html manually"
+
 .PHONY: docker-build
 docker-build:		## Build Docker Image
 	docker build -t ${IMAGE_NAME} -f ./Dockerfile .

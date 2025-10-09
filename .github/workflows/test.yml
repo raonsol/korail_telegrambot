@@ -1,0 +1,303 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [ main, develop, feature/* ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Code Linting
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install pipenv
+      run: |
+        pip install pipenv
+
+    - name: Install dependencies
+      run: |
+        pipenv install --dev
+
+    - name: Run linter
+      run: |
+        pipenv run black --check .
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install pipenv
+      run: |
+        pip install pipenv
+
+    - name: Install dependencies
+      run: |
+        pipenv install --dev
+
+    - name: Run unit tests
+      env:
+        IS_DEV: true
+        BOTTOKEN_DEV: test_bot_token_dev
+        BOTTOKEN: test_bot_token_prod
+        WEBHOOK_URL_DEV: http://test-dev.example.com
+        WEBHOOK_URL: http://test-prod.example.com
+        ALLOW_LIST: 01012345678,01087654321
+        ADMINPW: test_admin_password
+        ADMIN_KORAIL_ID: admin_user
+        ADMIN_KORAIL_PW: admin_pass
+      run: |
+        pipenv run pytest -m unit -v --cov=src --cov-report=xml --cov-report=term-missing
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: unit-tests-coverage
+        fail_ci_if_error: false
+
+  integration-tests-subprocess:
+    name: Integration Tests (Subprocess Mode)
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install pipenv
+      run: |
+        pip install pipenv
+
+    - name: Install dependencies
+      run: |
+        pipenv install --dev
+
+    - name: Run subprocess mode tests
+      env:
+        IS_DEV: true
+        BOTTOKEN_DEV: test_bot_token_dev
+        WEBHOOK_URL_DEV: http://test-dev.example.com
+        ALLOW_LIST: 01012345678
+        ADMINPW: test_admin_password
+        USE_CELERY: false
+      run: |
+        pipenv run pytest -m subprocess -v
+
+  integration-tests-celery:
+    name: Integration Tests (Celery Mode)
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install pipenv
+      run: |
+        pip install pipenv
+
+    - name: Install dependencies
+      run: |
+        pipenv install --dev
+
+    - name: Wait for Redis
+      run: |
+        timeout 30 bash -c 'until redis-cli -h localhost ping; do sleep 1; done'
+
+    - name: Run Celery mode tests
+      env:
+        IS_DEV: true
+        BOTTOKEN_DEV: test_bot_token_dev
+        WEBHOOK_URL_DEV: http://test-dev.example.com
+        ALLOW_LIST: 01012345678
+        ADMINPW: test_admin_password
+        USE_CELERY: true
+        REDIS_URL: redis://localhost:6379
+        CELERY_BROKER: redis://localhost:6379
+        CELERY_RESULT_BACKEND: redis://localhost:6379
+      run: |
+        pipenv run pytest -m celery -v
+
+  e2e-tests:
+    name: End-to-End Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install pipenv
+      run: |
+        pip install pipenv
+
+    - name: Install dependencies
+      run: |
+        pipenv install --dev
+
+    - name: Run E2E tests
+      env:
+        IS_DEV: true
+        BOTTOKEN_DEV: test_bot_token_dev
+        WEBHOOK_URL_DEV: http://test-dev.example.com
+        ALLOW_LIST: 01012345678
+        ADMINPW: test_admin_password
+      run: |
+        pipenv run pytest -m e2e -v
+
+  coverage-report:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests-subprocess, e2e-tests]
+
+    services:
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install pipenv
+      run: |
+        pip install pipenv
+
+    - name: Install dependencies
+      run: |
+        pipenv install --dev
+
+    - name: Run all tests with coverage
+      env:
+        IS_DEV: true
+        BOTTOKEN_DEV: test_bot_token_dev
+        BOTTOKEN: test_bot_token_prod
+        WEBHOOK_URL_DEV: http://test-dev.example.com
+        WEBHOOK_URL: http://test-prod.example.com
+        ALLOW_LIST: 01012345678
+        ADMINPW: test_admin_password
+        ADMIN_KORAIL_ID: admin_user
+        ADMIN_KORAIL_PW: admin_pass
+        REDIS_URL: redis://localhost:6379
+        CELERY_BROKER: redis://localhost:6379
+        CELERY_RESULT_BACKEND: redis://localhost:6379
+      run: |
+        pipenv run pytest --cov=src --cov-report=xml --cov-report=html --cov-report=term-missing
+
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.xml
+        flags: alltests
+        name: full-coverage
+        fail_ci_if_error: false
+
+    - name: Archive coverage report
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: htmlcov/
+        retention-days: 30
+
+  docker-build-test:
+    name: Docker Build Test
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build Docker image
+      run: |
+        docker build -t korail-bot:test .
+
+    - name: Test Docker image
+      run: |
+        docker images | grep korail-bot
+
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [lint, unit-tests, integration-tests-subprocess, integration-tests-celery, e2e-tests, docker-build-test]
+    if: always()
+
+    steps:
+    - name: Check test results
+      run: |
+        echo "All tests completed!"
+        echo "Lint: ${{ needs.lint.result }}"
+        echo "Unit Tests: ${{ needs.unit-tests.result }}"
+        echo "Integration Tests (Subprocess): ${{ needs.integration-tests-subprocess.result }}"
+        echo "Integration Tests (Celery): ${{ needs.integration-tests-celery.result }}"
+        echo "E2E Tests: ${{ needs.e2e-tests.result }}"
+        echo "Docker Build: ${{ needs.docker-build-test.result }}"
+
+        if [ "${{ needs.lint.result }}" != "success" ] || \
+           [ "${{ needs.unit-tests.result }}" != "success" ] || \
+           [ "${{ needs.integration-tests-subprocess.result }}" != "success" ] || \
+           [ "${{ needs.integration-tests-celery.result }}" != "success" ] || \
+           [ "${{ needs.e2e-tests.result }}" != "success" ] || \
+           [ "${{ needs.docker-build-test.result }}" != "success" ]; then
+          echo "❌ Some tests failed!"
+          exit 1
+        else
+          echo "✅ All tests passed!"
+        fi

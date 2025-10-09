@@ -17,6 +17,13 @@ sqlalchemy = "*"
 
 [dev-packages]
 black = "*"
+pytest = "*"
+pytest-asyncio = "*"
+pytest-cov = "*"
+pytest-mock = "*"
+httpx = "*"
+fakeredis = "*"
+freezegun = "*"
 
 [requires]
 python_version = "3.13"
