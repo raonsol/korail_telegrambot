@@ -62,12 +62,12 @@ def is_valid_time(str):
 
 def is_today(date: str):
     date_alt = datetime.strptime(date, "%Y%m%d")
-    today = datetime.today().strftime("%Y%m%d")
-    return date_alt == today
+    today = datetime.today()
+    return date_alt.date() == today.date()
 
 
 def is_past_time(time: str):
-    time_alt = datetime.strptime(time, "%H%M")
+    time_alt = datetime.strptime(time, "%H%M").time()
     current_time = datetime.now().time()
     return time_alt < current_time
 

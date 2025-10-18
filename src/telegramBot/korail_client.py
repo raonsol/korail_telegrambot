@@ -253,9 +253,10 @@ class ReserveHandler:
                 self.reserveInfo["depTime"],
                 train_type=self.reserveInfo["trainType"],
             )
-            timeL = "".join(str(trains[0]).split("(")[1].split("~")[0].split(":"))
-            if int(timeL) >= int(self.reserveInfo["maxDepTime"]):
-                trains = []
+            if trains:  # Check if trains list is not empty
+                timeL = "".join(str(trains[0]).split("(")[1].split("~")[0].split(":"))
+                if int(timeL) >= int(self.reserveInfo["maxDepTime"]):
+                    trains = []
         except NoResultsError:
             trains = []
         return trains

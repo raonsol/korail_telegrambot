@@ -61,12 +61,14 @@ class TestCompleteReservationFlow:
             assert bot.userDict[chat_id]["userInfo"]["korailPw"] == "test_password"
 
         # Step 5: Select date
-        from datetime import datetime
+        from datetime import datetime, timedelta
 
-        selected_date = datetime(2025, 1, 15)
+        # Use a future date (tomorrow) to ensure it passes validation
+        selected_date = datetime.now() + timedelta(days=1)
         await bot._input_date(chat_id, selected_date)
         assert bot.userDict[chat_id]["lastAction"] == 5
-        assert bot.userDict[chat_id]["trainInfo"]["depDate"] == "20250115"
+        expected_date = selected_date.strftime("%Y%m%d")
+        assert bot.userDict[chat_id]["trainInfo"]["depDate"] == expected_date
 
         # Step 6: Input source station
         await bot._input_src_station(chat_id, "서울")
@@ -202,17 +204,18 @@ class TestCompleteReservationFlow:
         # Invalid phone number
         bot.userDict[chat_id]["lastAction"] = 2
         await bot._input_id(chat_id, "invalid_phone")
-        assert bot.userDict[chat_id]["lastAction"] == 0  # Should reset or stay
+        assert bot.userDict[chat_id]["lastAction"] == 2
 
         # Invalid time format
+        from datetime import datetime, timedelta
+
         bot.userDict[chat_id]["lastAction"] = 7
-        bot.userDict[chat_id]["trainInfo"]["depDate"] = "20250115"
+        future_date = (datetime.now() + timedelta(days=1)).strftime("%Y%m%d")
+        bot.userDict[chat_id]["trainInfo"]["depDate"] = future_date
         await bot._input_dep_time(chat_id, "invalid_time")
         # Should send error message but stay at same stage
 
         # Past time for today's date
-        from datetime import datetime
-
         today = datetime.today().strftime("%Y%m%d")
         bot.userDict[chat_id]["trainInfo"]["depDate"] = today
         bot.userDict[chat_id]["lastAction"] = 7

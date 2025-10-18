@@ -217,14 +217,14 @@ class TestAppConfiguration:
             client = TestClient(app_module.app)
 
             # Make a request with Origin header to trigger CORS
-            response = client.get(
-                "/health", headers={"Origin": "http://example.com"}
-            )
+            response = client.get("/health", headers={"Origin": "http://example.com"})
 
             # Check if CORS headers are present in response
             assert "access-control-allow-origin" in response.headers
 
-    @pytest.mark.skip(reason="Bot token validation happens at module import, difficult to test in isolation")
+    @pytest.mark.skip(
+        reason="Bot token validation happens at module import, difficult to test in isolation"
+    )
     def test_bot_token_validation(self):
         """Test that app validates bot token on startup"""
         # This test is skipped because the bot is created at module level
