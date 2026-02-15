@@ -47,6 +47,12 @@ def reservation_task(self, chat_id: int, reservation_data: dict, callback_url: s
     """
     # Initialize Redis client to check reservation status
     redis_client = None
+
+    # Use Celery task ID as unique key to prevent duplicate task execution
+    # This allows the same user to make multiple reservations simultaneously
+    # (e.g., different trains, or retry after failure)
+    reservation_key = f"reservation_task:{self.request.id}"
+
     try:
         redis_client = redis.Redis.from_url(
             web_settings.redis_url,
@@ -54,19 +60,19 @@ def reservation_task(self, chat_id: int, reservation_data: dict, callback_url: s
             decode_responses=True,
         )
 
-        # Check if reservation is already completed
-        reservation_status = redis_client.hget(f"reservation:{chat_id}", "status")
+        # Check if THIS SPECIFIC reservation is already completed
+        reservation_status = redis_client.hget(reservation_key, "status")
         if reservation_status == "completed":
             logger.info(
-                f"Reservation already completed for chat_id: {chat_id}, skipping task"
+                f"Reservation already completed for key: {reservation_key}, skipping task"
             )
             return {
                 "status": "already_completed",
                 "message": "Reservation already completed",
             }
 
-        # Mark task as started
-        redis_client.hset(f"reservation:{chat_id}", "status", "running")
+        # Mark THIS SPECIFIC task as started
+        redis_client.hset(reservation_key, "status", "running")
 
     except Exception as redis_error:
         logger.warning(
@@ -77,8 +83,14 @@ def reservation_task(self, chat_id: int, reservation_data: dict, callback_url: s
     try:
         logger.info(f"Starting reservation task for chat_id: {chat_id}")
 
-        # Send start notification
-        _send_callback(callback_url, chat_id, "started", "Reservation process started")
+        # Send start notification with task_id
+        _send_callback(
+            callback_url,
+            chat_id,
+            "started",
+            "Reservation process started",
+            self.request.id,
+        )
 
         # Initialize reservation handler
         reserve_handler = ReserveHandler()
@@ -89,7 +101,7 @@ def reservation_task(self, chat_id: int, reservation_data: dict, callback_url: s
         ):
             error_msg = "Korail login failed"
             logger.error(f"Login failed for chat_id: {chat_id}")
-            _send_callback(callback_url, chat_id, "failed", error_msg)
+            _send_callback(callback_url, chat_id, "failed", error_msg, self.request.id)
             return {"status": "failed", "message": error_msg}
 
         # Perform reservation attempts with Celery-specific retry logic
@@ -98,15 +110,15 @@ def reservation_task(self, chat_id: int, reservation_data: dict, callback_url: s
 
         while attempt_count < max_attempts:
             try:
-                # Check if reservation is already completed before each attempt
+                # Check if THIS SPECIFIC reservation is already completed before each attempt
                 if redis_client:
                     try:
                         reservation_status = redis_client.hget(
-                            f"reservation:{chat_id}", "status"
+                            reservation_key, "status"
                         )
                         if reservation_status == "completed":
                             logger.info(
-                                f"Reservation already completed for chat_id: {chat_id}, stopping task"
+                                f"Reservation already completed for key: {reservation_key}, stopping task"
                             )
                             return {
                                 "status": "already_completed",
@@ -158,16 +170,16 @@ def reservation_task(self, chat_id: int, reservation_data: dict, callback_url: s
                         f"Reservation successful for chat_id: {chat_id} after {attempt_count} attempts"
                     )
 
-                    # Mark as completed in Redis to prevent retries
+                    # Mark THIS SPECIFIC reservation as completed in Redis to prevent retries
                     if redis_client:
                         try:
-                            redis_client.hset(
-                                f"reservation:{chat_id}", "status", "completed"
-                            )
+                            redis_client.hset(reservation_key, "status", "completed")
                         except Exception as e:
                             logger.warning(f"Failed to update Redis status: {e}")
 
-                    _send_callback(callback_url, chat_id, "success", success_msg)
+                    _send_callback(
+                        callback_url, chat_id, "success", success_msg, self.request.id
+                    )
                     return {
                         "status": "success",
                         "message": success_msg,
@@ -182,7 +194,9 @@ def reservation_task(self, chat_id: int, reservation_data: dict, callback_url: s
                     status_msg = (
                         f"Attempt {attempt_count}/{max_attempts} - Still searching..."
                     )
-                    _send_callback(callback_url, chat_id, "progress", status_msg)
+                    _send_callback(
+                        callback_url, chat_id, "progress", status_msg, self.request.id
+                    )
 
             except Exception as e:
                 error_str = str(e)
@@ -198,7 +212,9 @@ def reservation_task(self, chat_id: int, reservation_data: dict, callback_url: s
                         reservation_data["korail_id"], reservation_data["korail_pw"]
                     ):
                         error_msg = "Re-login failed"
-                        _send_callback(callback_url, chat_id, "failed", error_msg)
+                        _send_callback(
+                            callback_url, chat_id, "failed", error_msg, self.request.id
+                        )
                         return {"status": "failed", "message": error_msg}
 
                 time.sleep(1)
@@ -207,17 +223,17 @@ def reservation_task(self, chat_id: int, reservation_data: dict, callback_url: s
         # If we reach here, max attempts exceeded
         timeout_msg = f"Reservation timeout after {max_attempts} attempts"
         logger.warning(f"Reservation timeout for chat_id: {chat_id}")
-        _send_callback(callback_url, chat_id, "failed", timeout_msg)
+        _send_callback(callback_url, chat_id, "failed", timeout_msg, self.request.id)
         return {"status": "timeout", "message": timeout_msg, "attempts": attempt_count}
 
     except SoftTimeLimitExceeded:
-        # Check if reservation was already completed before failing
+        # Check if THIS SPECIFIC reservation was already completed before failing
         if redis_client:
             try:
-                status = redis_client.hget(f"reservation:{chat_id}", "status")
+                status = redis_client.hget(reservation_key, "status")
                 if status == "completed":
                     logger.info(
-                        f"Task exceeded time limit but reservation was already completed for chat_id: {chat_id}"
+                        f"Task exceeded time limit but reservation was already completed for key: {reservation_key}"
                     )
                     return {
                         "status": "success",
@@ -233,6 +249,7 @@ def reservation_task(self, chat_id: int, reservation_data: dict, callback_url: s
             chat_id,
             "failed",
             "최대 시도 횟수를 초과하여 예약이 중단되었습니다.",
+            self.request.id,
         )
         return {"status": "failed", "message": error_msg}
 
@@ -254,11 +271,13 @@ def reservation_task(self, chat_id: int, reservation_data: dict, callback_url: s
 
         error_msg = f"Reservation task failed: {str(e)}"
         logger.error(f"Reservation task error for chat_id: {chat_id}: {str(e)}")
-        _send_callback(callback_url, chat_id, "failed", error_msg)
+        _send_callback(callback_url, chat_id, "failed", error_msg, self.request.id)
         return {"status": "failed", "message": error_msg}
 
 
-def _send_callback(callback_url: str, chat_id: int, status: str, message: str):
+def _send_callback(
+    callback_url: str, chat_id: int, status: str, message: str, task_id: str = None
+):
     """Send status update to callback URL"""
     try:
         payload = {
@@ -266,6 +285,10 @@ def _send_callback(callback_url: str, chat_id: int, status: str, message: str):
             "status": status,
             "timestamp": datetime.now().isoformat(),
         }
+
+        # Include task_id if provided
+        if task_id:
+            payload["task_id"] = task_id
 
         # Add status-specific fields
         if status == "success":

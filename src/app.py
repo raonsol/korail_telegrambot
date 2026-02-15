@@ -129,7 +129,14 @@ async def send_reservation_status(
             -1: 예약 오류
         reserveInfo (str): 예약 정보 문자열
     """
-    if chat_id not in bot.runningStatus:
+    # Find the reservation task by chat_id (runningStatus is keyed by task_id/pid)
+    task_key = None
+    for key, value in bot.runningStatus.items():
+        if value.get("chat_id") == chat_id:
+            task_key = key
+            break
+
+    if not task_key:
         print(f"Chat ID {chat_id}는 예약 큐에 없습니다")
         return
 
@@ -148,7 +155,8 @@ async def send_reservation_status(
         print("예약 완료, 상태 초기화")
         bot._reset_user_state(chat_id)
 
-    del bot.runningStatus[chat_id]
+    # Delete using the correct key (task_id/pid, not chat_id)
+    del bot.runningStatus[task_key]
     # msgToSubscribers = f'{telebot_handler.userDict[chatId]["userInfo"]["korailId"]}의 예약이 종료되었습니다.'
     # telebot_handler.sendToSubscribers(msgToSubscribers)
 
@@ -160,7 +168,7 @@ async def handle_reservation_callback(request: Request):
         data = await request.json()
         user_id = data.get("user_id")
         status_val = data.get("status")
-        # task_id = data.get("task_id")  # Not used but available for future use
+        task_id = data.get("task_id")  # Use task_id to identify specific reservation
 
         if not user_id:
             return Response(status_code=status.HTTP_400_BAD_REQUEST)
@@ -173,9 +181,9 @@ async def handle_reservation_callback(request: Request):
             msg = Messages.Info.RESERVE_SUCCESS.format(reserveInfo=train_info)
             await bot.send_message(chat_id, msg)
 
-            # Clean up state
-            if chat_id in bot.runningStatus:
-                del bot.runningStatus[chat_id]
+            # Clean up state using task_id
+            if task_id and task_id in bot.runningStatus:
+                del bot.runningStatus[task_id]
             bot._reset_user_state(chat_id)
 
         elif status_val == "failed":
@@ -186,9 +194,9 @@ async def handle_reservation_callback(request: Request):
                 msg = Messages.Error.RESERVE_WRONG
             await bot.send_message(chat_id, msg)
 
-            # Clean up state
-            if chat_id in bot.runningStatus:
-                del bot.runningStatus[chat_id]
+            # Clean up state using task_id
+            if task_id and task_id in bot.runningStatus:
+                del bot.runningStatus[task_id]
             bot._reset_user_state(chat_id)
 
         return Response(status_code=status.HTTP_200_OK)

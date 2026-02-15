@@ -1,4 +1,6 @@
 include .env
+export
+
 IMAGE_NAME := raonsol/korail_telegrambot:v0.6
 WORKER_PID_FILE := .celery-worker.pid
 FLOWER_PID_FILE := .celery-flower.pid
@@ -17,7 +19,7 @@ install:	## Install dependencies and create virtual environment
 
 .PHONY: dev
 dev:  ## Run local development server in subprocess mode (port: 8390, IS_DEV=true)
-	IS_DEV=true USE_CELERY=false pipenv run fastapi dev src/app.py --port 8390
+	PIPENV_DONT_LOAD_ENV=1 IS_DEV=true USE_CELERY=false pipenv run python -m fastapi dev src/app.py --port 8390
 
 .PHONY: dev-celery
 dev-celery: redis-start celery-worker-start celery-flower-start  ## Run local development with Celery - starts Redis + Worker + Flower + Web (port: 8390, IS_DEV=true)
@@ -26,7 +28,7 @@ dev-celery: redis-start celery-worker-start celery-flower-start  ## Run local de
 	@echo "✅ Flower monitoring UI running at http://localhost:5555"
 	@echo "🚀 Starting FastAPI development server on port 8390..."
 	@echo "⚠️  Press Ctrl+C to stop. Then run 'make dev-celery-stop' to cleanup."
-	IS_DEV=true USE_CELERY=true pipenv run fastapi dev src/app.py --port 8390
+	PIPENV_DONT_LOAD_ENV=1 IS_DEV=true USE_CELERY=true pipenv run python -m fastapi dev src/app.py --port 8390
 
 .PHONY: dev-celery-stop
 dev-celery-stop: celery-flower-stop celery-worker-stop  ## Stop Celery development services (Worker + Flower only, Redis stays running)
@@ -35,7 +37,7 @@ dev-celery-stop: celery-flower-stop celery-worker-stop  ## Stop Celery developme
 
 .PHONY: run
 run:  ## Run local production server in subprocess mode (port: 8391, IS_DEV=false)
-	USE_CELERY=false pipenv run fastapi run src/app.py --host 0.0.0.0 --port 8391
+	PIPENV_DONT_LOAD_ENV=1 USE_CELERY=false pipenv run python -m fastapi run src/app.py --host 0.0.0.0 --port 8391
 
 .PHONY: run-celery
 run-celery: redis-start celery-worker-start celery-flower-start  ## Run local production with Celery - starts Redis + Worker + Flower + Web (port: 8391, IS_DEV=false)
@@ -44,7 +46,7 @@ run-celery: redis-start celery-worker-start celery-flower-start  ## Run local pr
 	@echo "✅ Flower monitoring UI running at http://localhost:5555"
 	@echo "🚀 Starting FastAPI production server on port 8391..."
 	@echo "⚠️  Press Ctrl+C to stop. Then run 'make run-celery-stop' to cleanup."
-	USE_CELERY=true pipenv run fastapi run src/app.py --host 0.0.0.0 --port 8391
+	PIPENV_DONT_LOAD_ENV=1 USE_CELERY=true pipenv run python -m fastapi run src/app.py --host 0.0.0.0 --port 8391
 
 .PHONY: run-celery-stop
 run-celery-stop: celery-flower-stop celery-worker-stop  ## Stop Celery production services (Worker + Flower only, Redis stays running)

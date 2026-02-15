@@ -124,7 +124,9 @@ flower: Web-based monitoring (OPTIONAL - for debugging)
 ```python
 # In-memory storage (bot.py)
 userDict = {}        # User conversation state and reservation details
-runningStatus = {}   # Active reservation processes with PIDs
+runningStatus = {}   # Active reservation processes
+                     # Key: PID (subprocess mode) or task_id (Celery mode)
+                     # Value: {chat_id, task_id/pid, korailId, method}
 subscribes = []      # Users receiving broadcast notifications
 ```
 
@@ -134,6 +136,70 @@ subscribes = []      # Users receiving broadcast notifications
 redis_client: Redis connection for state persistence
 celery_app: Celery application for task management
 # PostgreSQL for optional long-term data persistence
+
+# Task-based isolation
+# Each reservation uses Celery task_id as unique identifier
+# Redis key format: reservation_task:{task_id}
+# This allows same user to have multiple concurrent reservations
+```
+
+### Multiple Reservation Support (Important!)
+
+**Design Philosophy**: Each reservation task is completely independent, identified by its unique task_id (Celery) or PID (subprocess).
+
+#### Key Implementation Details
+
+1. **Task Isolation**
+   - **Subprocess Mode**: Uses process PID as unique identifier
+   - **Celery Mode**: Uses Celery task_id (`self.request.id`) as unique identifier
+   - Each reservation maintains independent state in `runningStatus[task_id]`
+
+2. **Redis Key Structure (Celery Mode)**
+   ```python
+   # tasks.py line 54
+   reservation_key = f"reservation_task:{self.request.id}"
+
+   # This allows:
+   # - Same user, multiple different reservations (different routes)
+   # - Same user, same route, multiple attempts (retry after failure)
+   # - Complete task independence
+   ```
+
+3. **runningStatus Structure**
+   ```python
+   # bot.py line 682-687
+   self.runningStatus[task_id] = {
+       "chat_id": chat_id,      # User's Telegram chat ID
+       "task_id": task_id,      # Celery task ID or subprocess PID
+       "korailId": user_info["korailId"],  # Korail account
+       "method": "celery",      # "celery" or "subprocess"
+   }
+   ```
+
+4. **Cancel Menu Interface**
+   - Shows list of ongoing reservations for the user
+   - User can select specific reservation to cancel
+   - Or cancel all reservations at once
+   - Implementation: `_show_cancel_menu()` at bot.py:832-874
+
+5. **Callback Handling**
+   - All callbacks include `task_id` parameter
+   - App identifies and cleans up specific task: `app.py:163`
+   - Preserves other concurrent reservations for same user
+
+#### Why task_id Instead of chat_id?
+
+**Problem with chat_id**: Would only allow one reservation per user
+```python
+# ❌ OLD (wrong):
+runningStatus[chat_id] = {...}  # Second reservation overwrites first!
+```
+
+**Solution with task_id**: Allows unlimited concurrent reservations
+```python
+# ✅ NEW (correct):
+runningStatus[task_id_1] = {chat_id: 123, ...}  # First reservation
+runningStatus[task_id_2] = {chat_id: 123, ...}  # Second reservation (same user!)
 ```
 
 ### Configuration-Based Initialization
@@ -148,6 +214,12 @@ def __init__(self, token: str, enable_redis_celery: bool = False):
     else:
         # Use in-memory storage and subprocess execution
 ```
+
+**Important Note on Environment Variables:**
+- The `.env` file should NOT set `USE_CELERY` to avoid conflicts
+- Makefile commands use `PIPENV_DONT_LOAD_ENV=1` to prevent .env from overriding command-line settings
+- This ensures `make dev` and `make run` always use subprocess mode
+- And `make dev-celery` and `make run-celery` always use Celery mode
 
 ### Conversation Flow Architecture
 
