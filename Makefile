@@ -1,4 +1,4 @@
-include .env
+-include .env
 export
 
 IMAGE_NAME := raonsol/korail_telegrambot:v0.7

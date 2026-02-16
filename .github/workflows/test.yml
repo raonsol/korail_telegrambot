@@ -140,10 +140,6 @@ jobs:
       run: |
         pipenv install --dev
 
-    - name: Wait for Redis
-      run: |
-        timeout 30 bash -c 'until redis-cli -h localhost ping; do sleep 1; done'
-
     - name: Run Celery mode tests
       env:
         IS_DEV: true
@@ -157,6 +153,53 @@ jobs:
         CELERY_RESULT_BACKEND: redis://localhost:6379
       run: |
         pipenv run pytest -m celery -v
+
+  integration-tests-real-redis:
+    name: Integration Tests (Real Redis)
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install pipenv
+      run: |
+        pip install pipenv
+
+    - name: Install dependencies
+      run: |
+        pipenv install --dev
+
+    - name: Run real Redis tests
+      env:
+        IS_DEV: true
+        BOTTOKEN_DEV: test_bot_token_dev
+        WEBHOOK_URL_DEV: http://test-dev.example.com
+        ALLOW_LIST: 01012345678
+        ADMINPW: test_admin_password
+        ADMIN_KORAIL_ID: admin_user
+        ADMIN_KORAIL_PW: admin_pass
+        REDIS_URL: redis://localhost:6379
+        CELERY_BROKER: redis://localhost:6379
+        CELERY_RESULT_BACKEND: redis://localhost:6379
+      run: |
+        pipenv run pytest -m requires_redis -v
 
   e2e-tests:
     name: End-to-End Tests
