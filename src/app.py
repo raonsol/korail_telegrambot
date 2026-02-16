@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from telegram import Update
 from telegramBot.bot import TelegramBot
 from telegramBot.messages import Messages
+from config import web_settings as settings
 
 
 # Configure logging
@@ -17,34 +18,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# set environment variable for development
-os.environ["IS_DEV"] = "true" if "dev" in sys.argv else "false"
-print(
-    f"Setting env as {'development' if os.environ.get('IS_DEV')=="true" else 'production'}"
-)
+# Local execution uses dev bot token
+print("Using development bot token for local execution")
 
-bot_token = (
-    os.environ.get("BOTTOKEN_DEV")
-    if os.environ.get("IS_DEV") == "true"
-    else os.environ.get("BOTTOKEN")
-)
+bot_token = settings.bot_token
 
 if not bot_token:
     logger.error("Bot token not found in environment variables")
     raise ValueError("Bot token is required")
 
 logger.info(f"Using bot token: {bot_token[:10]}...")
-bot = TelegramBot(bot_token)
+
+# Check if Celery should be used via environment variable
+use_celery = os.getenv("USE_CELERY", "false").lower() == "true"
+
+if use_celery:
+    logger.info("Using Celery for background tasks")
+else:
+    logger.info("Using subprocess for background tasks")
+
+bot = TelegramBot(bot_token, enable_redis_celery=use_celery)
 
 
 # webhook 등록 및 lifespan 설정
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    url = (
-        os.environ.get("WEBHOOK_URL_DEV")
-        if os.environ.get("IS_DEV") == "true"
-        else os.environ.get("WEBHOOK_URL")
-    )
+    url = settings.webhook_url_by_env
 
     if not url:
         logger.error("Webhook URL not found in environment variables")
@@ -130,7 +129,14 @@ async def send_reservation_status(
             -1: 예약 오류
         reserveInfo (str): 예약 정보 문자열
     """
-    if chat_id not in bot.runningStatus:
+    # Find the reservation task by chat_id (runningStatus is keyed by task_id/pid)
+    task_key = None
+    for key, value in bot.runningStatus.items():
+        if value.get("chat_id") == chat_id:
+            task_key = key
+            break
+
+    if not task_key:
         print(f"Chat ID {chat_id}는 예약 큐에 없습니다")
         return
 
@@ -149,9 +155,55 @@ async def send_reservation_status(
         print("예약 완료, 상태 초기화")
         bot._reset_user_state(chat_id)
 
-    del bot.runningStatus[chat_id]
+    # Delete using the correct key (task_id/pid, not chat_id)
+    del bot.runningStatus[task_key]
     # msgToSubscribers = f'{telebot_handler.userDict[chatId]["userInfo"]["korailId"]}의 예약이 종료되었습니다.'
     # telebot_handler.sendToSubscribers(msgToSubscribers)
+
+
+@app.post("/reservation_callback")
+async def handle_reservation_callback(request: Request):
+    """Handle callbacks from Celery reservation tasks"""
+    try:
+        data = await request.json()
+        user_id = data.get("user_id")
+        status_val = data.get("status")
+        task_id = data.get("task_id")  # Use task_id to identify specific reservation
+
+        if not user_id:
+            return Response(status_code=status.HTTP_400_BAD_REQUEST)
+
+        # Convert user_id to int for consistency
+        chat_id = int(user_id)
+
+        if status_val == "success":
+            train_info = data.get("train_info", "")
+            msg = Messages.Info.RESERVE_SUCCESS.format(reserveInfo=train_info)
+            await bot.send_message(chat_id, msg)
+
+            # Clean up state using task_id
+            if task_id and task_id in bot.runningStatus:
+                del bot.runningStatus[task_id]
+            bot._reset_user_state(chat_id)
+
+        elif status_val == "failed":
+            error = data.get("error", "알 수 없는 오류")
+            if "최대 시도 횟수" in error:
+                msg = Messages.Error.RESERVE_FAILED
+            else:
+                msg = Messages.Error.RESERVE_WRONG
+            await bot.send_message(chat_id, msg)
+
+            # Clean up state using task_id
+            if task_id and task_id in bot.runningStatus:
+                del bot.runningStatus[task_id]
+            bot._reset_user_state(chat_id)
+
+        return Response(status_code=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error handling reservation callback: {e}")
+        return Response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,148 @@
+services:
+  # Redis - 상태 관리 및 메시지 브로커 (Celery 모드에서만 사용)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    environment:
+      - TZ=Asia/Seoul
+    volumes:
+      - redis_data:/data
+    networks:
+      - korail_network
+    profiles:
+      - celery  # Only start with Celery profile
+
+  # PostgreSQL - 영구 데이터 저장 (Celery 모드에서만 사용)
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: korail_bot
+      POSTGRES_USER: korail
+      POSTGRES_PASSWORD: password
+      TZ: Asia/Seoul
+      PGTZ: Asia/Seoul
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - korail_network
+    profiles:
+      - celery  # Only start with Celery profile
+
+  # FastAPI App - 메인 웹서버 (subprocess mode)
+  web:
+    build: .
+    ports:
+      - "8391:8391"
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Seoul
+      - USE_CELERY=false
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - korail_network
+    profiles:
+      - subprocess
+
+  # FastAPI App - Celery mode
+  web_celery:
+    build: .
+    ports:
+      - "8391:8391"
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Seoul
+      - USE_CELERY=true
+      - REDIS_URL=redis://redis:6379
+      - CELERY_BROKER=redis://redis:6379
+      - CELERY_RESULT_BACKEND=redis://redis:6379
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - korail_network
+    profiles:
+      - celery
+
+  # Celery Worker - 예약 처리
+  worker:
+    build: .
+    command: celery -A telegramBot.tasks worker --loglevel=info
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Seoul
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://korail:password@postgres:5432/korail_bot
+      - CELERY_BROKER=redis://redis:6379
+      - CELERY_RESULT_BACKEND=redis://redis:6379
+      - USE_CELERY=true
+      - CELERY_WORKER_NAME=worker
+    depends_on:
+      - redis
+      - postgres
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - korail_network
+    profiles:
+      - celery  # Only start with Celery profile
+
+  # Celery Beat - 스케줄링 (필요시)
+  beat:
+    build: .
+    command: celery -A telegramBot.tasks beat --loglevel=info
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Seoul
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://korail:password@postgres:5432/korail_bot
+      - CELERY_BROKER=redis://redis:6379
+      - CELERY_RESULT_BACKEND=redis://redis:6379
+      - USE_CELERY=true
+      - CELERY_WORKER_NAME=beat
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - korail_network
+    profiles:
+      - celery  # Only start with Celery profile
+
+  # Flower - Celery 모니터링
+  flower:
+    build: .
+    command: celery -A telegramBot.tasks flower
+    ports:
+      - "5555:5555"
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Seoul
+      - CELERY_BROKER=redis://redis:6379
+      - CELERY_RESULT_BACKEND=redis://redis:6379
+      - USE_CELERY=true
+      - CELERY_WORKER_NAME=flower
+    depends_on:
+      - redis
+    networks:
+      - korail_network
+    profiles:
+      - celery  # Only start with Celery profile
+
+volumes:
+  redis_data:
+  postgres_data:
+
+networks:
+  korail_network:
+    driver: bridge
+    name: korail_prod_network

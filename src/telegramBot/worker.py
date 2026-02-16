@@ -67,9 +67,11 @@ class BackProcess(object):
     def cleanup(self):
         try:
             if hasattr(self, "reserve_handler"):
-                self.reserve_handler.sendBotStateChange(
-                    self.chatId, "프로세스가 종료되었습니다.", 0
-                )
+                # Only send termination message if reservation was not successful
+                if not self.reserve_handler.reserveInfo.get("reserveSuc", False):
+                    self.reserve_handler.sendBotStateChange(
+                        self.chatId, "프로세스가 종료되었습니다.", 0
+                    )
         except Exception as e:
             logger.error(f"Cleanup error: {str(e)}")
 

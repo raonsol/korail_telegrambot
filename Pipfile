@@ -9,9 +9,21 @@ requests = "*"
 python-telegram-bot = "*"
 pyopenssl = "*"
 korail2 = "0.4.0"
+pydantic-settings = "*"
+redis = "*"
+celery = "*"
+flower = "*"
+sqlalchemy = "*"
 
 [dev-packages]
 black = "*"
+pytest = "*"
+pytest-asyncio = "*"
+pytest-cov = "*"
+pytest-mock = "*"
+httpx = "*"
+fakeredis = "*"
+freezegun = "*"
 
 [requires]
 python_version = "3.13"

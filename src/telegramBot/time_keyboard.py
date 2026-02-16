@@ -38,17 +38,22 @@ def create_time_keyboard(action="time", min_time=None):
     buttons = []
 
     # "time" 액션일 때만 현재 시간 버튼을 맨 위에 추가
+    # 단, min_time이 설정되어 있으면 현재 시간이 min_time 이상일 때만 추가
     if action == "time":
         current_time = datetime.datetime.now()
         current_time_str = current_time.strftime("%H%M")
-        keyboard.append(
-            [
-                InlineKeyboardButton(
-                    "현재 시간",
-                    callback_data=create_callback_data(action, current_time_str),
-                )
-            ]
-        )
+        current_time_int = int(current_time_str)
+
+        # min_time이 없거나, 현재 시간이 min_time 이상인 경우에만 추가
+        if min_time is None or current_time_int >= int(min_time):
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        "현재 시간",
+                        callback_data=create_callback_data(action, current_time_str),
+                    )
+                ]
+            )
 
     for hour in range(start_hour, end_hour, hour_interval):
         if min_time and hour == start_hour:
