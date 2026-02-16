@@ -76,7 +76,6 @@ def test_runningStatus_structure():
     print(f"   - Multiple reservations per user: OK")
     print(f"   - Task isolation: OK")
     print(f"   - Key format: task_id (not chat_id)")
-    return True
 
 
 def test_redis_key_format():
@@ -106,7 +105,6 @@ def test_redis_key_format():
     print(f"   - Format: reservation_task:{{task_id}}")
     print(f"   - Example: {reservation_key}")
     print(f"   - Allows: Multiple reservations per user")
-    return True
 
 
 def test_cancel_menu_logic():
@@ -148,7 +146,6 @@ def test_cancel_menu_logic():
     print(f"   - Correct user filtering: OK")
     print(f"   - Multiple reservations shown: OK")
     print(f"   - Other users' tasks excluded: OK")
-    return True
 
 
 def test_callback_payload():
@@ -189,7 +186,6 @@ def test_callback_payload():
     print(f"   - task_id included: OK")
     print(f"   - Allows: Identifying which reservation completed")
     print(f"   - Payload: {payload}")
-    return True
 
 
 def main():
@@ -216,8 +212,8 @@ def main():
 
     for test in tests:
         try:
-            if test():
-                passed += 1
+            test()
+            passed += 1
         except Exception as e:
             print(f"❌ {test.__name__} FAILED: {e}")
             failed += 1

@@ -55,14 +55,19 @@ class TestSubprocessMode:
 
             # Verify process was started
             assert pid == 12345
-            assert chat_id not in bot.runningStatus  # Not added yet
+            assert str(pid) not in bot.runningStatus  # Not added yet
 
             # Add to running status manually (as would happen in actual flow)
-            bot.runningStatus[chat_id] = {"pid": pid, "method": "subprocess"}
+            bot.runningStatus[str(pid)] = {
+                "chat_id": chat_id,
+                "pid": pid,
+                "korailId": "010-1234-5678",
+                "method": "subprocess",
+            }
 
             # Verify status
-            assert chat_id in bot.runningStatus
-            assert bot.runningStatus[chat_id]["pid"] == 12345
+            assert str(pid) in bot.runningStatus
+            assert bot.runningStatus[str(pid)]["pid"] == 12345
 
             # Simulate cancellation
             with patch("telegramBot.bot.os.killpg"), patch(
@@ -71,7 +76,7 @@ class TestSubprocessMode:
                 success = await bot._cancel_reservation(chat_id)
 
             assert success is True
-            assert chat_id not in bot.runningStatus
+            assert str(pid) not in bot.runningStatus
 
     @pytest.mark.asyncio
     async def test_subprocess_multiple_concurrent_users(self):
@@ -90,11 +95,21 @@ class TestSubprocessMode:
             bot._create_user(user2_id)
 
             # Simulate first user starting reservation
-            bot.runningStatus[user1_id] = {"pid": 12345, "method": "subprocess"}
+            bot.runningStatus["12345"] = {
+                "chat_id": user1_id,
+                "pid": 12345,
+                "korailId": "010-1111-1111",
+                "method": "subprocess",
+            }
 
             # Second user tries to start
             # In actual implementation, this should be prevented
-            bot.runningStatus[user2_id] = {"pid": 67890, "method": "subprocess"}
+            bot.runningStatus["67890"] = {
+                "chat_id": user2_id,
+                "pid": 67890,
+                "korailId": "010-2222-2222",
+                "method": "subprocess",
+            }
 
             # Verify both are tracked
             assert len(bot.runningStatus) == 2
@@ -136,29 +151,30 @@ class TestSubprocessMode:
     @pytest.mark.asyncio
     async def test_subprocess_callback_on_completion(self):
         """Test callback mechanism when subprocess completes"""
-        from fastapi.testclient import TestClient
         from unittest.mock import patch
 
-        # This would test the /completion endpoint
         with patch("telegramBot.bot.ApplicationBuilder"):
             with patch("app.bot") as mock_bot:
-                mock_bot.runningStatus = {123456: {"pid": 12345}}
+                mock_bot.runningStatus = {
+                    "12345": {"chat_id": 123456, "pid": 12345, "method": "subprocess"}
+                }
                 mock_bot.send_message = AsyncMock()
                 mock_bot._reset_user_state = Mock()
                 mock_bot.userDict = {123456: {"inProgress": True}}
 
-                from app import app
+                from app import send_reservation_status
 
-                client = TestClient(app)
-
-                # Simulate successful reservation callback
-                response = client.post(
-                    "/completion/123456",
-                    params={"status": 1, "reserveInfo": "Train KTX 001 reserved"},
+                # Simulate successful reservation callback handler directly
+                await send_reservation_status(
+                    chat_id=123456,
+                    status=1,
+                    reserveInfo="Train KTX 001 reserved",
                 )
 
-                # Verify status would be handled (async context makes this tricky)
-                assert response.status_code == 200
+                # Verify callback side-effects
+                mock_bot.send_message.assert_awaited_once()
+                mock_bot._reset_user_state.assert_called_once_with(123456)
+                assert "12345" not in mock_bot.runningStatus
 
 
 @pytest.mark.integration
@@ -176,7 +192,12 @@ class TestSubprocessErrorHandling:
             chat_id = 123456
 
             # Simulate crashed process
-            bot.runningStatus[chat_id] = {"pid": 99999, "method": "subprocess"}
+            bot.runningStatus["99999"] = {
+                "chat_id": chat_id,
+                "pid": 99999,
+                "korailId": "010-1234-5678",
+                "method": "subprocess",
+            }
 
             # Try to cancel non-existent process
             with patch("telegramBot.bot.os.killpg", side_effect=ProcessLookupError()):
@@ -184,7 +205,7 @@ class TestSubprocessErrorHandling:
                     success = await bot._cancel_reservation(chat_id)
 
             # Should still clean up state
-            assert chat_id not in bot.runningStatus
+            assert "99999" not in bot.runningStatus
 
     def test_subprocess_login_failure(self):
         """Test subprocess behavior when login fails"""

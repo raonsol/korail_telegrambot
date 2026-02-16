@@ -313,16 +313,19 @@ class TestTelegramBot:
         mock_telegram_update.message.chat_id = chat_id
         bot_instance._create_user(chat_id)
         bot_instance.userDict[chat_id]["userInfo"]["korailId"] = "010-1234-5678"
-        bot_instance.runningStatus[chat_id] = {"pid": 12345, "method": "subprocess"}
+        bot_instance.runningStatus["12345"] = {
+            "chat_id": chat_id,
+            "pid": 12345,
+            "korailId": "010-1234-5678",
+            "method": "subprocess",
+        }
         bot_instance.send_message = AsyncMock()
-        bot_instance.broadcast_message = AsyncMock()
+        await bot_instance.cancel_func(mock_telegram_update, None)
 
-        with patch("telegramBot.bot.os.killpg"):
-            with patch("telegramBot.bot.os.getpgid"):
-                await bot_instance.cancel_func(mock_telegram_update, None)
-
-        assert chat_id not in bot_instance.runningStatus
-        bot_instance.broadcast_message.assert_called_once()
+        # /cancel now shows a cancel menu first, actual cancellation
+        # happens via callback (e.g. cancel_all / cancel_pid_*).
+        assert "12345" in bot_instance.runningStatus
+        bot_instance.send_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_start_background_process(self, bot_instance):

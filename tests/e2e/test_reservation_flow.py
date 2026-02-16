@@ -108,7 +108,8 @@ class TestCompleteReservationFlow:
             await bot._start_reserve(chat_id, "confirm_yes")
 
             assert bot.userDict[chat_id]["lastAction"] == 12
-            assert chat_id in bot.runningStatus
+            assert "12345" in bot.runningStatus
+            assert bot.runningStatus["12345"]["chat_id"] == chat_id
 
     @pytest.mark.asyncio
     async def test_full_reservation_flow_cancellation(self, bot_with_mocks):
@@ -126,14 +127,19 @@ class TestCompleteReservationFlow:
         update.message = Mock()
         update.message.chat_id = chat_id
 
-        bot.runningStatus[chat_id] = {"pid": 12345, "method": "subprocess"}
+        bot.runningStatus["12345"] = {
+            "chat_id": chat_id,
+            "pid": 12345,
+            "korailId": "010-1234-5678",
+            "method": "subprocess",
+        }
 
         with patch("telegramBot.bot.os.killpg"), patch("telegramBot.bot.os.getpgid"):
-            bot.broadcast_message = AsyncMock()
             await bot.cancel_func(update, None)
+            await bot._handle_cancel_callback(chat_id, "cancel_all")
 
         # Should reset state
-        assert chat_id not in bot.runningStatus
+        assert "12345" not in bot.runningStatus
 
     @pytest.mark.asyncio
     async def test_reservation_flow_with_admin_login(self, bot_with_mocks):
@@ -231,7 +237,12 @@ class TestCompleteReservationFlow:
         user2_id = 222222
 
         # User 1 starts reservation
-        bot.runningStatus[user1_id] = {"pid": 12345, "method": "subprocess"}
+        bot.runningStatus["12345"] = {
+            "chat_id": user1_id,
+            "pid": 12345,
+            "korailId": "010-1111-1111",
+            "method": "subprocess",
+        }
 
         # User 2 tries to proceed
         bot._create_user(user2_id)
@@ -262,7 +273,12 @@ class TestErrorRecovery:
 
             # Simulate crashed process
             bot._create_user(chat_id)
-            bot.runningStatus[chat_id] = {"pid": 99999, "method": "subprocess"}
+            bot.runningStatus["99999"] = {
+                "chat_id": chat_id,
+                "pid": 99999,
+                "korailId": "010-1234-5678",
+                "method": "subprocess",
+            }
 
             # Try to cancel
             with patch("telegramBot.bot.os.killpg", side_effect=ProcessLookupError()):
@@ -270,7 +286,7 @@ class TestErrorRecovery:
                     success = await bot._cancel_reservation(chat_id)
 
             # Should clean up state even if process doesn't exist
-            assert chat_id not in bot.runningStatus
+            assert "99999" not in bot.runningStatus
 
     @pytest.mark.asyncio
     async def test_network_error_during_callback(self):

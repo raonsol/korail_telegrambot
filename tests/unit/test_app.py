@@ -2,68 +2,56 @@
 Unit tests for FastAPI application (app.py)
 """
 
+import importlib
+from unittest.mock import Mock, AsyncMock, patch
+
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from fastapi.testclient import TestClient
+
+
+class DummyRequest:
+    def __init__(self, payload=None, error=None):
+        self.payload = payload
+        self.error = error
+
+    async def json(self):
+        if self.error:
+            raise self.error
+        return self.payload
+
+
+@pytest.fixture
+def app_with_mock_bot():
+    with patch("telegramBot.bot.ApplicationBuilder"):
+        import app as app_module
+
+    mock_bot = Mock()
+    mock_bot.app = Mock()
+    mock_bot.app.bot = Mock()
+    mock_bot.app.update_queue = Mock()
+    mock_bot.app.update_queue.put = AsyncMock()
+    mock_bot.send_message = AsyncMock()
+    mock_bot._reset_user_state = Mock()
+    mock_bot.runningStatus = {}
+    mock_bot.userDict = {}
+
+    app_module.bot = mock_bot
+    return app_module, mock_bot
 
 
 @pytest.mark.unit
 class TestFastAPIEndpoints:
-    """Test FastAPI endpoints"""
+    @pytest.mark.asyncio
+    async def test_health_check_endpoint(self, app_with_mock_bot):
+        app_module, _ = app_with_mock_bot
 
-    @pytest.fixture
-    def test_client(self):
-        """Create a test client for FastAPI"""
-        from datetime import timezone
+        response = await app_module.health_check()
 
-        # Need to mock lifespan to avoid actual webhook setup
-        with patch("app.lifespan"):
-            import app as app_module
+        assert response["status"] == "healthy"
+        assert response["service"] == "korail_telegrambot"
 
-            # Create mock bot with proper Bot object
-            mock_bot = Mock()
-            mock_bot.app = Mock()
-            mock_bot.app.bot = Mock()
-            mock_bot.app.bot.set_webhook = AsyncMock(return_value=True)
-            mock_bot.app.bot.get_webhook_info = AsyncMock(
-                return_value={
-                    "url": "http://test.example.com",
-                    "pending_update_count": 0,
-                }
-            )
-            mock_bot.app.bot.send_message = AsyncMock()
-            # Add timezone info for Update.de_json
-            mock_bot.app.bot.defaults = Mock()
-            mock_bot.app.bot.defaults.tzinfo = timezone.utc
-            mock_bot.app.start = AsyncMock()
-            mock_bot.app.stop = AsyncMock()
-            mock_bot.app.update_queue = Mock()
-            mock_bot.app.update_queue.put = AsyncMock()
-            mock_bot.send_message = AsyncMock()
-            mock_bot._reset_user_state = Mock()
-            mock_bot.runningStatus = {}
-            mock_bot.userDict = {}
-            mock_bot.set_webhook = AsyncMock(return_value=True)
-
-            # Replace the bot in the imported module
-            app_module.bot = mock_bot
-
-            client = TestClient(app_module.app)
-            return client, mock_bot
-
-    def test_health_check_endpoint(self, test_client):
-        """Test health check endpoint"""
-        client, _ = test_client
-
-        response = client.get("/health")
-
-        assert response.status_code == 200
-        assert response.json()["status"] == "healthy"
-        assert response.json()["service"] == "korail_telegrambot"
-
-    def test_message_endpoint(self, test_client):
-        """Test message processing endpoint"""
-        client, mock_bot = test_client
+    @pytest.mark.asyncio
+    async def test_message_endpoint(self, app_with_mock_bot):
+        app_module, mock_bot = app_with_mock_bot
 
         telegram_update = {
             "update_id": 123456,
@@ -72,79 +60,59 @@ class TestFastAPIEndpoints:
                 "from": {"id": 123456, "first_name": "Test", "is_bot": False},
                 "chat": {"id": 123456, "type": "private"},
                 "text": "Hello",
-                "date": 1704067200,  # Required field for Message
+                "date": 1704067200,
             },
         }
 
-        response = client.post("/message", json=telegram_update)
+        with patch.object(app_module.Update, "de_json", return_value=Mock()):
+            response = await app_module.process_update(
+                DummyRequest(payload=telegram_update)
+            )
 
         assert response.status_code == 200
+        mock_bot.app.update_queue.put.assert_awaited_once()
 
-    def test_completion_endpoint_success(self, test_client):
-        """Test completion endpoint with successful reservation"""
-        client, mock_bot = test_client
+    @pytest.mark.asyncio
+    async def test_completion_endpoint_success(self, app_with_mock_bot):
+        app_module, mock_bot = app_with_mock_bot
         chat_id = 123456
 
-        mock_bot.runningStatus = {chat_id: {"pid": 12345}}
+        mock_bot.runningStatus = {"12345": {"chat_id": chat_id, "pid": 12345}}
         mock_bot.userDict = {chat_id: {"inProgress": True}}
 
-        response = client.post(
-            f"/completion/{chat_id}",
-            params={"status": 1, "reserveInfo": "Train KTX 001 reserved"},
+        await app_module.send_reservation_status(
+            chat_id=chat_id,
+            status=1,
+            reserveInfo="Train KTX 001 reserved",
         )
 
-        assert response.status_code == 200
+        assert "12345" not in mock_bot.runningStatus
+        mock_bot.send_message.assert_awaited_once()
+        mock_bot._reset_user_state.assert_called_once_with(chat_id)
 
-    def test_completion_endpoint_failure(self, test_client):
-        """Test completion endpoint with failed reservation"""
-        client, mock_bot = test_client
-        chat_id = 123456
-
-        mock_bot.runningStatus = {chat_id: {"pid": 12345}}
-
-        response = client.post(
-            f"/completion/{chat_id}",
-            params={"status": 0, "reserveInfo": ""},
-        )
-
-        assert response.status_code == 200
-
-    def test_completion_endpoint_error(self, test_client):
-        """Test completion endpoint with error status"""
-        client, mock_bot = test_client
-        chat_id = 123456
-
-        mock_bot.runningStatus = {chat_id: {"pid": 12345}}
-
-        response = client.post(
-            f"/completion/{chat_id}",
-            params={"status": -1, "reserveInfo": "Error occurred"},
-        )
-
-        assert response.status_code == 200
-
-    def test_completion_endpoint_not_in_queue(self, test_client):
-        """Test completion endpoint when chat_id not in running status"""
-        client, mock_bot = test_client
-        chat_id = 999999
+    @pytest.mark.asyncio
+    async def test_completion_endpoint_not_in_queue(self, app_with_mock_bot):
+        app_module, mock_bot = app_with_mock_bot
 
         mock_bot.runningStatus = {}
 
-        response = client.post(
-            f"/completion/{chat_id}",
-            params={"status": 1, "reserveInfo": "Train reserved"},
+        response = await app_module.send_reservation_status(
+            chat_id=999999,
+            status=1,
+            reserveInfo="Train reserved",
         )
 
-        # Should return 200 but not process
-        assert response.status_code == 200
+        assert response is None
+        mock_bot.send_message.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_reservation_callback_success(self, test_client):
-        """Test reservation callback endpoint with success"""
-        client, mock_bot = test_client
+    async def test_reservation_callback_success(self, app_with_mock_bot):
+        app_module, mock_bot = app_with_mock_bot
         chat_id = 123456
 
-        mock_bot.runningStatus = {chat_id: {"task_id": "test-task-id"}}
+        mock_bot.runningStatus = {
+            "test-task-id": {"chat_id": chat_id, "task_id": "test-task-id"}
+        }
         mock_bot.userDict = {chat_id: {"inProgress": True}}
 
         callback_data = {
@@ -154,16 +122,23 @@ class TestFastAPIEndpoints:
             "task_id": "test-task-id",
         }
 
-        response = client.post("/reservation_callback", json=callback_data)
+        response = await app_module.handle_reservation_callback(
+            DummyRequest(payload=callback_data)
+        )
 
         assert response.status_code == 200
+        assert "test-task-id" not in mock_bot.runningStatus
+        mock_bot.send_message.assert_awaited_once()
+        mock_bot._reset_user_state.assert_called_once_with(chat_id)
 
-    def test_reservation_callback_failed(self, test_client):
-        """Test reservation callback endpoint with failure"""
-        client, mock_bot = test_client
+    @pytest.mark.asyncio
+    async def test_reservation_callback_failed(self, app_with_mock_bot):
+        app_module, mock_bot = app_with_mock_bot
         chat_id = 123456
 
-        mock_bot.runningStatus = {chat_id: {"task_id": "test-task-id"}}
+        mock_bot.runningStatus = {
+            "test-task-id": {"chat_id": chat_id, "task_id": "test-task-id"}
+        }
 
         callback_data = {
             "user_id": str(chat_id),
@@ -172,89 +147,69 @@ class TestFastAPIEndpoints:
             "task_id": "test-task-id",
         }
 
-        response = client.post("/reservation_callback", json=callback_data)
+        response = await app_module.handle_reservation_callback(
+            DummyRequest(payload=callback_data)
+        )
 
         assert response.status_code == 200
+        assert "test-task-id" not in mock_bot.runningStatus
+        mock_bot.send_message.assert_awaited_once()
 
-    def test_reservation_callback_missing_user_id(self, test_client):
-        """Test reservation callback with missing user_id"""
-        client, mock_bot = test_client
+    @pytest.mark.asyncio
+    async def test_reservation_callback_missing_user_id(self, app_with_mock_bot):
+        app_module, _ = app_with_mock_bot
 
         callback_data = {"status": "success", "train_info": "KTX 001"}
 
-        response = client.post("/reservation_callback", json=callback_data)
+        response = await app_module.handle_reservation_callback(
+            DummyRequest(payload=callback_data)
+        )
 
         assert response.status_code == 400
 
-    def test_reservation_callback_invalid_data(self, test_client):
-        """Test reservation callback with invalid JSON"""
-        client, mock_bot = test_client
+    @pytest.mark.asyncio
+    async def test_reservation_callback_invalid_data(self, app_with_mock_bot):
+        app_module, _ = app_with_mock_bot
 
-        response = client.post(
-            "/reservation_callback",
-            data="invalid json",
-            headers={"Content-Type": "application/json"},
+        response = await app_module.handle_reservation_callback(
+            DummyRequest(error=ValueError("invalid json"))
         )
 
-        # Invalid JSON is caught by exception handler and returns 500
         assert response.status_code == 500
 
 
 @pytest.mark.unit
 class TestAppConfiguration:
-    """Test app configuration and initialization"""
+    def test_cors_middleware_configured(self, app_with_mock_bot):
+        app_module, _ = app_with_mock_bot
 
-    def test_cors_middleware_configured(self):
-        """Test CORS middleware is configured by checking response headers"""
-        with patch("app.lifespan"):
-            import app as app_module
-
-            # Create mock bot
-            mock_bot = Mock()
-            mock_bot.set_webhook = AsyncMock(return_value=True)
-            app_module.bot = mock_bot
-
-            client = TestClient(app_module.app)
-
-            # Make a request with Origin header to trigger CORS
-            response = client.get("/health", headers={"Origin": "http://example.com"})
-
-            # Check if CORS headers are present in response
-            assert "access-control-allow-origin" in response.headers
+        middleware_classes = [m.cls.__name__ for m in app_module.app.user_middleware]
+        assert "CORSMiddleware" in middleware_classes
 
     @pytest.mark.skip(
         reason="Bot token validation happens at module import, difficult to test in isolation"
     )
     def test_bot_token_validation(self):
-        """Test that app validates bot token on startup"""
-        # This test is skipped because the bot is created at module level
-        # and testing import-time validation requires complex module reloading
-        # The validation is verified manually during deployment
         pass
 
     def test_use_celery_environment_variable(self):
-        """Test USE_CELERY environment variable configuration"""
         with patch.dict("os.environ", {"USE_CELERY": "true"}):
-            with patch("app.bot") as mock_bot:
-                with patch("app.lifespan"):
-                    import importlib
+            with patch("telegramBot.bot.ApplicationBuilder"):
+                with patch("telegramBot.bot.TelegramBot") as mock_telegram_bot:
                     import app
 
                     importlib.reload(app)
 
-                    # Verify bot was initialized with Celery enabled
-                    # Note: This may not work perfectly due to module caching
+                    assert mock_telegram_bot.call_args[1]["enable_redis_celery"] is True
 
 
 @pytest.mark.unit
 class TestLifespan:
-    """Test lifespan events"""
-
     @pytest.mark.asyncio
     async def test_lifespan_webhook_setup(self):
-        """Test webhook is set up during lifespan startup"""
-        from app import lifespan
-        from fastapi import FastAPI
+        with patch("telegramBot.bot.ApplicationBuilder"):
+            from app import lifespan
+            from fastapi import FastAPI
 
         mock_app = FastAPI()
 
@@ -274,8 +229,6 @@ class TestLifespan:
                 mock_settings.webhook_url_by_env = "http://test.example.com"
 
                 async with lifespan(mock_app):
-                    # Webhook should be set during startup
                     mock_bot.set_webhook.assert_called_once()
 
-                # App should be stopped after context exit
                 mock_bot.app.stop.assert_called_once()

@@ -32,6 +32,31 @@ def event_loop():
     loop.close()
 
 
+@pytest.fixture(autouse=True)
+def reset_telegram_bot_class_state():
+    """Reset class-level state shared by TelegramBot across tests."""
+    try:
+        from telegramBot.bot import TelegramBot
+
+        TelegramBot.userDict = {}
+        TelegramBot.runningStatus = {}
+        TelegramBot.subscribes = []
+    except Exception:
+        # Some tests may not import telegramBot.bot
+        pass
+
+    yield
+
+    try:
+        from telegramBot.bot import TelegramBot
+
+        TelegramBot.userDict = {}
+        TelegramBot.runningStatus = {}
+        TelegramBot.subscribes = []
+    except Exception:
+        pass
+
+
 @pytest.fixture
 def mock_telegram_bot():
     """Mock Telegram bot instance"""

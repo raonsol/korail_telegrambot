@@ -71,8 +71,10 @@ class TestCeleryMode:
             chat_id = 123456
 
             # Setup running status with Celery task
-            bot.runningStatus[chat_id] = {
+            bot.runningStatus["test-task-id"] = {
+                "chat_id": chat_id,
                 "task_id": "test-task-id",
+                "korailId": "010-1234-5678",
                 "method": "celery",
             }
             bot._create_user(chat_id)
@@ -82,7 +84,7 @@ class TestCeleryMode:
 
             # Verify cancellation
             assert success is True
-            assert chat_id not in bot.runningStatus
+            assert "test-task-id" not in bot.runningStatus
             mock_celery_app.control.revoke.assert_called_once_with(
                 "test-task-id", terminate=True
             )
@@ -105,8 +107,10 @@ class TestCeleryMode:
 
             for user_id in users:
                 bot._create_user(user_id)
-                bot.runningStatus[user_id] = {
+                bot.runningStatus[f"task-{user_id}"] = {
+                    "chat_id": user_id,
                     "task_id": f"task-{user_id}",
+                    "korailId": f"010-{str(user_id)[:4]}-{str(user_id)[-4:]}",
                     "method": "celery",
                 }
 

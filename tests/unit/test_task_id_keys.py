@@ -3,9 +3,9 @@
 Simple test to verify task_id based Redis keys are working
 """
 import time
-from celery.result import AsyncResult
 import redis
 import sys
+import pytest
 
 sys.path.insert(0, "src")
 
@@ -13,6 +13,8 @@ from telegramBot.tasks import reservation_task
 from config import web_settings
 
 
+@pytest.mark.requires_redis
+@pytest.mark.integration
 def test_task_id_keys():
     print("=" * 60)
     print("Testing task_id based Redis keys")
@@ -22,6 +24,10 @@ def test_task_id_keys():
     redis_client = redis.Redis.from_url(
         web_settings.redis_url, db=web_settings.redis_db
     )
+    try:
+        redis_client.ping()
+    except Exception as exc:
+        pytest.skip(f"Redis is not reachable in this environment: {exc}")
 
     # Clear any existing test keys
     for key in redis_client.keys("reservation_task:test_*"):
