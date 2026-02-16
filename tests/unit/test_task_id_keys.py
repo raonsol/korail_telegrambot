@@ -7,10 +7,11 @@ from celery.result import AsyncResult
 import redis
 import sys
 
-sys.path.insert(0, 'src')
+sys.path.insert(0, "src")
 
 from telegramBot.tasks import reservation_task
 from config import web_settings
+
 
 def test_task_id_keys():
     print("=" * 60)
@@ -18,7 +19,9 @@ def test_task_id_keys():
     print("=" * 60)
 
     # Connect to Redis
-    redis_client = redis.Redis.from_url(web_settings.redis_url, db=web_settings.redis_db)
+    redis_client = redis.Redis.from_url(
+        web_settings.redis_url, db=web_settings.redis_db
+    )
 
     # Clear any existing test keys
     for key in redis_client.keys("reservation_task:test_*"):
@@ -77,6 +80,7 @@ def test_task_id_keys():
     # Clean up
     redis_client.delete(expected_key)
     print("✓ Cleanup complete\n")
+
 
 if __name__ == "__main__":
     test_task_id_keys()

@@ -18,7 +18,8 @@ See CLAUDE.md "Multiple Reservation Support" section for details.
 import sys
 import os
 
-sys.path.insert(0, 'src')
+sys.path.insert(0, "src")
+
 
 def test_runningStatus_structure():
     """
@@ -63,16 +64,20 @@ def test_runningStatus_structure():
 
     # Verify both belong to same user
     user_tasks = [
-        key for key, status in running_status.items()
+        key
+        for key, status in running_status.items()
         if status.get("chat_id") == chat_id
     ]
-    assert len(user_tasks) == 2, f"Expected 2 tasks for user {chat_id}, got {len(user_tasks)}"
+    assert (
+        len(user_tasks) == 2
+    ), f"Expected 2 tasks for user {chat_id}, got {len(user_tasks)}"
 
     print("✅ runningStatus structure test PASSED")
     print(f"   - Multiple reservations per user: OK")
     print(f"   - Task isolation: OK")
     print(f"   - Key format: task_id (not chat_id)")
     return True
+
 
 def test_redis_key_format():
     """
@@ -91,7 +96,9 @@ def test_redis_key_format():
     # This is what tasks.py line 54 generates
     reservation_key = f"reservation_task:{task_id}"
 
-    assert reservation_key == expected_key, f"Key mismatch: {reservation_key} != {expected_key}"
+    assert (
+        reservation_key == expected_key
+    ), f"Key mismatch: {reservation_key} != {expected_key}"
     assert "chat_id" not in reservation_key, "Key should NOT contain chat_id!"
     assert task_id in reservation_key, "Key MUST contain task_id!"
 
@@ -100,6 +107,7 @@ def test_redis_key_format():
     print(f"   - Example: {reservation_key}")
     print(f"   - Allows: Multiple reservations per user")
     return True
+
 
 def test_cancel_menu_logic():
     """
@@ -123,12 +131,15 @@ def test_cancel_menu_logic():
 
     # This is the logic from _show_cancel_menu
     user_reservations = [
-        (key, status) for key, status in running_status.items()
+        (key, status)
+        for key, status in running_status.items()
         if status.get("chat_id") == chat_id
     ]
 
     # User 123 should see 2 reservations, not user 456's
-    assert len(user_reservations) == 2, f"Expected 2 reservations, got {len(user_reservations)}"
+    assert (
+        len(user_reservations) == 2
+    ), f"Expected 2 reservations, got {len(user_reservations)}"
     assert ("task_1", running_status["task_1"]) in user_reservations
     assert ("task_2", running_status["task_2"]) in user_reservations
     assert ("task_3", running_status["task_3"]) not in user_reservations
@@ -138,6 +149,7 @@ def test_cancel_menu_logic():
     print(f"   - Multiple reservations shown: OK")
     print(f"   - Other users' tasks excluded: OK")
     return True
+
 
 def test_callback_payload():
     """
@@ -179,10 +191,11 @@ def test_callback_payload():
     print(f"   - Payload: {payload}")
     return True
 
+
 def main():
-    print("="*60)
+    print("=" * 60)
     print("Multiple Reservation Support - Unit Tests")
-    print("="*60)
+    print("=" * 60)
     print()
     print("Architecture being tested:")
     print("- runningStatus[task_id] instead of runningStatus[chat_id]")
@@ -190,17 +203,17 @@ def main():
     print("- Callbacks include task_id for identification")
     print("- Cancel menu shows all user's reservations")
     print()
-    
+
     tests = [
         test_runningStatus_structure,
         test_redis_key_format,
         test_cancel_menu_logic,
         test_callback_payload,
     ]
-    
+
     passed = 0
     failed = 0
-    
+
     for test in tests:
         try:
             if test():
@@ -208,19 +221,20 @@ def main():
         except Exception as e:
             print(f"❌ {test.__name__} FAILED: {e}")
             failed += 1
-    
-    print("\n" + "="*60)
+
+    print("\n" + "=" * 60)
     print("Test Summary")
-    print("="*60)
+    print("=" * 60)
     print(f"Passed: {passed}/{len(tests)}")
     print(f"Failed: {failed}/{len(tests)}")
-    
+
     if failed == 0:
         print("\n✅ All tests PASSED!")
         return 0
     else:
         print(f"\n❌ {failed} test(s) FAILED")
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())
