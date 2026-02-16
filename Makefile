@@ -1,7 +1,7 @@
 -include .env
 export
 
-IMAGE_NAME := raonsol/korail_telegrambot:v0.7
+IMAGE_NAME := raonsol/korail_telegrambot:v0.9
 WORKER_PID_FILE := .celery-worker.pid
 FLOWER_PID_FILE := .celery-flower.pid
 

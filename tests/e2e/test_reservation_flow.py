@@ -70,13 +70,35 @@ class TestCompleteReservationFlow:
         expected_date = selected_date.strftime("%Y%m%d")
         assert bot.userDict[chat_id]["trainInfo"]["depDate"] == expected_date
 
-        # Step 6: Input source station
-        await bot._input_src_station(chat_id, "서울")
+        # Step 6: Search and select source station
+        with patch(
+            "telegramBot.bot.search_stations",
+            return_value={
+                "stations": [{"code": "0001", "name": "서울"}],
+                "total": 1,
+                "page": 1,
+            },
+        ):
+            await bot._input_src_station(chat_id, "서울")
+        # Station search keeps lastAction at 5 until user selects
+        assert bot.userDict[chat_id]["lastAction"] == 5
+        # Simulate user clicking the station button
+        await bot._select_src_station(chat_id, "서울")
         assert bot.userDict[chat_id]["lastAction"] == 6
         assert bot.userDict[chat_id]["trainInfo"]["srcLocate"] == "서울"
 
-        # Step 7: Input destination station
-        await bot._input_dst_station(chat_id, "부산")
+        # Step 7: Search and select destination station
+        with patch(
+            "telegramBot.bot.search_stations",
+            return_value={
+                "stations": [{"code": "0020", "name": "부산"}],
+                "total": 1,
+                "page": 1,
+            },
+        ):
+            await bot._input_dst_station(chat_id, "부산")
+        assert bot.userDict[chat_id]["lastAction"] == 6
+        await bot._select_dst_station(chat_id, "부산")
         assert bot.userDict[chat_id]["lastAction"] == 7
         assert bot.userDict[chat_id]["trainInfo"]["dstLocate"] == "부산"
 
