@@ -4,7 +4,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from config import settings
 
 STATION_API_URL = "https://apis.data.go.kr/B551457/run/v2/codes2"
-NUM_OF_ROWS = 5
+NUM_OF_ROWS = 6
 
 
 async def search_stations(query: str, page: int = 1) -> dict:
