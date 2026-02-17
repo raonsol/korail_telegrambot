@@ -164,21 +164,17 @@ coverage-html:	## Generate HTML coverage report and open in browser
 	@echo "Opening coverage report..."
 	@which xdg-open > /dev/null && xdg-open htmlcov/index.html || open htmlcov/index.html || echo "Please open htmlcov/index.html manually"
 
-.PHONY: docker-build
-docker-build:		## Build Docker Image
-	docker build -t ${IMAGE_NAME} -f ./Dockerfile .
-
 .PHONY: docker-push
 docker-push:  	## Publish Docker Image
 	docker push ${IMAGE_NAME}
 
 .PHONY: docker-compose-up
 docker-compose-up:	## Start all services with Docker Compose (subprocess mode)
-	docker compose --profile subprocess up -d
+	docker compose --profile subprocess up -d --build
 
 .PHONY: docker-compose-up-mq
 docker-compose-up-mq:	## Start all services with Docker Compose (Celery/MQ mode - RECOMMENDED for production)
-	docker compose --profile celery up -d
+	docker compose --profile celery up -d --build
 
 .PHONY: docker-compose-down
 docker-compose-down:	## Stop all Docker Compose services
