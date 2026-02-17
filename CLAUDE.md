@@ -86,6 +86,7 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 - **src/telegramBot/messages.py**: Centralized message templates
 - **src/telegramBot/calendar_keyboard.py**: Interactive date selection interface
 - **src/telegramBot/time_keyboard.py**: Time preference selection interface
+- **src/telegramBot/station_keyboard.py**: Station search and selection interface (공공데이터포털 API)
 
 ### Docker Architecture
 
@@ -221,13 +222,44 @@ def __init__(self, token: str, enable_redis_celery: bool = False):
 - This ensures `make dev` and `make run` always use subprocess mode
 - And `make dev-celery` and `make run-celery` always use Celery mode
 
+### Station Search Feature
+
+Station names are selected via an API-driven search + inline keyboard flow, preventing typo-related reservation failures.
+
+#### Data Source
+- **API**: 공공데이터포털 (`apis.data.go.kr/B551457/run/v2/codes2`)
+- **Search Method**: `cond[type::EQ]=stn_cd` + `cond[value::LIKE]={query}` (partial match)
+- **Pagination**: `numOfRows=5`, navigated via inline keyboard buttons
+- **Auth**: `DATAGOV_API_KEY` environment variable (서비스키)
+
+#### Flow (Steps 5-6 in Conversation)
+```
+User types "광" → _input_src_station() → API search → inline keyboard:
+  [광주열분] [광주송정]
+  [광천]     [광운대]
+  [대광리]
+  [◀️ 이전] [1/5] [다음 ▶️]
+
+User clicks "광주송정" → _select_src_station() → trainInfo["srcLocate"] = "광주송정"
+User types new text → searches again (lastAction stays at 5 until selection)
+```
+
+#### Callback Data Formats
+- Station selection: `station_src;역이름` or `station_dst;역이름`
+- Pagination: `stn_page;station_src;검색어;페이지번호`
+
+#### Key Implementation
+- **`station_keyboard.py`**: `search_stations()` (async httpx call) + `create_station_keyboard()` (2-column layout)
+- **`bot.py`**: `_input_src/dst_station()` triggers search, `_select_src/dst_station()` finalizes selection
+- **Two-phase flow**: Text input = search (lastAction unchanged), button click = select (lastAction advances)
+
 ### Conversation Flow Architecture
 
 1. **User Authentication**: Phone number verification against `ALLOW_LIST`
 2. **Korail Login**: Account credential validation
-3. **Interactive Selection**: 
+3. **Interactive Selection**:
    - Date selection via calendar keyboard
-   - Station selection with autocomplete
+   - Station search via 공공데이터포털 API + inline keyboard selection
    - Time preferences and train type selection
    - Seat type preferences
 4. **Reservation Execution**: Mode-specific background processing
@@ -375,6 +407,11 @@ USE_CELERY            # Enable Celery mode (true/false)
 REDIS_URL             # Redis connection URL
 CELERY_BROKER         # Celery broker URL
 CELERY_RESULT_BACKEND # Celery result backend URL
+```
+
+### Station Search API
+```bash
+DATAGOV_API_KEY       # 공공데이터포털 API 서비스키 (역 검색용)
 ```
 
 ### Optional Variables

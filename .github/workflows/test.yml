@@ -2,10 +2,13 @@ name: Test Suite
 
 on:
   push:
-    branches: [ main, develop, feature/* ]
+    branches: [ main, dev ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main, dev ]
   workflow_dispatch:
+
+env:
+  PIPENV_NOSPIN: "1"
 
 jobs:
   lint:
@@ -15,23 +18,14 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
       with:
-        python-version: '3.13'
+        ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
-    - name: Install pipenv
-      run: |
-        pip install pipenv
-
-    - name: Install dependencies
-      run: |
-        pipenv install --dev
-
-    - name: Run linter
-      run: |
-        pipenv run black --check .
+    - name: Run black
+      uses: psf/black@stable
+      with:
+        version: "25.9.0"
+        options: "--check --diff ."
 
   unit-tests:
     name: Unit Tests
@@ -45,14 +39,13 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.13'
-
-    - name: Install pipenv
-      run: |
-        pip install pipenv
+        cache: 'pip'
+        cache-dependency-path: Pipfile.lock
 
     - name: Install dependencies
       run: |
-        pipenv install --dev
+        python -m pip install pipenv
+        pipenv sync --dev --system
 
     - name: Run unit tests
       env:
@@ -66,15 +59,16 @@ jobs:
         ADMIN_KORAIL_ID: admin_user
         ADMIN_KORAIL_PW: admin_pass
       run: |
-        pipenv run pytest -m unit -v --cov=src --cov-report=xml --cov-report=term-missing
+        COVERAGE_FILE=.coverage.unit pytest -m unit -v --cov=src --cov-report=term-missing
 
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
+    - name: Upload unit coverage data
+      uses: actions/upload-artifact@v4
       with:
-        file: ./coverage.xml
-        flags: unittests
-        name: unit-tests-coverage
-        fail_ci_if_error: false
+        name: coverage-data-unit
+        path: .coverage.unit
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
 
   integration-tests-subprocess:
     name: Integration Tests (Subprocess Mode)
@@ -88,14 +82,13 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.13'
-
-    - name: Install pipenv
-      run: |
-        pip install pipenv
+        cache: 'pip'
+        cache-dependency-path: Pipfile.lock
 
     - name: Install dependencies
       run: |
-        pipenv install --dev
+        python -m pip install pipenv
+        pipenv sync --dev --system
 
     - name: Run subprocess mode tests
       env:
@@ -106,10 +99,19 @@ jobs:
         ADMINPW: test_admin_password
         USE_CELERY: false
       run: |
-        pipenv run pytest -m subprocess -v
+        COVERAGE_FILE=.coverage.subprocess pytest -m subprocess -v --cov=src --cov-report=term-missing
 
-  integration-tests-celery:
-    name: Integration Tests (Celery Mode)
+    - name: Upload subprocess coverage data
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-data-subprocess
+        path: .coverage.subprocess
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
+
+  integration-tests-mq:
+    name: Integration Tests (MQ)
     runs-on: ubuntu-latest
 
     services:
@@ -131,62 +133,15 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.13'
-
-    - name: Install pipenv
-      run: |
-        pip install pipenv
+        cache: 'pip'
+        cache-dependency-path: Pipfile.lock
 
     - name: Install dependencies
       run: |
-        pipenv install --dev
+        python -m pip install pipenv
+        pipenv sync --dev --system
 
-    - name: Run Celery mode tests
-      env:
-        IS_DEV: true
-        BOTTOKEN_DEV: test_bot_token_dev
-        WEBHOOK_URL_DEV: http://test-dev.example.com
-        ALLOW_LIST: 01012345678
-        ADMINPW: test_admin_password
-        USE_CELERY: true
-        REDIS_URL: redis://localhost:6379
-        CELERY_BROKER: redis://localhost:6379
-        CELERY_RESULT_BACKEND: redis://localhost:6379
-      run: |
-        pipenv run pytest -m celery -v
-
-  integration-tests-real-redis:
-    name: Integration Tests (Real Redis)
-    runs-on: ubuntu-latest
-
-    services:
-      redis:
-        image: redis:7-alpine
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.13'
-
-    - name: Install pipenv
-      run: |
-        pip install pipenv
-
-    - name: Install dependencies
-      run: |
-        pipenv install --dev
-
-    - name: Run real Redis tests
+    - name: Run MQ integration tests
       env:
         IS_DEV: true
         BOTTOKEN_DEV: test_bot_token_dev
@@ -195,11 +150,21 @@ jobs:
         ADMINPW: test_admin_password
         ADMIN_KORAIL_ID: admin_user
         ADMIN_KORAIL_PW: admin_pass
+        USE_CELERY: true
         REDIS_URL: redis://localhost:6379
         CELERY_BROKER: redis://localhost:6379
         CELERY_RESULT_BACKEND: redis://localhost:6379
       run: |
-        pipenv run pytest -m requires_redis -v
+        COVERAGE_FILE=.coverage.mq pytest -m "celery or requires_redis" -v --cov=src --cov-report=term-missing
+
+    - name: Upload MQ integration coverage data
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-data-mq
+        path: .coverage.mq
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
 
   e2e-tests:
     name: End-to-End Tests
@@ -213,14 +178,13 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.13'
-
-    - name: Install pipenv
-      run: |
-        pip install pipenv
+        cache: 'pip'
+        cache-dependency-path: Pipfile.lock
 
     - name: Install dependencies
       run: |
-        pipenv install --dev
+        python -m pip install pipenv
+        pipenv sync --dev --system
 
     - name: Run E2E tests
       env:
@@ -230,23 +194,21 @@ jobs:
         ALLOW_LIST: 01012345678
         ADMINPW: test_admin_password
       run: |
-        pipenv run pytest -m e2e -v
+        COVERAGE_FILE=.coverage.e2e pytest -m e2e -v --cov=src --cov-report=term-missing
+
+    - name: Upload e2e coverage data
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-data-e2e
+        path: .coverage.e2e
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 14
 
   coverage-report:
-    name: Coverage Report
+    name: Coverage Report (All Tests)
     runs-on: ubuntu-latest
-    needs: [unit-tests, integration-tests-subprocess, e2e-tests]
-
-    services:
-      redis:
-        image: redis:7-alpine
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
+    needs: [unit-tests, integration-tests-subprocess, integration-tests-mq, e2e-tests]
 
     steps:
     - name: Checkout code
@@ -256,46 +218,42 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.13'
+        cache: 'pip'
+        cache-dependency-path: Pipfile.lock
 
-    - name: Install pipenv
+    - name: Install coverage tool
       run: |
-        pip install pipenv
+        python -m pip install coverage
 
-    - name: Install dependencies
+    - name: Download coverage data artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: coverage-data-*
+        path: coverage-data
+        merge-multiple: true
+
+    - name: Combine and generate coverage reports
       run: |
-        pipenv install --dev
+        ls -al coverage-data
+        coverage combine coverage-data
+        coverage xml -o coverage.xml
+        coverage html -d htmlcov
+        coverage report -m
 
-    - name: Run all tests with coverage
-      env:
-        IS_DEV: true
-        BOTTOKEN_DEV: test_bot_token_dev
-        BOTTOKEN: test_bot_token_prod
-        WEBHOOK_URL_DEV: http://test-dev.example.com
-        WEBHOOK_URL: http://test-prod.example.com
-        ALLOW_LIST: 01012345678
-        ADMINPW: test_admin_password
-        ADMIN_KORAIL_ID: admin_user
-        ADMIN_KORAIL_PW: admin_pass
-        REDIS_URL: redis://localhost:6379
-        CELERY_BROKER: redis://localhost:6379
-        CELERY_RESULT_BACKEND: redis://localhost:6379
-      run: |
-        pipenv run pytest --cov=src --cov-report=xml --cov-report=html --cov-report=term-missing
-
-    - name: Upload coverage reports
+    - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:
         file: ./coverage.xml
         flags: alltests
-        name: full-coverage
+        name: all-tests-coverage
         fail_ci_if_error: false
 
-    - name: Archive coverage report
+    - name: Upload HTML coverage artifact
       uses: actions/upload-artifact@v4
       with:
-        name: coverage-report
+        name: all-tests-coverage-html
         path: htmlcov/
-        retention-days: 30
+        retention-days: 14
 
   docker-build-test:
     name: Docker Build Test
@@ -315,32 +273,3 @@ jobs:
     - name: Test Docker image
       run: |
         docker images | grep korail-bot
-
-  test-summary:
-    name: Test Summary
-    runs-on: ubuntu-latest
-    needs: [lint, unit-tests, integration-tests-subprocess, integration-tests-celery, e2e-tests, docker-build-test]
-    if: always()
-
-    steps:
-    - name: Check test results
-      run: |
-        echo "All tests completed!"
-        echo "Lint: ${{ needs.lint.result }}"
-        echo "Unit Tests: ${{ needs.unit-tests.result }}"
-        echo "Integration Tests (Subprocess): ${{ needs.integration-tests-subprocess.result }}"
-        echo "Integration Tests (Celery): ${{ needs.integration-tests-celery.result }}"
-        echo "E2E Tests: ${{ needs.e2e-tests.result }}"
-        echo "Docker Build: ${{ needs.docker-build-test.result }}"
-
-        if [ "${{ needs.lint.result }}" != "success" ] || \
-           [ "${{ needs.unit-tests.result }}" != "success" ] || \
-           [ "${{ needs.integration-tests-subprocess.result }}" != "success" ] || \
-           [ "${{ needs.integration-tests-celery.result }}" != "success" ] || \
-           [ "${{ needs.e2e-tests.result }}" != "success" ] || \
-           [ "${{ needs.docker-build-test.result }}" != "success" ]; then
-          echo "❌ Some tests failed!"
-          exit 1
-        else
-          echo "✅ All tests passed!"
-        fi
