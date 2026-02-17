@@ -34,7 +34,7 @@ make coverage-html       # HTML 커버리지 리포트 생성 및 열기
 ```bash
 # 특정 테스트 카테고리 실행
 make test-subprocess     # Subprocess 모드 테스트
-make test-celery        # Celery 모드 테스트 (Redis 필요)
+make test-mq        # MQ 모드 테스트 (Redis 필요)
 
 # 직접 pytest 커맨드
 pipenv run pytest                           # 모든 테스트
@@ -58,7 +58,7 @@ tests/
 │   └── test_app.py        # FastAPI 엔드포인트 테스트
 ├── integration/           # 통합 테스트 (컴포넌트 상호작용)
 │   ├── test_subprocess_mode.py  # Subprocess 모드 테스트
-│   ├── test_celery_mode.py      # Celery 모드 테스트
+│   ├── test_celery_mode.py      # MQ 모드 테스트
 │   └── test_make_commands.py    # 빌드 시스템 테스트
 └── e2e/                   # 엔드투엔드 테스트 (완전한 워크플로우)
     └── test_reservation_flow.py  # 완전한 예약 플로우
@@ -78,7 +78,7 @@ tests/
 -m integration       # 통합 테스트
 -m e2e              # 엔드투엔드 테스트
 -m subprocess       # Subprocess 모드 테스트
--m celery           # Celery 모드 테스트 (Redis 필요)
+-m celery           # MQ 모드 테스트 (Redis 필요)
 -m slow             # 느린 테스트
 -m requires_redis   # Redis가 필요한 테스트
 -m requires_external # 외부 서비스가 필요한 테스트
@@ -111,7 +111,7 @@ pipenv run pytest tests/unit/test_config.py::TestWebSettings::test_web_settings_
 - 외부 의존성 없음
 - Subprocess 기반 실행 테스트
 
-### 통합 테스트 (Celery)
+### 통합 테스트 (Celery/MQ)
 - **필요**: Redis 실행 중
 - Redis 시작: `make redis-start`
 - Redis 중지: `make redis-stop`
@@ -198,7 +198,7 @@ IS_DEV=false pipenv run pytest
 1. **Lint**: 코드 포맷팅 체크
 2. **단위 테스트**: 빠른 독립 테스트
 3. **통합 (Subprocess)**: Subprocess 모드 테스트
-4. **통합 (Celery)**: Redis와 함께 Celery 모드 테스트
+4. **통합 (Celery/MQ)**: Redis와 함께 MQ 모드 테스트
 5. **E2E 테스트**: 완전한 워크플로우 테스트
 6. **커버리지 리포트**: 통합 커버리지 분석
 7. **Docker 빌드**: 이미지 빌드 검증

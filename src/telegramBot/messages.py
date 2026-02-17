@@ -38,19 +38,19 @@ class Messages:
 """
         INPUT_SRC_STATION: str = """
 출발일 입력에 성공하였습니다.
-출발역을 입력해주십시오.
-
-역 정보를 참고하시려면 다음 사이트를 이용하세요. http://www.letskorail.com/ebizprd/stationKtxList.do
+출발역 이름을 입력하면 검색합니다.
 ['역' 을 제외한 이름을 입력해주세요.]
-(ex_ 광명)
+(ex_ 서울, 광명, 동대구)
 """
         INPUT_DST_STATION: str = """
 출발역 입력이 완료되었습니다.
-도착역을 입력해 주십시오.
-
-역 정보를 참고하시려면 다음 사이트를 이용하세요. http://www.letskorail.com/ebizprd/stationKtxList.do
+도착역 이름을 입력하면 검색합니다.
 ['역' 을 제외한 이름을 입력해주세요.]
-(ex_ 광주송정)
+(ex_ 부산, 광주송정)
+"""
+        STATION_SEARCH_NO_RESULT: str = """
+'{query}'에 대한 검색 결과가 없습니다.
+다른 이름으로 다시 검색해주세요.
 """
         INPUT_DEP_TIME: str = """
 도착역 입력이 완료되었습니다.

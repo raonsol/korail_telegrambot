@@ -64,6 +64,9 @@ class WebSettings(BaseAppSettings):
     max_concurrent_reservations: int = 10
     reservation_timeout: int = 3600  # 1시간
 
+    # 공공데이터 API
+    datagov_api_key: str = Field(default="", alias="DATAGOV_API_KEY")
+
     # 보안 설정
     secret_key: str = "your-secret-key-here"
 

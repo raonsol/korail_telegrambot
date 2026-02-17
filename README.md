@@ -5,7 +5,7 @@
 ## 특징
 
 - 🚄 **자동 KTX 예약**: 재시도 로직을 통한 자동 기차표 예약
-- 🔄 **이중 실행 모드**: 경량 subprocess 모드 또는 확장 가능한 Celery 모드 선택
+- 🔄 **이중 실행 모드**: 경량 subprocess 모드 또는 확장 가능한 MQ 모드 선택
 - 📱 **대화형 인터페이스**: 캘린더 기반 날짜 선택 및 시간 선호도 설정
 - 🐳 **Docker 지원**: 개발 및 운영 환경을 위한 완전한 컨테이너화
 - 🔐 **인증 시스템**: 전화번호 인증 및 안전한 사용자 관리
@@ -22,7 +22,7 @@
 - **백그라운드 작업**: Python subprocess 실행
 - **리소스 사용량**: 낮은 메모리 및 CPU 사용량
 
-#### Celery 모드 (확장 가능)
+#### MQ 모드(Celery를 사용한 message queue 방식, 확장 가능)
 - **사용 사례**: 다중 사용자 또는 대용량 배포
 - **저장소**: 상태 관리 및 작업 큐를 위한 Redis
 - **의존성**: Redis, PostgreSQL, Celery workers
@@ -69,7 +69,7 @@ USERPW=코레일_비밀번호
 ALLOW_LIST=전화번호1,전화번호2,전화번호3
 ADMINPW=관리자_비밀번호
 
-# Celery 모드 (선택사항)
+# Message Queue(MQ) 모드 (선택사항)
 REDIS_URL=redis://localhost:6379
 CELERY_BROKER=redis://localhost:6379
 CELERY_RESULT_BACKEND=redis://localhost:6379
@@ -86,14 +86,14 @@ make install
 # 개발 모드 실행 (subprocess)
 make dev
 
-# 개발 모드 실행 (Celery)
-make dev-celery
+# 개발 모드 실행 (MQ)
+make dev-mq
 
 # 운영 모드 실행 (subprocess)
 make run
 
-# 운영 모드 실행 (Celery)
-make run-celery
+# 운영 모드 실행 (MQ)
+make run-mq
 ```
 
 #### Docker 개발
@@ -103,13 +103,13 @@ make run-celery
 make docker-build
 
 # 개발 - Subprocess 모드
-make docker-compose-dev
+make docker-compose-up
 
-# 개발 - Celery 모드
-make docker-compose-dev-celery
+# 개발 - MQ 모드
+make docker-compose-up-mq
 
 # 모든 개발 컨테이너 중지
-make docker-compose-down-dev
+make docker-compose-down
 ```
 
 #### Docker 운영
@@ -118,8 +118,8 @@ make docker-compose-down-dev
 # 운영 - Subprocess 모드
 make docker-compose-up
 
-# 운영 - Celery 모드
-make docker-compose-up-celery
+# 운영 - Celery 모드(MQ 방식)
+make docker-compose-up-mq
 
 # 모든 운영 컨테이너 중지
 make docker-compose-down
@@ -133,17 +133,18 @@ make docker-compose-down
 |--------|------|
 | `make install` | pipenv로 의존성 설치 |
 | `make dev` | 개발 서버 실행 (subprocess 모드, 포트 8390) |
-| `make dev-celery` | 개발 서버 실행 (Celery 모드, 포트 8390) |
+| `make dev-mq` | 개발 서버 실행 (MQ 방식, 포트 8390) |
 | `make run` | 운영 서버 실행 (subprocess 모드, 포트 8391) |
-| `make run-celery` | 운영 서버 실행 (Celery 모드, 포트 8391) |
+| `make run-mq` | 운영 서버 실행 (MQ 방식, 포트 8391) |
 
 ### Celery 명령어
 
 | 명령어 | 설명 |
 |--------|------|
-| `make celery-worker` | Celery 워커 시작 |
-| `make celery-beat` | Celery beat 스케줄러 시작 |
-| `make celery-flower` | Flower 모니터링 시작 |
+| `make celery-worker-start` | Celery 워커 시작 |
+| `make celery-worker-stop` | Celery 워커 중지 |
+| `make celery-flower-start` | Flower 모니터링 시작 |
+| `make celery-flower-stop` | Flower 모니터링 중지 |
 
 ### Docker 명령어
 
@@ -151,19 +152,14 @@ make docker-compose-down
 |--------|------|
 | `make docker-build` | Docker 이미지 빌드 |
 | `make docker-push` | Docker 이미지를 레지스트리에 푸시 |
-| `make docker-run` | 단일 컨테이너 실행 (subprocess 모드) |
-| `make docker-run-celery` | 단일 컨테이너 실행 (Celery 모드) |
 
 ### Docker Compose 명령어
 
 | 명령어 | 설명 |
 |--------|------|
 | `make docker-compose-up` | 운영 서비스 시작 (subprocess 모드) |
-| `make docker-compose-up-celery` | 운영 서비스 시작 (Celery 모드) |
-| `make docker-compose-dev` | 개발 서비스 시작 (subprocess 모드) |
-| `make docker-compose-dev-celery` | 개발 서비스 시작 (Celery 모드) |
+| `make docker-compose-up-mq` | 운영 서비스 시작 (MQ 방식) |
 | `make docker-compose-down` | 모든 운영 서비스 중지 |
-| `make docker-compose-down-dev` | 모든 개발 서비스 중지 |
 
 ### 코드 품질
 
@@ -179,7 +175,7 @@ make docker-compose-down
 - ✅ 제한된 서버 리소스
 - ✅ 빠른 프로토타이핑 또는 테스트
 
-### Celery 모드를 사용해야 할 때
+### MQ 모드를 사용해야 할 때
 - ✅ 다중 동시 사용자
 - ✅ 대용량 예약 요청
 - ✅ 작업 모니터링 및 관리 필요
@@ -202,7 +198,7 @@ POST /message
 POST /completion/{chat_id}?status={status}&reserveInfo={info}
 ```
 
-### 예약 콜백 (Celery 모드)
+### 예약 콜백 (MQ 모드)
 ```
 POST /reservation_callback
 ```
@@ -337,7 +333,7 @@ docker compose logs -f web
 
 ```bash
 # Flower 웹 인터페이스 (http://localhost:5555)
-make celery-flower
+make celery-flower-start
 
 # Celery 워커 상태 확인
 celery -A src.telegramBot.tasks inspect active
@@ -361,7 +357,7 @@ Failed to set webhook
 - **해결책**: HTTPS URL 및 SSL 인증서 확인
 - **원인**: 잘못된 웹훅 URL 또는 SSL 문제
 
-#### 3. Redis 연결 실패 (Celery 모드)
+#### 3. Redis 연결 실패 (MQ 모드)
 ```
 ConnectionError: Error connecting to Redis
 ```
@@ -372,7 +368,7 @@ ConnectionError: Error connecting to Redis
 ```
 Bind for 0.0.0.0:8390 failed: port is already allocated
 ```
-- **해결책**: `make docker-compose-down-dev` 실행 후 재시작
+- **해결책**: `make docker-compose-down` 실행 후 재시작
 - **원인**: 이전 컨테이너가 완전히 정리되지 않음
 
 ### 성능 최적화

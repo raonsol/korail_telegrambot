@@ -1,7 +1,7 @@
 -include .env
 export
 
-IMAGE_NAME := raonsol/korail_telegrambot:v0.7
+IMAGE_NAME := raonsol/korail_telegrambot:v0.9
 WORKER_PID_FILE := .celery-worker.pid
 FLOWER_PID_FILE := .celery-flower.pid
 
@@ -21,17 +21,17 @@ install:	## Install dependencies and create virtual environment
 dev:  ## Run local development server in subprocess mode (port: 8390, IS_DEV=true)
 	PIPENV_DONT_LOAD_ENV=1 IS_DEV=true USE_CELERY=false pipenv run python -m fastapi dev src/app.py --port 8390
 
-.PHONY: dev-celery
-dev-celery: redis-start celery-worker-start celery-flower-start  ## Run local development with Celery - starts Redis + Worker + Flower + Web (port: 8390, IS_DEV=true)
+.PHONY: dev-mq
+dev-mq: redis-start celery-worker-start celery-flower-start  ## Run local development with Celery (MQ) - starts Redis + Worker + Flower + Web (port: 8390, IS_DEV=true)
 	@echo "✅ Redis running on localhost:6379"
 	@echo "✅ Celery worker running in background"
 	@echo "✅ Flower monitoring UI running at http://localhost:5555"
 	@echo "🚀 Starting FastAPI development server on port 8390..."
-	@echo "⚠️  Press Ctrl+C to stop. Then run 'make dev-celery-stop' to cleanup."
+	@echo "⚠️  Press Ctrl+C to stop. Then run 'make dev-mq-stop' to cleanup."
 	PIPENV_DONT_LOAD_ENV=1 IS_DEV=true USE_CELERY=true pipenv run python -m fastapi dev src/app.py --port 8390
 
-.PHONY: dev-celery-stop
-dev-celery-stop: celery-flower-stop celery-worker-stop  ## Stop Celery development services (Worker + Flower only, Redis stays running)
+.PHONY: dev-mq-stop
+dev-mq-stop: celery-flower-stop celery-worker-stop  ## Stop Celery (MQ) development services (Worker + Flower only, Redis stays running)
 	@echo "✅ Celery services stopped"
 	@echo "INFO: Redis still running, use 'make redis-stop' to stop it"
 
@@ -39,17 +39,17 @@ dev-celery-stop: celery-flower-stop celery-worker-stop  ## Stop Celery developme
 run:  ## Run local production server in subprocess mode (port: 8391, IS_DEV=false)
 	PIPENV_DONT_LOAD_ENV=1 USE_CELERY=false pipenv run python -m fastapi run src/app.py --host 0.0.0.0 --port 8391
 
-.PHONY: run-celery
-run-celery: redis-start celery-worker-start celery-flower-start  ## Run local production with Celery - starts Redis + Worker + Flower + Web (port: 8391, IS_DEV=false)
+.PHONY: run-mq
+run-mq: redis-start celery-worker-start celery-flower-start  ## Run local production with Celery (MQ) - starts Redis + Worker + Flower + Web (port: 8391, IS_DEV=false)
 	@echo "✅ Redis running on localhost:6379"
 	@echo "✅ Celery worker running in background"
 	@echo "✅ Flower monitoring UI running at http://localhost:5555"
 	@echo "🚀 Starting FastAPI production server on port 8391..."
-	@echo "⚠️  Press Ctrl+C to stop. Then run 'make run-celery-stop' to cleanup."
+	@echo "⚠️  Press Ctrl+C to stop. Then run 'make run-mq-stop' to cleanup."
 	PIPENV_DONT_LOAD_ENV=1 USE_CELERY=true pipenv run python -m fastapi run src/app.py --host 0.0.0.0 --port 8391
 
-.PHONY: run-celery-stop
-run-celery-stop: celery-flower-stop celery-worker-stop  ## Stop Celery production services (Worker + Flower only, Redis stays running)
+.PHONY: run-mq-stop
+run-mq-stop: celery-flower-stop celery-worker-stop  ## Stop Celery (MQ) production services (Worker + Flower only, Redis stays running)
 	@echo "✅ Celery services stopped"
 	@echo "INFO: Redis still running, use 'make redis-stop' to stop it"
 
@@ -138,9 +138,9 @@ test-e2e:	## Run end-to-end tests only
 test-subprocess:	## Run subprocess mode tests
 	pipenv run pytest -m subprocess -v
 
-.PHONY: test-celery
-test-celery:	## Run Celery mode tests (requires Redis)
-	pipenv run pytest -m celery -v
+.PHONY: test-mq
+test-mq:	## Run Celery (MQ) mode tests (requires Redis)
+	pipenv run pytest -m "celery or requires_redis" -v
 
 .PHONY: test-fast
 test-fast:	## Run fast tests only (skip slow E2E tests)
@@ -164,21 +164,17 @@ coverage-html:	## Generate HTML coverage report and open in browser
 	@echo "Opening coverage report..."
 	@which xdg-open > /dev/null && xdg-open htmlcov/index.html || open htmlcov/index.html || echo "Please open htmlcov/index.html manually"
 
-.PHONY: docker-build
-docker-build:		## Build Docker Image
-	docker build -t ${IMAGE_NAME} -f ./Dockerfile .
-
 .PHONY: docker-push
 docker-push:  	## Publish Docker Image
 	docker push ${IMAGE_NAME}
 
 .PHONY: docker-compose-up
 docker-compose-up:	## Start all services with Docker Compose (subprocess mode)
-	docker compose --profile subprocess up -d
+	docker compose --profile subprocess up -d --build
 
-.PHONY: docker-compose-up-celery
-docker-compose-up-celery:	## Start all services with Docker Compose (Celery mode - RECOMMENDED for production)
-	docker compose --profile celery up -d
+.PHONY: docker-compose-up-mq
+docker-compose-up-mq:	## Start all services with Docker Compose (Celery/MQ mode - RECOMMENDED for production)
+	docker compose --profile celery up -d --build
 
 .PHONY: docker-compose-down
 docker-compose-down:	## Stop all Docker Compose services

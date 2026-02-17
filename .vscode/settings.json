@@ -1,3 +1,7 @@
 {
-  "python-envs.defaultEnvManager": "ms-python.python:pipenv"
+  "python-envs.defaultEnvManager": "ms-python.python:pipenv",
+  "chat.tools.terminal.autoApprove": {
+    "pipenv": true,
+    "git config": true
+  }
 }

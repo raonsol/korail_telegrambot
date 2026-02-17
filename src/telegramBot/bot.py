@@ -33,6 +33,7 @@ from .time_keyboard import (
     handle_time_action,
     create_time_reselect_keyboard,
 )
+from .station_keyboard import search_stations, create_station_keyboard
 from config import settings, web_settings
 
 
@@ -255,6 +256,17 @@ class TelegramBot:
             selected, date = await handle_calendar_action(update, context)
             if selected:
                 await self._input_date(chat_id, date)
+        elif query.data.startswith("station_src;"):
+            station_name = query.data.split(";", 1)[1]
+            await self._select_src_station(chat_id, station_name)
+        elif query.data.startswith("station_dst;"):
+            station_name = query.data.split(";", 1)[1]
+            await self._select_dst_station(chat_id, station_name)
+        elif query.data.startswith("stn_page;"):
+            _, action, search_query, page = query.data.split(";")
+            await self._search_and_show_stations(
+                chat_id, search_query, action, int(page)
+            )
         elif query.data.startswith("login_"):
             await self._handle_login_callback(chat_id, query.data)
         elif query.data.startswith("cancel_"):
@@ -525,16 +537,41 @@ class TelegramBot:
         return None
 
     async def _input_src_station(self, chat_id, data):
-        self.userDict[chat_id]["trainInfo"]["srcLocate"] = data
-        self.userDict[chat_id]["lastAction"] = 6
-        msg = f"선택하신 출발역: {data}\n\n{Messages.Info.INPUT_DST_STATION}"
-        await self.send_message(chat_id, msg)
+        await self._search_and_show_stations(chat_id, data, "station_src")
         return None
 
     async def _input_dst_station(self, chat_id, data):
-        self.userDict[chat_id]["trainInfo"]["dstLocate"] = data
+        await self._search_and_show_stations(chat_id, data, "station_dst")
+        return None
+
+    async def _search_and_show_stations(self, chat_id, query, action, page=1):
+        """역 이름 검색 후 인라인 키보드로 결과 표시"""
+        result = await search_stations(query, page)
+        stations = result["stations"]
+        total = result["total"]
+
+        if not stations:
+            msg = Messages.Info.STATION_SEARCH_NO_RESULT.format(query=query)
+            await self.send_message(chat_id, msg)
+            return
+
+        label = "출발역" if action == "station_src" else "도착역"
+        msg = f"'{query}' 검색 결과 ({total}건)\n{label}을 선택해주세요."
+        keyboard = create_station_keyboard(stations, action, query, page, total)
+        await self.send_message(chat_id, msg, reply_markup=keyboard)
+
+    async def _select_src_station(self, chat_id, station_name):
+        """출발역 선택 완료 처리"""
+        self.userDict[chat_id]["trainInfo"]["srcLocate"] = station_name
+        self.userDict[chat_id]["lastAction"] = 6
+        msg = f"선택하신 출발역: {station_name}\n\n{Messages.Info.INPUT_DST_STATION}"
+        await self.send_message(chat_id, msg)
+
+    async def _select_dst_station(self, chat_id, station_name):
+        """도착역 선택 완료 처리"""
+        self.userDict[chat_id]["trainInfo"]["dstLocate"] = station_name
         self.userDict[chat_id]["lastAction"] = 7
-        msg = f"선택하신 도착역: {data}\n\n{Messages.Info.INPUT_DEP_TIME}"
+        msg = f"선택하신 도착역: {station_name}\n\n{Messages.Info.INPUT_DEP_TIME}"
 
         current_time = datetime.now().strftime("%H%M")
         if self.userDict[chat_id]["trainInfo"]["depDate"] == datetime.now().strftime(
@@ -548,7 +585,6 @@ class TelegramBot:
             msg,
             reply_markup=create_time_keyboard(action="time", min_time=min_time),
         )
-        return None
 
     async def _input_dep_time(self, chat_id, data):
         dep_date = self.userDict[chat_id]["trainInfo"]["depDate"]
