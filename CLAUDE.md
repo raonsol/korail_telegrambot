@@ -11,8 +11,8 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 - **FastAPI**: Modern web framework for webhook-based Telegram bot backend
 - **python-telegram-bot**: Comprehensive library for Telegram Bot API interactions
 - **korail2**: KTX reservation API client library
-- **Redis + Celery**: Optional distributed task processing system
-- **PostgreSQL**: Optional persistent data storage for Celery mode
+- **Redis + Celery**: Optional distributed task processing system (MQ pattern)
+- **PostgreSQL**: Optional persistent data storage for Celery mode (MQ pattern)
 - **Docker**: Complete containerization with multi-environment support
 
 ### Execution Modes
@@ -25,7 +25,7 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 - **Resource Usage**: Low memory and CPU footprint
 - **Scaling**: Vertical scaling only (single server)
 
-#### Celery Mode (Distributed/Scalable)
+#### Celery Mode (MQ Pattern, Distributed/Scalable)
 - **Purpose**: Multi-user deployments, production environments
 - **Storage**: Redis for state management and task queuing
 - **Background Tasks**: Distributed Celery workers with task monitoring
@@ -40,14 +40,14 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 - **Webhook URL**: `WEBHOOK_URL_DEV`
 - **Environment**: `IS_DEV=true` automatically set by Makefile
 - **Purpose**: Local development and testing
-- **Commands**: `make dev` (subprocess) / `make dev-celery` (Celery)
+- **Commands**: `make dev` (subprocess) / `make dev-mq` (Celery/MQ)
 
 #### Docker/Production (Port 8391)
 - **Bot Token**: `BOTTOKEN` (production bot)
 - **Webhook URL**: `WEBHOOK_URL`
 - **Environment**: `IS_DEV` not set (defaults to production)
 - **Purpose**: Production deployment via Docker containers
-- **Commands**: `make docker-compose-up` / `make docker-compose-up-celery`
+- **Commands**: `make docker-compose-up` / `make docker-compose-up-mq`
 
 ### Key Components
 
@@ -56,22 +56,22 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
   - Webhook setup and lifecycle management
   - Health check endpoints
   - Reservation completion callbacks
-  - Celery task result handling
+  - MQ task result handling
 
 - **src/config.py**: Configuration management
   - Environment-based settings
-  - Redis/Celery connection parameters
+  - Redis/MQ connection parameters
   - Bot token and webhook URL selection
 
 #### Bot Logic
 - **src/telegramBot/bot.py**: Main bot implementation
-  - **Dual-mode initialization**: Configuration-based Redis/Celery setup
+  - **Dual-mode initialization**: Configuration-based Redis/MQ setup
   - **State management**: User conversation flow and reservation tracking
   - **Command handlers**: `/start`, `/cancel`, `/status`, admin commands
   - **Callback handlers**: Interactive keyboard responses
-  - **Process management**: Subprocess and Celery task orchestration
+  - **Process management**: Subprocess and MQ task orchestration
 
-- **src/telegramBot/tasks.py**: Celery task definitions
+- **src/telegramBot/tasks.py**: MQ task definitions
   - **reservation_task**: Distributed reservation processing
   - **Callback system**: HTTP status updates to main application
   - **Error handling**: Automatic retry logic and failure notifications
@@ -105,19 +105,19 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 # Subprocess Mode Services
 web: FastAPI application (subprocess mode)
 
-# Celery Mode Services
-web_celery: FastAPI application (Celery mode)
-redis: Message broker and state storage (REQUIRED for Celery)
+# MQ Mode Services
+web_celery: FastAPI application (Celery mode (MQ pattern))
+redis: Message broker and state storage (REQUIRED for MQ)
 postgres: Persistent database (CURRENTLY UNUSED - reserved for future use)
-worker: Celery worker processes (REQUIRED for Celery)
-beat: Celery scheduler (NOT NEEDED - no periodic tasks defined)
+worker: Celery worker processes (REQUIRED for MQ)
+beat: MQ scheduler (NOT NEEDED - no periodic tasks defined)
 flower: Web-based monitoring (OPTIONAL - for debugging)
 ```
 
 **Important Notes:**
-- **PostgreSQL**: Currently not used in the codebase. Celery uses Redis for both broker and result backend. Can be removed to save resources or kept for future development.
+- **PostgreSQL**: Currently not used in the codebase. MQ uses Redis for both broker and result backend. Can be removed to save resources or kept for future development.
 - **Beat**: No periodic tasks (`@periodic_task`) are defined, so this service is unused. Can be removed.
-- **Flower**: Only needed during development/debugging to monitor Celery tasks.
+- **Flower**: Only needed during development/debugging to monitor MQ tasks.
 
 ### State Management Architecture
 
@@ -126,36 +126,36 @@ flower: Web-based monitoring (OPTIONAL - for debugging)
 # In-memory storage (bot.py)
 userDict = {}        # User conversation state and reservation details
 runningStatus = {}   # Active reservation processes
-                     # Key: PID (subprocess mode) or task_id (Celery mode)
+                     # Key: PID (subprocess mode) or task_id (Celery mode (MQ pattern))
                      # Value: {chat_id, task_id/pid, korailId, method}
 subscribes = []      # Users receiving broadcast notifications
 ```
 
-#### Celery Mode State
+#### MQ Mode State
 ```python
 # Redis-based storage
 redis_client: Redis connection for state persistence
-celery_app: Celery application for task management
+celery_app: MQ application for task management
 # PostgreSQL for optional long-term data persistence
 
 # Task-based isolation
-# Each reservation uses Celery task_id as unique identifier
+# Each reservation uses MQ task_id as unique identifier
 # Redis key format: reservation_task:{task_id}
 # This allows same user to have multiple concurrent reservations
 ```
 
 ### Multiple Reservation Support (Important!)
 
-**Design Philosophy**: Each reservation task is completely independent, identified by its unique task_id (Celery) or PID (subprocess).
+**Design Philosophy**: Each reservation task is completely independent, identified by its unique task_id (MQ) or PID (subprocess).
 
 #### Key Implementation Details
 
 1. **Task Isolation**
    - **Subprocess Mode**: Uses process PID as unique identifier
-   - **Celery Mode**: Uses Celery task_id (`self.request.id`) as unique identifier
+   - **MQ Mode**: Uses MQ task_id (`self.request.id`) as unique identifier
    - Each reservation maintains independent state in `runningStatus[task_id]`
 
-2. **Redis Key Structure (Celery Mode)**
+2. **Redis Key Structure (MQ Mode)**
    ```python
    # tasks.py line 54
    reservation_key = f"reservation_task:{self.request.id}"
@@ -171,7 +171,7 @@ celery_app: Celery application for task management
    # bot.py line 682-687
    self.runningStatus[task_id] = {
        "chat_id": chat_id,      # User's Telegram chat ID
-       "task_id": task_id,      # Celery task ID or subprocess PID
+       "task_id": task_id,      # MQ task ID or subprocess PID
        "korailId": user_info["korailId"],  # Korail account
        "method": "celery",      # "celery" or "subprocess"
    }
@@ -211,7 +211,7 @@ The bot uses configuration-based service initialization instead of ImportError c
 def __init__(self, token: str, enable_redis_celery: bool = False):
     self.use_celery = enable_redis_celery
     if self.use_celery and REDIS_AVAILABLE:
-        # Initialize Redis and Celery
+        # Initialize Redis and MQ
     else:
         # Use in-memory storage and subprocess execution
 ```
@@ -220,7 +220,7 @@ def __init__(self, token: str, enable_redis_celery: bool = False):
 - The `.env` file should NOT set `USE_CELERY` to avoid conflicts
 - Makefile commands use `PIPENV_DONT_LOAD_ENV=1` to prevent .env from overriding command-line settings
 - This ensures `make dev` and `make run` always use subprocess mode
-- And `make dev-celery` and `make run-celery` always use Celery mode
+- And `make dev-mq` and `make run-mq` always use Celery mode (MQ pattern)
 
 ### Station Search Feature
 
@@ -273,9 +273,9 @@ User types new text → searches again (lastAction stays at 5 until selection)
 Bot -> subprocess.Popen() -> worker.py -> Korail API -> HTTP callback -> Bot
 ```
 
-#### Celery Flow  
+#### MQ Flow  
 ```
-Bot -> Celery task -> Redis queue -> Worker process -> HTTP callback -> Bot
+Bot -> MQ task -> Redis queue -> Worker process -> HTTP callback -> Bot
 ```
 
 ## Development Commands
@@ -291,9 +291,9 @@ make install          # Install dependencies with pipenv
 # Development - Subprocess mode (simple, single process)
 make dev              # Run development server
 
-# Development - Celery mode (distributed, multiple processes)
-make dev-celery       # Starts Redis + Worker + Flower + Web (ALL-IN-ONE)
-make dev-celery-stop  # Stop Worker + Flower (Redis stays running)
+# Development - Celery mode (MQ pattern) (distributed, multiple processes)
+make dev-mq       # Starts Redis + Worker + Flower + Web (ALL-IN-ONE)
+make dev-mq-stop  # Stop Worker + Flower (Redis stays running)
 ```
 
 ### Local Production (Port 8391, IS_DEV=false, uses BOTTOKEN)
@@ -301,9 +301,9 @@ make dev-celery-stop  # Stop Worker + Flower (Redis stays running)
 # Production - Subprocess mode
 make run              # Run production server
 
-# Production - Celery mode
-make run-celery       # Starts Redis + Worker + Flower + Web (ALL-IN-ONE)
-make run-celery-stop  # Stop Worker + Flower (Redis stays running)
+# Production - Celery mode (MQ pattern)
+make run-mq       # Starts Redis + Worker + Flower + Web (ALL-IN-ONE)
+make run-mq-stop  # Stop Worker + Flower (Redis stays running)
 ```
 
 ### Individual Service Management (Advanced)
@@ -322,13 +322,13 @@ make docker-build              # Build Docker image
 make docker-push               # Publish Docker image
 
 make docker-compose-up         # Start subprocess mode
-make docker-compose-up-celery  # Start Celery mode (RECOMMENDED for production)
+make docker-compose-up-mq  # Start Celery mode (MQ pattern) (RECOMMENDED for production)
 make docker-compose-down       # Stop all services
 make docker-compose-logs       # Show logs from running services
 
 # Code Changes - IMPORTANT: Always use --build when code changes
 docker compose down
-docker compose --profile celery up -d --build     # Rebuild and start Celery mode
+docker compose --profile celery up -d --build     # Rebuild and start Celery mode (MQ pattern)
 docker compose --profile subprocess up -d --build # Rebuild and start subprocess mode
 ```
 
@@ -337,18 +337,18 @@ docker compose --profile subprocess up -d --build # Rebuild and start subprocess
 make lint             # Format code with black
 ```
 
-### Important Notes About Local Celery Mode
+### Important Notes About Local MQ Mode
 
-When running `make dev-celery` or `make run-celery`:
+When running `make dev-mq` or `make run-mq`:
 1. **Redis** starts automatically (local daemon process)
 2. **Celery worker** starts automatically in background
 3. **Flower UI** starts automatically in background (port 5555)
 4. **FastAPI web** starts in foreground (you'll see logs)
 5. Press `Ctrl+C` to stop web server
-6. **IMPORTANT**: Run `make dev-celery-stop` or `make run-celery-stop` to cleanup
+6. **IMPORTANT**: Run `make dev-mq-stop` or `make run-mq-stop` to cleanup
 
 **Cleanup behavior:**
-- `make dev-celery-stop` or `make run-celery-stop` stops **Worker + Flower only**
+- `make dev-mq-stop` or `make run-mq-stop` stops **Worker + Flower only**
 - **Redis stays running** for faster subsequent startups
 - To stop Redis manually: `make redis-stop`
 
@@ -358,7 +358,7 @@ If you forget to run the stop command:
 - **Flower** will keep running in background
 - Run the cleanup command to stop worker and Flower
 
-### Prerequisites for Local Celery Mode
+### Prerequisites for Local MQ Mode
 
 You must have Redis installed on your system:
 ```bash
@@ -372,7 +372,7 @@ brew install redis
 **Redis Management:**
 - Use `make redis-start` to start Redis (runs as daemon process)
 - Use `make redis-stop` to stop Redis when needed
-- Redis will automatically start when running `make dev-celery` or `make run-celery`
+- Redis will automatically start when running `make dev-mq` or `make run-mq`
 - Redis persists between development sessions for faster startups (stop manually if needed)
 
 ### Command Summary
@@ -380,10 +380,10 @@ brew install redis
 | Command | Mode | Port | Bot Token | Services Started |
 |---------|------|------|-----------|------------------|
 | `make dev` | Development | 8390 | DEV | Web only (subprocess) |
-| `make dev-celery` | Development | 8390 | DEV | Redis + Worker + Flower + Web |
+| `make dev-mq` | Development | 8390 | DEV | Redis + Worker + Flower + Web |
 | `make run` | Production | 8391 | PRODUCTION | Web only (subprocess) |
-| `make run-celery` | Production | 8391 | PRODUCTION | Redis + Worker + Flower + Web |
-| `make docker-compose-up-celery` | Production | 8391 | PRODUCTION | All services in Docker |
+| `make run-mq` | Production | 8391 | PRODUCTION | Redis + Worker + Flower + Web |
+| `make docker-compose-up-mq` | Production | 8391 | PRODUCTION | All services in Docker |
 
 ## Environment Variables
 
@@ -401,12 +401,12 @@ BOTTOKEN              # Production Telegram bot token
 WEBHOOK_URL           # Production webhook URL
 ```
 
-### Celery Mode Variables
+### MQ Mode Variables
 ```bash
-USE_CELERY            # Enable Celery mode (true/false)
+USE_CELERY            # Enable Celery mode (MQ pattern) (true/false)
 REDIS_URL             # Redis connection URL
-CELERY_BROKER         # Celery broker URL
-CELERY_RESULT_BACKEND # Celery result backend URL
+CELERY_BROKER         # MQ broker URL
+CELERY_RESULT_BACKEND # MQ result backend URL
 ```
 
 ### Station Search API
@@ -424,14 +424,14 @@ ADMIN_KORAIL_PW       # Default Korail password for admin quick-login
 
 ### Manual Testing Focus Areas
 - **Complete reservation flow**: End-to-end user journey testing
-- **Mode switching**: Verify subprocess and Celery mode functionality
+- **Mode switching**: Verify subprocess and Celery mode (MQ pattern) functionality
 - **Error handling**: Network failures, invalid credentials, API changes
 - **Process management**: Background task lifecycle and cleanup
 - **Environment isolation**: Dev and prod environment separation
 
 ### Performance Monitoring
 - **Subprocess mode**: Monitor process spawning and memory usage
-- **Celery mode**: Use Flower for task monitoring and worker health
+- **Celery mode (MQ pattern)**: Use Flower for task monitoring and worker health
 - **Resource usage**: Monitor container resource consumption
 - **Response times**: Webhook response latency and task completion times
 
@@ -439,14 +439,14 @@ ADMIN_KORAIL_PW       # Default Korail password for admin quick-login
 1. **Authentication flow**: Phone number verification and Korail login
 2. **Reservation process**: Date/time selection and background execution
 3. **Error recovery**: Network failures and session timeouts
-4. **Concurrent usage**: Multiple users in Celery mode
+4. **Concurrent usage**: Multiple users in Celery mode (MQ pattern)
 5. **Environment switching**: Dev to prod deployment verification
 
 ## Architecture Decisions and Rationales
 
 ### Why Dual Mode Architecture?
 - **Subprocess Mode**: Simplifies deployment for single users
-- **Celery Mode**: Enables scalability for multi-user scenarios
+- **MQ Mode**: Enables scalability for multi-user scenarios
 - **Configuration-based**: Clean separation without code duplication
 
 ### Why Docker Profiles?
@@ -463,8 +463,8 @@ Always run `make lint` before committing changes to maintain code formatting con
 
 ## Service Optimization Recommendations
 
-### Services That Can Be Removed (Celery Profile)
-1. **PostgreSQL (`postgres`)**: Not used anywhere in the codebase. Celery uses Redis for results.
+### Services That Can Be Removed (MQ Profile)
+1. **PostgreSQL (`postgres`)**: Not used anywhere in the codebase. MQ uses Redis for results.
    - Remove to save ~50MB RAM and disk space
    - Keep if planning to add persistent data storage in future
 
@@ -472,7 +472,7 @@ Always run `make lint` before committing changes to maintain code formatting con
    - Remove to save ~100MB RAM
    - Only add back if implementing scheduled tasks
 
-### Minimal Celery Profile (Recommended)
+### Minimal MQ Profile (Recommended)
 ```yaml
 Services needed: web_celery, redis, worker
 Optional: flower (for debugging only)
@@ -481,16 +481,16 @@ Remove: postgres, beat
 
 ## Important Notes for AI Assistant
 
-1. **Mode Selection**: Always consider whether changes affect subprocess mode, Celery mode, or both
+1. **Mode Selection**: Always consider whether changes affect subprocess mode, Celery mode (MQ pattern), or both
 2. **Environment Awareness**: Be mindful of local (IS_DEV=true) vs Docker/production configurations
 3. **Docker Profiles**: Remember to use appropriate profiles when testing Docker setups
 4. **State Management**: Understand the different storage mechanisms for each mode
 5. **Configuration Over Detection**: Use configuration parameters instead of ImportError patterns
-6. **Resource Considerations**: Subprocess mode should remain lightweight, Celery mode can use more resources
-7. **PostgreSQL**: Currently unused - Celery uses Redis for all storage needs
+6. **Resource Considerations**: Subprocess mode should remain lightweight, Celery mode (MQ pattern) can use more resources
+7. **PostgreSQL**: Currently unused - MQ uses Redis for all storage needs
 7. **Docker Build Strategy**: **CRITICAL** - When code changes, ALWAYS use `docker compose up -d --build` to ensure containers get updated code. All services use `build: .` context and share the same codebase. Never manually rebuild individual services or use complex docker build/tag workflows. The correct process is:
    ```bash
    docker compose down
-   docker compose --profile celery up -d --build     # For Celery mode
+   docker compose --profile celery up -d --build     # For Celery mode (MQ pattern)
    docker compose --profile subprocess up -d --build # For subprocess mode
    ```
