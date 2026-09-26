@@ -151,6 +151,15 @@ docker-warp-check:  ## Check that the warp container routes through Cloudflare W
 	@if [ "$(WARP_ENABLED)" = "false" ]; then echo "ℹ️  WARP is disabled (USE_WARP=$(USE_WARP))"; exit 0; fi
 	docker compose exec warp curl -sS --max-time 10 --socks5-hostname 127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace | grep -E "^(ip|loc|warp)="
 
+.PHONY: korail-login-check
+korail-login-check:  ## Diagnose ADMIN_KORAIL_ID/PW login inside Docker (shows server response, never the password; counts as 1 login attempt)
+	@svc=$$(docker compose ps --status running --services 2>/dev/null | grep -xE 'web_celery|web' | head -1); \
+	if [ -n "$$svc" ]; then \
+		docker compose exec -T $$svc python - < scripts/check_korail_login.py; \
+	else \
+		docker compose $(COMPOSE_FILES) run --rm --no-deps -T web_celery python - < scripts/check_korail_login.py; \
+	fi
+
 .PHONY: lint
 lint:	## Run lint
 	pipenv run black .

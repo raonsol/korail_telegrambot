@@ -62,16 +62,44 @@ class TestReserveHandler:
             mock_client.close.assert_called_once()
 
     def test_login_failure_reason_uses_korail_message(self, reserve_handler):
-        """The Korail message is kept as the failure reason, without '(None)'"""
+        """A pykorail/Korail message is kept as the failure reason, without '(None)'"""
+        msg = "휴대폰 번호로 로그인하려면 하이픈을 넣어야 합니다: '01012345678' 대신 '010-1234-5678'"
+        mock_client = Mock()
+        mock_client.login = Mock(side_effect=LoginFailedError(msg))
+
+        with patch("telegramBot.korail_client.Korail", return_value=mock_client):
+            assert reserve_handler.login("01012345678", "pw") is False
+
+        assert reserve_handler.loginError == msg
+        assert "(None)" not in reserve_handler.loginError
+
+    def test_login_failure_reason_without_server_reason(self, reserve_handler):
+        """pykorail's fallback text (no server reason/code) is not shown as a password error"""
         mock_client = Mock()
         mock_client.login = Mock(
-            side_effect=LoginFailedError("아이디 또는 비밀번호가 올바르지 않습니다")
+            side_effect=LoginFailedError(
+                "아이디 또는 비밀번호가 올바르지 않습니다", None
+            )
         )
 
         with patch("telegramBot.korail_client.Korail", return_value=mock_client):
-            assert reserve_handler.login("test_user", "wrong_password") is False
+            assert reserve_handler.login("me@example.com", "pw") is False
 
-        assert reserve_handler.loginError == "아이디 또는 비밀번호가 올바르지 않습니다"
+        assert "사유 없이 로그인을 거부" in reserve_handler.loginError
+
+    def test_login_failure_reason_with_server_code(self, reserve_handler):
+        """A real server rejection (with code) keeps the server message"""
+        mock_client = Mock()
+        mock_client.login = Mock(
+            side_effect=LoginFailedError(
+                "로그인 정보를 다시 확인해 주세요.", "WRR000101"
+            )
+        )
+
+        with patch("telegramBot.korail_client.Korail", return_value=mock_client):
+            assert reserve_handler.login("me@example.com", "pw") is False
+
+        assert reserve_handler.loginError == "로그인 정보를 다시 확인해 주세요."
 
     def test_login_failure_reason_for_network_error(self, reserve_handler):
         """Non-Korail errors get a generic reason instead of raw exception text"""

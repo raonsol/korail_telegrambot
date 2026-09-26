@@ -24,6 +24,9 @@ FATAL_ERRORS = (StationNotFoundError, PastDepartureError)
 
 WARP_TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"
 
+# pykorail(0.2.0) 이 서버 응답에 사유가 없을 때 넣는 기본 로그인 실패 문구
+PYKORAIL_FALLBACK_LOGIN_MSG = "아이디 또는 비밀번호가 올바르지 않습니다"
+
 
 def is_warp_enabled():
     """USE_WARP 토글 (기본값 true). false/0/no/off 이면 WARP 를 사용하지 않음"""
@@ -148,6 +151,10 @@ class ReserveHandler:
         str(KorailError) 는 "메시지 (코드)" 형식이라 코드가 없으면 "(None)" 이 붙으므로 msg 만 사용
         """
         if isinstance(error, KorailError) and error.msg:
+            # pykorail 은 서버가 사유(h_msg_txt)와 코드 없이 거부하면 이 문구를 대신 넣음
+            # 실제 비밀번호 오류는 서버가 사유와 코드(WRR000101 등)를 주므로 구분해서 안내
+            if error.code is None and error.msg == PYKORAIL_FALLBACK_LOGIN_MSG:
+                return "코레일 서버가 사유 없이 로그인을 거부했습니다. 잠시 후 다시 시도해주세요."
             return error.msg
         return "코레일 서버에 연결하지 못했습니다. 잠시 후 다시 시도해주세요."
 

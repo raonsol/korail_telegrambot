@@ -143,6 +143,7 @@ make docker-compose-down
 | `make run-mq` | 운영 서버 실행 (MQ 방식, 포트 8391) |
 | `make warp-check` | `WARP_PROXY_URL`이 Cloudflare WARP를 거치는지 확인 |
 | `make docker-warp-check` | Docker `warp` 컨테이너가 Cloudflare WARP를 거치는지 확인 |
+| `make korail-login-check` | Docker 안에서 관리자 계정 로그인 진단 (받은 ID/PW 상태, 코레일 원본 응답 표시. 비밀번호는 출력하지 않으며 로그인 1회로 집계) |
 
 ### Celery 명령어
 
