@@ -121,6 +121,54 @@ class TestRunReservation:
         assert result == {"status": "stopped", "attempts": 2}
         assert statuses == ["running"]
 
+    def test_fatal_error_stops_immediately(self):
+        """역 이름 오류·지난 날짜 등은 재시도하지 않고 바로 failed"""
+        fatal = {
+            "success": False,
+            "result": None,
+            "error": "존재하지 않는 역입니다",
+            "fatal": True,
+        }
+        handler = _handler([fatal, MISS, MISS])
+        result, reporter, statuses = _run(handler)
+        assert result["status"] == "failed"
+        assert statuses == ["running", "failed"]
+        assert reporter.send.call_args.kwargs["message"] == "존재하지 않는 역입니다"
+        assert handler.reserve_single_attempt.call_count == 1
+
+    @pytest.mark.parametrize(
+        "seat_type, option",
+        [
+            ("general", "GENERAL_FIRST"),
+            ("general_only", "GENERAL_ONLY"),
+            ("special", "SPECIAL_FIRST"),
+            ("special_only", "SPECIAL_ONLY"),
+        ],
+    )
+    def test_seat_type_is_passed_to_korail(self, seat_type, option):
+        handler = _handler([{"success": True, "result": "KTX", "error": None}])
+        reporter = Mock()
+        run_reservation(
+            {**SPEC, "seat_type": seat_type},
+            reporter,
+            handler_factory=lambda: handler,
+            sleep=lambda _: None,
+        )
+        assert handler.reserve_single_attempt.call_args.kwargs["special"] == option
+
+    def test_login_failure_reason_is_reported(self):
+        handler = _handler([], login=False)
+        handler.loginError = "코레일 서버가 사유 없이 로그인을 거부했습니다."
+        result, reporter, _ = _run(handler)
+        assert "사유 없이" in reporter.send.call_args.kwargs["message"]
+        assert "사유 없이" in result["message"]
+
+    @pytest.mark.parametrize("login", [True, False])
+    def test_korail_session_is_closed(self, login):
+        handler = _handler([MISS], login=login)
+        _run(handler, max_attempts=1)
+        handler.close.assert_called_once()
+
 
 class TestCallbackReporter:
     def test_payload(self):

@@ -1,9 +1,14 @@
 services:
   # Redis - 상태 관리 및 메시지 브로커 (Celery 모드에서만 사용)
+  # 컨테이너끼리만 사용하므로 호스트 포트를 열지 않음
+  # (로컬 make run-mq/dev-mq 의 Redis(6379)와 충돌 방지, 인증 없는 Redis 외부 노출 방지)
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     environment:
       - TZ=Asia/Seoul
     volumes:
@@ -24,8 +29,6 @@ services:
       PGTZ: Asia/Seoul
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U korail -d korail_bot"]
       interval: 5s
@@ -74,7 +77,7 @@ services:
       - INTERNAL_CALLBACK_URL=http://web_celery:8391/internal/events
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
       postgres:
         condition: service_healthy
     volumes:
@@ -99,8 +102,10 @@ services:
       - USE_CELERY=true
       - CELERY_WORKER_NAME=worker
     depends_on:
-      - redis
-      - postgres
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_started
     volumes:
       - ./logs:/app/logs
     networks:

@@ -67,7 +67,7 @@ Telegram ──webhook──▶ FastAPI(/message) ──▶ TelegramBot
    └────────────────────────────────────────────────────────────────────────────────────────────────┘
                      │ launch                                        ▲ POST /internal/events
                      ▼                                               │ (reservation_id, status, ...)
-          worker.py (subprocess)  또는  Celery worker ── korail2 ──▶ Korail
+          worker.py (subprocess)  또는  Celery worker ── pykorail ──▶ Korail
 ```
 
 ### 3.1 디렉터리 구조 (제안)
@@ -240,7 +240,7 @@ class CompositeNotifier:           # 등록된 모든 채널로 전송, 한 채�
 1) 전화번호 형식 검증 (010, 11자리)
 2) ALLOW_LIST 검증 ─ 미등록 → 401 (+ 기존처럼 구독자 브로드캐스트)
 3) 로그인 실패 횟수 확인 ─ 한도 초과 → 429   ※ 코레일은 5회 실패 시 계정 잠금
-4) korail2 로그인 (run_in_threadpool, 블로킹 호출)
+4) 코레일 로그인 (pykorail, 스레드에서 블로킹 호출)
 5) 성공 → 세션 생성, 비밀번호는 암호화하여 세션에 보관
 6) Set-Cookie: session=<opaque id>; HttpOnly; Secure; SameSite=Lax; Path=/
 ```
@@ -423,7 +423,7 @@ LOGIN_MAX_FAILURES=3
 
 ### 테스트 전략
 
-- **unit**: `ReservationRequest` 검증, `ReservationService`(가짜 Launcher/Store/Notifier), `AuthService`(korail2 로그인 mock, 실패 제한, 세션 만료), 암호화 왕복.
+- **unit**: `ReservationRequest` 검증, `ReservationService`(가짜 Launcher/Store/Notifier), `AuthService`(코레일 로그인 mock, 실패 제한, 세션 만료), 암호화 왕복.
 - **integration**: `httpx.AsyncClient`로 `/api/*` 흐름(로그인 → 예약 생성 → `/internal/events` 주입 → SSE 수신 → 취소), subprocess/celery 마커별로 실행 (`fakeredis` 활용).
 - **e2e (선택)**: Playwright로 로그인 → 예약 폼 제출 → 상태 반영, Lighthouse PWA 설치 가능 여부 점검.
 

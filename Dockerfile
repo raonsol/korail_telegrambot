@@ -25,6 +25,9 @@ COPY --from=webapp /webapp/dist ./webapp_dist
 # subprocess 모드 SQLite 저장 위치 (docker-compose에서 볼륨 마운트)
 RUN mkdir -p /app/data
 
+# print() 출력이 버퍼에 쌓이지 않고 바로 docker logs 에 보이도록
+ENV PYTHONUNBUFFERED=1
+
 EXPOSE 8390 8391
 
 CMD ["fastapi", "run", "app.py", "--host", "0.0.0.0", "--port", "8391"]

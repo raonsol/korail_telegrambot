@@ -2,13 +2,15 @@
 """
 Test Korail duplicate reservation behavior
 """
+
 import sys
 import os
 from datetime import datetime, timedelta
 
 sys.path.insert(0, "src")
 
-from korail2 import Korail, TrainType, ReserveOption
+from pykorail import TrainType, ReserveOption
+from telegramBot.korail_client import create_korail_client
 
 korail_id = os.getenv("ADMIN_KORAIL_ID")
 korail_pw = os.getenv("ADMIN_KORAIL_PW")
@@ -17,7 +19,9 @@ if not korail_id or not korail_pw:
     print("❌ ADMIN_KORAIL_ID or ADMIN_KORAIL_PW not set")
     sys.exit(1)
 
-tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y%m%d")
+tomorrow = (datetime.now() + timedelta(days=1)).replace(
+    hour=6, minute=0, second=0, microsecond=0
+)
 
 print("Testing consecutive reservations with same account...")
 print("=" * 60)
@@ -26,16 +30,18 @@ print("=" * 60)
 for i in range(5):
     print(f"\nAttempt {i+1}:")
     try:
-        korail = Korail(korail_id, korail_pw, auto_login=False)
-        if not korail.login():
-            print(f"  ❌ Login failed")
+        korail = create_korail_client()
+        try:
+            korail.login(korail_id, korail_pw)
+        except Exception as e:
+            print(f"  ❌ Login failed: {e}")
             continue
 
         print(f"  ✓ Login successful")
 
         # Search for trains
-        trains = korail.search_train(
-            "서울", "부산", tomorrow, "060000", train_type=TrainType.KTX
+        trains = korail.trains.search(
+            "서울", "부산", depart_after=tomorrow, train_type=TrainType.KTX
         )
 
         if not trains:
@@ -47,7 +53,9 @@ for i in range(5):
 
         # Try to reserve
         try:
-            reservation = korail.reserve(train, option=ReserveOption.GENERAL_FIRST)
+            reservation = korail.reservations.create(
+                train, option=ReserveOption.GENERAL_FIRST
+            )
             print(f"  ✅ Reservation SUCCESS: {reservation}")
         except Exception as e:
             error_msg = str(e)
@@ -64,9 +72,9 @@ print("\n" + "=" * 60)
 print("Checking final reservation list...")
 
 try:
-    korail = Korail(korail_id, korail_pw, auto_login=False)
-    korail.login()
-    reservations = korail.reservations()
+    korail = create_korail_client()
+    korail.login(korail_id, korail_pw)
+    reservations = korail.reservations.all()
     print(f"Total reservations: {len(reservations)}")
     for i, res in enumerate(reservations, 1):
         print(f"  {i}. {res}")

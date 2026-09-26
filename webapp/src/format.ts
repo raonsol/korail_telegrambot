@@ -84,4 +84,4 @@ export function formatPhoneInput(value: string): string {
 }
 
 export const KORAIL_PAYMENT_URL =
-  'https://www.letskorail.com/ebizprd/EbizPrdTicketpr13500W_pr13510.do'
+  'https://www.korail.com/ticket/reservation/list'

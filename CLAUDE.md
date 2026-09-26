@@ -10,7 +10,7 @@ KTX (Korean train) reservation automation with **two channels** — a Telegram b
 
 - **FastAPI**: Telegram webhook, web app REST API, worker callbacks, PWA static files
 - **python-telegram-bot**: Telegram Bot API interactions
-- **korail2**: KTX reservation API client library
+- **pykorail** (`==0.2.0`): KTX reservation API client library (코레일톡 앱 API, curl_cffi 기반)
 - **SQLAlchemy**: Users, web sessions, reservations (+30-day history), push subscriptions
   - SQLite (local / subprocess mode), PostgreSQL (Docker Celery mode)
 - **Redis + Celery**: Optional distributed task processing system (MQ pattern)
@@ -25,7 +25,7 @@ Browser (PWA) ────▶ /api/*   ─▶ web/routes_*.py (session cookie + 
                                                                               ▼
                      core/ (channel-agnostic)
                        ReservationService ─ Launcher ─▶ worker (subprocess | Celery)
-                       AuthService / UserService            │  korail2 loop (core/runner.py)
+                       AuthService / UserService            │  pykorail loop (core/runner.py)
                        Notifier ─▶ Telegram, SSE, Web Push  │
                           ▲                                 │
                           └── /internal/events ◀────────────┘ (per-reservation token)
@@ -88,6 +88,7 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 - **users.py** `UserService`: user DB (replaces `ALLOW_LIST`), Telegram chat linking
 - **notifier.py**: `Notifier` fan-out, `SSEBroker`, `WebPushChannel` (`TelegramBot.deliver` is also a channel)
 - **models.py / schemas.py / db.py / crypto.py / errors.py / vapid.py**
+- **src/version.py**: Internal version (`VERSION = "vX.Y"`) - single source for the bot start message and the Docker image tag (`Makefile` reads it)
 
 #### Web API (`src/web/`)
 - `routes_auth.py` (`/api/auth/*`), `routes_reservations.py`, `routes_stations.py` (cached 공공데이터 search), `routes_events.py` (SSE), `routes_push.py`, `routes_admin.py` (user management), `routes_internal.py` (`/internal/events`), `static.py` (`/app/*` SPA fallback + cache headers)
@@ -99,7 +100,9 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
   - Admin-only commands (after ADMINPW login in that chat): `/users`, `/adduser`, `/deluser`
 - **tasks.py**: `reservation_task(spec)`; Redis `reservation_task:{task_id}` guard against duplicate execution
 - **worker.py**: Subprocess entry point (reads spec from stdin)
-- **korail_client.py**: `ReserveHandler.login` / `reserve_single_attempt`
+- **korail_client.py** (pykorail): `ReserveHandler.login` (bool + `loginError` reason) / `reserve_single_attempt` / `close`
+  - `create_korail_client()`: logs Korail server block responses (code -2000)
+  - `FATAL_ERRORS` (`StationNotFoundError`, `PastDepartureError`): `reserve_single_attempt` returns `fatal: True` → `core/runner.py` reports `failed` immediately
 - **messages.py**, **calendar_keyboard.py**, **time_keyboard.py**, **station_keyboard.py**
 
 #### Web App (`webapp/`)
@@ -127,8 +130,8 @@ web: FastAPI application (subprocess mode, SQLite volume ./data)
 
 # MQ Mode Services
 web_celery: FastAPI application (Celery mode), INTERNAL_CALLBACK_URL=http://web_celery:8391/internal/events
-redis: Message broker and result backend (REQUIRED for MQ)
-postgres: Users / sessions / reservation history (REQUIRED for MQ web_celery)
+redis: Message broker and result backend (REQUIRED for MQ) - internal only (no host port), healthcheck gates web_celery/worker
+postgres: Users / sessions / reservation history (REQUIRED for MQ web_celery) - internal only (no host port), healthcheck gates web_celery
 worker: Celery worker processes (REQUIRED for MQ)
 beat: MQ scheduler (NOT NEEDED - no periodic tasks defined)
 flower: Web-based monitoring (OPTIONAL - for debugging)
@@ -293,6 +296,11 @@ make docker-push               # Publish Docker image
 make docker-compose-up         # Start subprocess mode
 make docker-compose-up-mq  # Start Celery mode (MQ pattern) (RECOMMENDED for production)
 make docker-compose-down       # Stop all services
+# docker-compose-up(-mq) recreates only changed containers (up -d --build). It first removes only the services
+# the target mode does not use (the other mode's services) to avoid port clashes, and
+# fails fast if host port 8391/5555 is taken by something outside this compose project (e.g. a local server)
+# They set BUILDX_NO_DEFAULT_ATTESTATIONS=1: default provenance attestations make every build a new image ID,
+# which would recreate all app containers even without code changes (build.provenance in compose is ignored by compose v5)
 make docker-compose-logs       # Show logs from running services
 
 # Code Changes - IMPORTANT: Always use --build when code changes
@@ -349,6 +357,9 @@ brew install redis
 ```
 
 **Redis Management:**
+- Docker Compose Redis is not published to the host, so local Redis (localhost:6379) and Docker can run side by side
+- `make redis-start` / `redis-stop` detect local Redis with `redis-cli ping` (not `pgrep`, which also matches Redis inside containers)
+- Local `make dev/run(-mq)` check that their web port (8390/8391) is free first; local Flower is skipped if 5555 is taken
 - Use `make redis-start` to start Redis (runs as daemon process)
 - Use `make redis-stop` to stop Redis when needed
 - Redis will automatically start when running `make dev-mq` or `make run-mq`
@@ -409,6 +420,16 @@ CELERY_RESULT_BACKEND # MQ result backend URL
 ```bash
 DATAGOV_API_KEY       # 공공데이터포털 API 서비스키 (역 검색용)
 ```
+
+### Korail Client (pykorail) Notes
+- pykorail is pinned (`==0.2.0`): `create_korail_client()` and `scripts/check_korail_login.py` wrap its private `client._api._parse`
+- `login()` raises `LoginFailedError` instead of returning `False`; `ReserveHandler.login()` still returns a bool and keeps a user-facing reason in `ReserveHandler.loginError`
+- Korail server block (anti-macro) responses look like `{"code": -2000, "id", "message"}`; pykorail drops them (login fails / search looks like "no trains"), so `create_korail_client()` wraps the response parser and logs them at ERROR (`코레일 서버 차단 응답 ...`, URL without query string). Cloudflare WARP egress (container and host proxy mode) was blocked with -2000 while direct egress worked, so WARP support was removed
+- pykorail's fallback "아이디 또는 비밀번호가 올바르지 않습니다" (code `None`) means the server sent no reason - real wrong-password responses carry a code such as `WRR000101`
+- `make korail-login-check` pipes `scripts/check_korail_login.py` into the running web container to diagnose ADMIN_KORAIL_ID/PW (env values as received, raw server response)
+- Station names are validated against Korail's station master before searching (`StationNotFoundError`)
+- Searching a past time raises `PastDepartureError`; `ReserveHandler._depart_after()` clamps today's past times to now (KST)
+- `TrainType` / `ReserveOption` are plain string constants (same values as korail2), safe for the worker spec JSON (subprocess stdin / Celery)
 
 ### Optional Variables
 ```bash

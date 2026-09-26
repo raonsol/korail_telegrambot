@@ -25,7 +25,8 @@ from .users import UserService
 
 logger = logging.getLogger(__name__)
 
-KorailLogin = Callable[[str, str], bool]
+# (성공 여부, 실패 사유) 또는 성공 여부만 반환
+KorailLogin = Callable[[str, str], "bool | tuple[bool, str]"]
 Alert = Callable[[str], Awaitable[None]]
 
 # "로그인 유지"를 끈 경우 세션 수명
@@ -34,10 +35,21 @@ SHORT_SESSION_HOURS = 12
 IP_MAX_FAILURES = 20
 
 
-def default_korail_login(korail_id: str, password: str) -> bool:
+def default_korail_login(korail_id: str, password: str) -> tuple[bool, str]:
     from telegramBot.korail_client import ReserveHandler
 
-    return ReserveHandler().login(korail_id, password)
+    handler = ReserveHandler()
+    try:
+        ok = handler.login(korail_id, password)
+        return ok, handler.loginError
+    finally:
+        handler.close()
+
+
+def _login_result(result) -> tuple[bool, str]:
+    if isinstance(result, tuple):
+        return bool(result[0]), result[1] or ""
+    return bool(result), ""
 
 
 @dataclass
@@ -160,13 +172,15 @@ class AuthService:
             raise NotAllowed("등록되지 않은 사용자입니다. 관리자에게 문의하세요.")
 
         korail_id = format_phone(user_id)
-        ok = await asyncio.to_thread(self.korail_login, korail_id, password)
+        ok, reason = _login_result(
+            await asyncio.to_thread(self.korail_login, korail_id, password)
+        )
         if not ok:
             failures = self.throttle.fail(phone_key)
             self.throttle.fail(ip_key)
             remaining = max(0, self.max_failures - failures)
             raise AuthFailed(
-                "코레일 로그인에 실패했습니다. 비밀번호를 확인해주세요. "
+                f"코레일 로그인에 실패했습니다. {reason or '비밀번호를 확인해주세요.'} "
                 f"(남은 시도 {remaining}회, 코레일은 5회 실패 시 계정이 잠깁니다)"
             )
 
@@ -189,11 +203,15 @@ class AuthService:
                 "관리자 코레일 계정(ADMIN_KORAIL_ID/PW)이 설정되지 않았습니다.",
                 code="ADMIN_NOT_CONFIGURED",
             )
-        ok = await asyncio.to_thread(
-            self.korail_login, self.admin_korail_id, self.admin_korail_pw
+        ok, reason = _login_result(
+            await asyncio.to_thread(
+                self.korail_login, self.admin_korail_id, self.admin_korail_pw
+            )
         )
         if not ok:
-            raise AuthFailed("관리자 계정으로 코레일 로그인에 실패했습니다.")
+            raise AuthFailed(
+                f"관리자 계정으로 코레일 로그인에 실패했습니다. {reason}".strip()
+            )
         self.throttle.reset(ip_key)
         return self._create_session(
             ADMIN_USER_ID, True, self.admin_korail_id, self.admin_korail_pw, remember

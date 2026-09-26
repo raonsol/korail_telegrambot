@@ -166,6 +166,32 @@ class TestTelegramBot:
             assert bot_instance.userDict[chat_id]["lastAction"] == 4
 
     @pytest.mark.asyncio
+    async def test_start_accept_admin_login_failure_shows_reason(self, bot_instance):
+        """Admin login failure message includes the Korail failure reason"""
+        chat_id = 123456
+        bot_instance._create_user(chat_id)
+
+        with patch("telegramBot.bot.settings") as mock_settings, patch(
+            "telegramBot.bot.ReserveHandler"
+        ) as mock_handler_class:
+            mock_settings.admin_password = "admin123"
+            mock_settings.admin_korail_id = "admin_id"
+            mock_settings.admin_korail_pw = "wrong_pw"
+
+            mock_handler = Mock()
+            mock_handler.login = Mock(return_value=False)
+            mock_handler.loginError = "아이디 또는 비밀번호가 올바르지 않습니다"
+            mock_handler_class.return_value = mock_handler
+
+            bot_instance.send_message = AsyncMock()
+
+            await bot_instance._start_accept(chat_id, "admin123")
+
+            msg = bot_instance.send_message.call_args[0][1]
+            assert "관리자 계정으로 로그인에 실패하였습니다" in msg
+            assert "사유 : 아이디 또는 비밀번호가 올바르지 않습니다" in msg
+
+    @pytest.mark.asyncio
     async def test_input_id_valid_phone(self, bot_instance):
         """Test _input_id with valid phone number"""
         chat_id = 123456
@@ -259,6 +285,7 @@ class TestTelegramBot:
         with patch("telegramBot.bot.ReserveHandler") as mock_handler_class:
             mock_handler = Mock()
             mock_handler.login = Mock(return_value=False)
+            mock_handler.loginError = "아이디 또는 비밀번호가 올바르지 않습니다"
             mock_handler_class.return_value = mock_handler
 
             bot_instance.send_message = AsyncMock()
@@ -267,6 +294,8 @@ class TestTelegramBot:
 
             # Should stay at password input stage (lastAction unchanged on failure)
             assert bot_instance.userDict[chat_id]["lastAction"] == 3
+            msg = bot_instance.send_message.call_args[0][1]
+            assert "사유 : 아이디 또는 비밀번호가 올바르지 않습니다" in msg
 
     @pytest.mark.asyncio
     async def test_subscribe_user(self, bot_instance, mock_telegram_update):

@@ -10,7 +10,7 @@ import time
 from typing import Callable, Optional
 
 import requests
-from korail2 import ReserveOption, TrainType
+from pykorail import ReserveOption, TrainType
 
 from telegramBot.korail_client import ReserveHandler
 
@@ -103,14 +103,51 @@ def run_reservation(
     Returns:
         dict: {"status": "success"|"failed"|"error"|"stopped", ...}
     """
+    handler = handler_factory()
+    try:
+        return _run_attempts(
+            spec,
+            handler,
+            reporter,
+            should_stop,
+            on_success,
+            max_attempts,
+            interval,
+            progress_every,
+            relogin_after_errors,
+            sleep,
+        )
+    finally:
+        # 코레일 HTTP 세션 정리 (pykorail)
+        close = getattr(handler, "close", None)
+        if callable(close):
+            close()
+
+
+def _login_failure_message(handler) -> str:
+    reason = getattr(handler, "loginError", "") or ""
+    return f"코레일 로그인에 실패했습니다. {reason}".strip()
+
+
+def _run_attempts(
+    spec,
+    handler,
+    reporter,
+    should_stop,
+    on_success,
+    max_attempts,
+    interval,
+    progress_every,
+    relogin_after_errors,
+    sleep,
+) -> dict:
     korail_id = spec["korail_id"]
     korail_pw = spec["korail_pw"]
     train_type = TRAIN_TYPES.get(spec["train_type"], TrainType.KTX)
     seat_type = SEAT_TYPES.get(spec["seat_type"], ReserveOption.GENERAL_FIRST)
 
-    handler = handler_factory()
     if not handler.login(korail_id, korail_pw):
-        message = "코레일 로그인에 실패했습니다."
+        message = _login_failure_message(handler)
         reporter.send("error", message=message)
         return {"status": "error", "message": message}
 
@@ -144,6 +181,10 @@ def run_reservation(
             return {"status": "success", "attempts": attempt, "train_info": train_info}
 
         error = result.get("error") or ""
+        if result.get("fatal"):
+            # 역 이름 오류, 지난 출발일 등은 재시도해도 결과가 같음
+            reporter.send("failed", message=error, attempts=attempt)
+            return {"status": "failed", "message": error, "attempts": attempt}
         if error and error not in EXPECTED_MISSES:
             consecutive_errors += 1
             if attempt % 10 == 0:
@@ -155,6 +196,9 @@ def run_reservation(
                 logger.info("Re-logging in to Korail")
                 if not handler.login(korail_id, korail_pw):
                     message = "세션 오류로 재로그인에 실패하여 예약이 중단되었습니다."
+                    reason = getattr(handler, "loginError", "")
+                    if reason:
+                        message = f"{message} ({reason})"
                     reporter.send("error", message=message, attempts=attempt)
                     return {"status": "error", "message": message}
                 consecutive_errors = 0

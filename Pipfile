@@ -8,7 +8,6 @@ name = "pypi"
 requests = "*"
 python-telegram-bot = "*"
 pyopenssl = "*"
-korail2 = "0.4.0"
 pydantic-settings = "*"
 redis = "*"
 celery = "*"
@@ -18,6 +17,7 @@ httpx = "*"
 pywebpush = "*"
 psycopg = {extras = ["binary"], version = "*"}
 cryptography = "*"
+pykorail = "==0.2.0"
 
 [dev-packages]
 black = "*"
