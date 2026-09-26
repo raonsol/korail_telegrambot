@@ -11,6 +11,9 @@ RUN pip install --no-cache-dir pipenv && \
 
 COPY src .
 
+# print() 출력이 버퍼에 쌓이지 않고 바로 docker logs 에 보이도록
+ENV PYTHONUNBUFFERED=1
+
 EXPOSE 8390 8391
 
 CMD ["fastapi", "run", "app.py", "--host", "0.0.0.0", "--port", "8391"]

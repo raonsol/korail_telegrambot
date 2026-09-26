@@ -169,6 +169,79 @@ class TestCeleryTasks:
         assert app.conf.task_serializer == "json"
         assert app.conf.accept_content == ["json"]
 
+    @pytest.mark.parametrize(
+        "special_info, expected_key",
+        [
+            ("GENERAL_FIRST", "general"),
+            ("GENERAL_ONLY", "general_only"),
+            ("SPECIAL_FIRST", "special"),
+            ("SPECIAL_ONLY", "special_only"),
+        ],
+    )
+    def test_celery_task_receives_selected_seat_type(
+        self, mock_redis_client, sample_user_data, special_info, expected_key
+    ):
+        """The seat option chosen in the bot is passed to the Celery task"""
+        with patch("telegramBot.bot.ApplicationBuilder"), patch(
+            "telegramBot.bot.REDIS_AVAILABLE", True
+        ), patch(
+            "telegramBot.bot.redis.Redis.from_url", return_value=mock_redis_client
+        ):
+            from telegramBot.bot import TelegramBot
+
+            bot = TelegramBot("test_token", enable_redis_celery=True)
+            train_info = {**sample_user_data["trainInfo"], "specialInfo": special_info}
+
+            with patch("telegramBot.tasks.reservation_task") as mock_task:
+                mock_task.delay = Mock(return_value=Mock(id="test-task-id"))
+                bot._start_celery_task(train_info, sample_user_data["userInfo"], 1)
+
+            reservation_data = mock_task.delay.call_args[0][1]
+            assert reservation_data["prefer_seat_type"] == expected_key
+
+    @pytest.mark.parametrize(
+        "prefer_seat_type, expected_option",
+        [
+            ("general", "GENERAL_FIRST"),
+            ("general_only", "GENERAL_ONLY"),
+            ("special", "SPECIAL_FIRST"),
+            ("special_only", "SPECIAL_ONLY"),
+        ],
+    )
+    @patch("telegramBot.tasks.ReserveHandler")
+    @patch("telegramBot.tasks.requests.post")
+    @patch("telegramBot.tasks.redis.Redis.from_url")
+    def test_reservation_task_uses_seat_type(
+        self,
+        mock_redis_from_url,
+        mock_requests_post,
+        mock_handler_class,
+        sample_reservation_data,
+        prefer_seat_type,
+        expected_option,
+    ):
+        """The Celery task reserves with the ReserveOption matching prefer_seat_type"""
+        from telegramBot.tasks import reservation_task
+
+        mock_redis = Mock()
+        mock_redis.hget = Mock(return_value=None)
+        mock_redis_from_url.return_value = mock_redis
+        mock_handler = Mock()
+        mock_handler.login = Mock(return_value=True)
+        mock_handler.reserve_single_attempt = Mock(
+            return_value={"success": True, "result": "reserved", "error": None}
+        )
+        mock_handler_class.return_value = mock_handler
+
+        reservation_data = {
+            **sample_reservation_data,
+            "prefer_seat_type": prefer_seat_type,
+        }
+        reservation_task(123456, reservation_data, "http://localhost/callback")
+
+        call_kwargs = mock_handler.reserve_single_attempt.call_args[1]
+        assert call_kwargs["special"] == expected_option
+
     @patch("telegramBot.tasks.ReserveHandler")
     @patch("telegramBot.tasks.requests.post")
     @patch("telegramBot.tasks.redis.Redis.from_url")

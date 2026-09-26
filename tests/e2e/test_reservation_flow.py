@@ -5,7 +5,7 @@ End-to-end tests for complete reservation flow
 import pytest
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from telegram import Update
-from korail2 import TrainType, ReserveOption
+from pykorail import TrainType, ReserveOption
 
 
 @pytest.mark.e2e

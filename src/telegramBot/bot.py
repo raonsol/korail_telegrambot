@@ -12,7 +12,7 @@ try:
 except ImportError:
     REDIS_AVAILABLE = False
 
-from korail2 import ReserveOption, TrainType
+from pykorail import ReserveOption, TrainType
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -428,13 +428,18 @@ class TelegramBot:
             )
 
             reserve_handler = ReserveHandler()
-            if reserve_handler.login(username, password):
+            loginSuc = reserve_handler.login(username, password)
+            reserve_handler.close()
+            if loginSuc:
                 msg = Messages.Info.INPUT_DATE
                 self.userDict[chat_id]["lastAction"] = 4
                 await self.send_message(chat_id, msg, reply_markup=create_calendar())
             else:
                 self._reset_user_state(chat_id)
-                msg = "관리자 계정으로 로그인에 문제가 발생하였습니다."
+                msg = f"""관리자 계정으로 로그인에 실패하였습니다.
+사유 : {reserve_handler.loginError}
+
+ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
                 await self.send_message(chat_id, msg)
             return None
 
@@ -486,6 +491,7 @@ class TelegramBot:
         password = self.userDict[chat_id]["userInfo"]["korailPw"]
         reserve_handler = ReserveHandler()
         loginSuc = reserve_handler.login(username, password)
+        reserve_handler.close()
         print(loginSuc)
         if loginSuc:
             msg = Messages.Info.INPUT_DATE
@@ -493,7 +499,10 @@ class TelegramBot:
             await self.send_message(chat_id, msg, reply_markup=create_calendar())
         else:
             # 로그인 실패 시 비밀번호 재입력 또는 뒤로가기 선택지 제공
-            msg = f"""로그인에 실패하였습니다. 로그인에 사용한 정보는 다음과 같습니다.
+            msg = f"""로그인에 실패하였습니다.
+사유 : {reserve_handler.loginError}
+
+로그인에 사용한 정보는 다음과 같습니다.
 ==============
 아이디 : {username}
 ==============
@@ -860,6 +869,13 @@ class TelegramBot:
             train_type_str = (
                 "KTX" if train_info["trainType"] == TrainType.KTX else "ALL"
             )
+            # Convert ReserveOption to the seat type key expected by tasks.py
+            seat_type_keys = {
+                ReserveOption.GENERAL_FIRST: "general",
+                ReserveOption.GENERAL_ONLY: "general_only",
+                ReserveOption.SPECIAL_FIRST: "special",
+                ReserveOption.SPECIAL_ONLY: "special_only",
+            }
 
             # Prepare reservation data for Celery task
             reservation_data = {
@@ -871,8 +887,8 @@ class TelegramBot:
                 "dep_time": f"{train_info['depTime']}00",
                 "arr_time": train_info.get("maxDepTime"),
                 "train_type": train_type_str,
-                "prefer_seat_type": (
-                    "special" if train_info["specialInfo"] == "Y" else "general"
+                "prefer_seat_type": seat_type_keys.get(
+                    train_info["specialInfo"], "general"
                 ),
                 "attempts": 0,
             }

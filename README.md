@@ -136,6 +136,7 @@ make docker-compose-down
 | `make dev-mq` | 개발 서버 실행 (MQ 방식, 포트 8390) |
 | `make run` | 운영 서버 실행 (subprocess 모드, 포트 8391) |
 | `make run-mq` | 운영 서버 실행 (MQ 방식, 포트 8391) |
+| `make korail-login-check` | Docker 안에서 관리자 계정 로그인 진단 (받은 ID/PW 상태, 코레일 원본 응답 표시. 비밀번호는 출력하지 않으며 로그인 1회로 집계) |
 
 ### Celery 명령어
 

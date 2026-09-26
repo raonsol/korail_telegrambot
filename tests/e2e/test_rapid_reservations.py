@@ -2,6 +2,7 @@
 """
 Test rapid consecutive reservations (simulating parallel behavior)
 """
+
 import sys
 import os
 from datetime import datetime, timedelta
@@ -10,12 +11,15 @@ import time
 
 sys.path.insert(0, "src")
 
-from korail2 import Korail, TrainType, ReserveOption
+from pykorail import TrainType, ReserveOption
+from telegramBot.korail_client import create_korail_client
 
 korail_id = os.getenv("ADMIN_KORAIL_ID")
 korail_pw = os.getenv("ADMIN_KORAIL_PW")
 
-tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y%m%d")
+tomorrow = (datetime.now() + timedelta(days=1)).replace(
+    hour=7, minute=0, second=0, microsecond=0
+)
 
 results = []
 lock = threading.Lock()
@@ -23,11 +27,11 @@ lock = threading.Lock()
 
 def try_reserve(worker_id):
     try:
-        korail = Korail(korail_id, korail_pw, auto_login=False)
-        korail.login()
+        korail = create_korail_client()
+        korail.login(korail_id, korail_pw)
 
-        trains = korail.search_train(
-            "서울", "부산", tomorrow, "070000", train_type=TrainType.KTX
+        trains = korail.trains.search(
+            "서울", "부산", depart_after=tomorrow, train_type=TrainType.KTX
         )
         if not trains:
             with lock:
@@ -37,7 +41,9 @@ def try_reserve(worker_id):
         train = trains[0]
 
         try:
-            reservation = korail.reserve(train, option=ReserveOption.GENERAL_FIRST)
+            reservation = korail.reservations.create(
+                train, option=ReserveOption.GENERAL_FIRST
+            )
             with lock:
                 results.append((worker_id, "SUCCESS", str(reservation)))
         except Exception as e:
@@ -88,9 +94,9 @@ print(f"{'='*60}")
 # Check actual reservations
 print("\nChecking actual reservations...")
 try:
-    korail = Korail(korail_id, korail_pw, auto_login=False)
-    korail.login()
-    reservations = korail.reservations()
+    korail = create_korail_client()
+    korail.login(korail_id, korail_pw)
+    reservations = korail.reservations.all()
     print(f"Total reservations: {len(reservations)}")
 except Exception as e:
     print(f"Error: {e}")
