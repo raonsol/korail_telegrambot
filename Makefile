@@ -139,17 +139,18 @@ celery-flower-stop:  ## Stop Flower monitoring UI
 		rm -f ${FLOWER_PID_FILE}; \
 	fi
 
+# WARP 출구 확인: 코레일은 IPv4 전용이라 IPv4 로만 접속되는 1.1.1.1 로 확인 (ip=104.x, warp=on 이면 정상)
 .PHONY: warp-check
 warp-check:  ## Check that WARP_PROXY_URL routes through Cloudflare WARP (local, expects warp=on or warp=plus)
 	@if [ "$(WARP_ENABLED)" = "false" ]; then echo "ℹ️  WARP is disabled (USE_WARP=$(USE_WARP))"; exit 0; fi
 	@if [ -z "$(WARP_PROXY_URL)" ]; then echo "❌ WARP_PROXY_URL is not set"; exit 1; fi
 	@echo "🔍 Checking Cloudflare WARP via $(WARP_PROXY_URL)..."
-	@curl -sS --max-time 10 --proxy "$(WARP_PROXY_URL)" https://www.cloudflare.com/cdn-cgi/trace | grep -E "^(ip|loc|warp)="
+	@curl -sS --max-time 10 --proxy "$(WARP_PROXY_URL)" https://1.1.1.1/cdn-cgi/trace | grep -E "^(ip|loc|warp)="
 
 .PHONY: docker-warp-check
 docker-warp-check:  ## Check that the warp container routes through Cloudflare WARP (Docker, expects warp=on or warp=plus)
 	@if [ "$(WARP_ENABLED)" = "false" ]; then echo "ℹ️  WARP is disabled (USE_WARP=$(USE_WARP))"; exit 0; fi
-	docker compose exec warp curl -sS --max-time 10 --socks5-hostname 127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace | grep -E "^(ip|loc|warp)="
+	docker compose exec warp curl -sS --max-time 10 --socks5-hostname 127.0.0.1:1080 https://1.1.1.1/cdn-cgi/trace | grep -E "^(ip|loc|warp)="
 
 .PHONY: korail-login-check
 korail-login-check:  ## Diagnose ADMIN_KORAIL_ID/PW login inside Docker (shows server response, never the password; counts as 1 login attempt)

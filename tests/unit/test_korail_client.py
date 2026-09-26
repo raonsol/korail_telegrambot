@@ -669,6 +669,8 @@ class TestWarpProxy:
             assert check_warp_status() == "on"
 
         assert mock_get.call_args[1]["proxies"]["https"] == "socks5h://warp:1080"
+        # 코레일(IPv4 전용)과 같은 IPv4 출구를 보도록 IP 주소로 확인
+        assert mock_get.call_args[0][0] == "https://1.1.1.1/cdn-cgi/trace"
 
     def test_check_warp_status_error(self, monkeypatch):
         """check_warp_status reports proxy connection errors"""

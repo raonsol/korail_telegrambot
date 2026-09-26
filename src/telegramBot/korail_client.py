@@ -25,7 +25,9 @@ KST = timezone(timedelta(hours=9))
 # 재시도해도 결과가 바뀌지 않는 오류 (역 이름 오류, 이미 지난 날짜)
 FATAL_ERRORS = (StationNotFoundError, PastDepartureError)
 
-WARP_TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"
+# 코레일(smart.letskorail.com)은 IPv4 전용이라 IPv4 출구를 확인해야 함.
+# www.cloudflare.com 은 IPv6 도 제공해 WARP 경유 시 IPv6 출구가 나오므로 IP 주소로 접속
+WARP_TRACE_URL = "https://1.1.1.1/cdn-cgi/trace"
 
 # 코레일 서버가 매크로/비정상 환경으로 판단해 요청을 차단할 때 주는 응답 코드
 # 응답 형식이 {"code": -2000, "id": ..., "message": ...} 로 일반 API 응답과 달라 pykorail 이 버림
