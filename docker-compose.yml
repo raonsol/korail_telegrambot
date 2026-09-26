@@ -13,7 +13,7 @@ services:
     profiles:
       - celery  # Only start with Celery profile
 
-  # PostgreSQL - 영구 데이터 저장 (Celery 모드에서만 사용)
+  # PostgreSQL - 사용자/세션/예약 이력 저장 (Celery 모드)
   postgres:
     image: postgres:15-alpine
     environment:
@@ -26,6 +26,11 @@ services:
       - postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U korail -d korail_bot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     networks:
       - korail_network
     profiles:
@@ -41,8 +46,11 @@ services:
     environment:
       - TZ=Asia/Seoul
       - USE_CELERY=false
+      # 사용자/세션/예약 이력 (SQLite)
+      - DATABASE_URL=sqlite:////app/data/korail_bot.db
     volumes:
       - ./logs:/app/logs
+      - ./data:/app/data
     networks:
       - korail_network
     profiles:
@@ -61,9 +69,14 @@ services:
       - REDIS_URL=redis://redis:6379
       - CELERY_BROKER=redis://redis:6379
       - CELERY_RESULT_BACKEND=redis://redis:6379
+      - DATABASE_URL=postgresql://korail:password@postgres:5432/korail_bot
+      # 워커 컨테이너가 예약 상태를 보고할 주소
+      - INTERNAL_CALLBACK_URL=http://web_celery:8391/internal/events
     depends_on:
-      - redis
-      - postgres
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
     volumes:
       - ./logs:/app/logs
     networks:

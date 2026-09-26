@@ -4,43 +4,65 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture Overview
 
-This is a Telegram bot for KTX (Korean train) reservation automation built with a dual-mode architecture supporting both lightweight subprocess execution and scalable distributed processing.
+KTX (Korean train) reservation automation with **two channels** — a Telegram bot and a web app (PWA) — sharing one channel-agnostic reservation domain. Reservations always run on the backend, with a dual-mode architecture supporting both lightweight subprocess execution and scalable distributed processing.
 
 ### Technology Stack
 
-- **FastAPI**: Modern web framework for webhook-based Telegram bot backend
-- **python-telegram-bot**: Comprehensive library for Telegram Bot API interactions
+- **FastAPI**: Telegram webhook, web app REST API, worker callbacks, PWA static files
+- **python-telegram-bot**: Telegram Bot API interactions
 - **korail2**: KTX reservation API client library
+- **SQLAlchemy**: Users, web sessions, reservations (+30-day history), push subscriptions
+  - SQLite (local / subprocess mode), PostgreSQL (Docker Celery mode)
 - **Redis + Celery**: Optional distributed task processing system (MQ pattern)
-- **PostgreSQL**: Optional persistent data storage for Celery mode (MQ pattern)
-- **Docker**: Complete containerization with multi-environment support
+- **React + Vite + vite-plugin-pwa** (`webapp/`): Installable PWA with offline shell and Web Push
+- **Docker**: Multi-stage build (Node builds the PWA, Python image serves it)
+
+### Layers
+
+```
+Telegram ─webhook─▶ /message ─▶ telegramBot/bot.py (conversation state only) ─┐
+Browser (PWA) ────▶ /api/*   ─▶ web/routes_*.py (session cookie + CSRF) ──────┤
+                                                                              ▼
+                     core/ (channel-agnostic)
+                       ReservationService ─ Launcher ─▶ worker (subprocess | Celery)
+                       AuthService / UserService            │  korail2 loop (core/runner.py)
+                       Notifier ─▶ Telegram, SSE, Web Push  │
+                          ▲                                 │
+                          └── /internal/events ◀────────────┘ (per-reservation token)
+```
 
 ### Execution Modes
 
 #### Subprocess Mode (Default/Lightweight)
 - **Purpose**: Single-user deployments, development, testing
-- **Storage**: In-memory Python dictionaries (`userDict`, `runningStatus`, `subscribes`)
-- **Background Tasks**: Python subprocess execution via `telegramBot.worker`
+- **Storage**: SQLite (`DATABASE_URL`, default `sqlite:///./korail_bot.db`) + in-memory conversation state (`userDict`)
+- **Background Tasks**: `python -m telegramBot.worker`, reservation spec passed via **stdin JSON** (never argv)
 - **Dependencies**: Minimal - only FastAPI web server
-- **Resource Usage**: Low memory and CPU footprint
 - **Scaling**: Vertical scaling only (single server)
 
 #### Celery Mode (MQ Pattern, Distributed/Scalable)
 - **Purpose**: Multi-user deployments, production environments
-- **Storage**: Redis for state management and task queuing
-- **Background Tasks**: Distributed Celery workers with task monitoring
-- **Dependencies**: Redis (broker), PostgreSQL (optional persistence), Celery workers
-- **Resource Usage**: Higher but horizontally scalable
-- **Scaling**: Horizontal scaling across multiple servers
+- **Storage**: PostgreSQL (Docker) for users/sessions/reservations; Redis as broker/result backend
+- **Background Tasks**: `reservation_task(spec)` published with `task_id=reservation_id`
+- **Dependencies**: Redis, PostgreSQL, Celery workers
+- **Scaling**: Horizontal scaling of workers
+
+Both modes share the same retry loop (`core/runner.py::run_reservation`) and report to `/internal/events`.
+
+### Channels
+
+- `ENABLE_TELEGRAM` (default true): Telegram bot + `/message` webhook. Requires bot token + webhook URL.
+- `ENABLE_WEBAPP` (default false): `/api/*` + PWA at `/app/` (+ `/api/docs`). Requires HTTPS in production (service worker, push, `Secure` cookies).
+- `/internal/events` (worker callbacks) is always mounted. Block `/internal` at the reverse proxy if possible.
 
 ### Environment Configurations
 
 #### Local Execution (Port 8390)
 - **Bot Token**: `BOTTOKEN_DEV` (development bot)
 - **Webhook URL**: `WEBHOOK_URL_DEV`
-- **Environment**: `IS_DEV=true` automatically set by Makefile
+- **Environment**: `IS_DEV=true` automatically set by Makefile (cookies are not `Secure`)
 - **Purpose**: Local development and testing
-- **Commands**: `make dev` (subprocess) / `make dev-mq` (Celery/MQ)
+- **Commands**: `make dev` (subprocess) / `make dev-mq` (Celery/MQ) / `make webapp-dev` (PWA dev server on 5173, proxies `/api` to 8390)
 
 #### Docker/Production (Port 8391)
 - **Bot Token**: `BOTTOKEN` (production bot)
@@ -51,169 +73,112 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 
 ### Key Components
 
-#### Core Application Files
-- **src/app.py**: FastAPI server entry point
-  - Webhook setup and lifecycle management
-  - Health check endpoints
-  - Reservation completion callbacks
-  - MQ task result handling
+#### Application Assembly
+- **src/app.py**: Builds `Services`, the optional `TelegramBot`, and the FastAPI app (`web/factory.py::create_app`)
+- **src/web/factory.py**: Lifespan (DB `create_all` + ALLOW_LIST seed, housekeeping loop, webhook), router mounting
+- **src/config.py**: Environment-based settings (`WebSettings`, `CelerySettings`)
 
-- **src/config.py**: Configuration management
-  - Environment-based settings
-  - Redis/MQ connection parameters
-  - Bot token and webhook URL selection
+#### Core Domain (`src/core/`)
+- **reservations.py** `ReservationService`: start / cancel / list / worker events / stale expiry / 30-day purge
+  - Issues `reservation_id` (uuid hex) and a per-reservation callback token (only its SHA-256 is stored)
+  - Limits: `MAX_CONCURRENT_RESERVATIONS` (global), `MAX_RESERVATIONS_PER_USER` (admin exempt)
+- **launchers.py**: `SubprocessLauncher` (stdin spec, `process.wait()` thread → `handle_process_exit`), `CeleryLauncher` (encrypts Korail password for the broker), `create_launcher()` (falls back to subprocess if Redis is unreachable)
+- **runner.py**: Worker-side loop shared by subprocess and Celery (`CallbackReporter` → `/internal/events`). Must not import DB/web modules.
+- **auth.py** `AuthService`: web login (DB user check → throttle → Korail login), admin login, server-side sessions (token hash in DB, Fernet-encrypted Korail password), CSRF token
+- **users.py** `UserService`: user DB (replaces `ALLOW_LIST`), Telegram chat linking
+- **notifier.py**: `Notifier` fan-out, `SSEBroker`, `WebPushChannel` (`TelegramBot.deliver` is also a channel)
+- **models.py / schemas.py / db.py / crypto.py / errors.py / vapid.py**
 
-#### Bot Logic
-- **src/telegramBot/bot.py**: Main bot implementation
-  - **Dual-mode initialization**: Configuration-based Redis/MQ setup
-  - **State management**: User conversation flow and reservation tracking
-  - **Command handlers**: `/start`, `/cancel`, `/status`, admin commands
-  - **Callback handlers**: Interactive keyboard responses
-  - **Process management**: Subprocess and MQ task orchestration
+#### Web API (`src/web/`)
+- `routes_auth.py` (`/api/auth/*`), `routes_reservations.py`, `routes_stations.py` (cached 공공데이터 search), `routes_events.py` (SSE), `routes_push.py`, `routes_admin.py` (user management), `routes_internal.py` (`/internal/events`), `static.py` (`/app/*` SPA fallback + cache headers)
+- `deps.py`: `korail_session` cookie (HttpOnly, SameSite=Lax), `X-CSRF-Token` required on non-GET
+- Errors are returned as `{"code": ..., "message": ...}` (`core/errors.py` → HTTP status)
 
-- **src/telegramBot/tasks.py**: MQ task definitions
-  - **reservation_task**: Distributed reservation processing
-  - **Callback system**: HTTP status updates to main application
-  - **Error handling**: Automatic retry logic and failure notifications
+#### Telegram Bot (`src/telegramBot/`)
+- **bot.py**: Conversation state machine only (`userDict`); calls `ReservationService`; `deliver()` sends results
+  - Admin-only commands (after ADMINPW login in that chat): `/users`, `/adduser`, `/deluser`
+- **tasks.py**: `reservation_task(spec)`; Redis `reservation_task:{task_id}` guard against duplicate execution
+- **worker.py**: Subprocess entry point (reads spec from stdin)
+- **korail_client.py**: `ReserveHandler.login` / `reserve_single_attempt`
+- **messages.py**, **calendar_keyboard.py**, **time_keyboard.py**, **station_keyboard.py**
 
-- **src/telegramBot/worker.py**: Subprocess worker implementation
-  - **Standalone process**: Isolated reservation execution
-  - **Korail API integration**: Direct API calls with session management
-  - **Callback system**: HTTP status updates via completion endpoint
-
-#### Supporting Modules
-- **src/telegramBot/korail_client.py**: Korail API client wrapper
-- **src/telegramBot/messages.py**: Centralized message templates
-- **src/telegramBot/calendar_keyboard.py**: Interactive date selection interface
-- **src/telegramBot/time_keyboard.py**: Time preference selection interface
-- **src/telegramBot/station_keyboard.py**: Station search and selection interface (공공데이터포털 API)
+#### Web App (`webapp/`)
+- Vite + React + TypeScript, TanStack Query, react-router (basename `/app`)
+- `src/sw.ts`: Workbox precache (offline shell), push + notificationclick handlers (`injectManifest`)
+- Screens: login (user/admin), home (active + 30-day history), new reservation, detail, settings (push/Telegram notify/install), admin (users, all reservations)
+- Dates/times are validated in **KST** on both client and server
+- Icons: `npm run generate-icons` from `public/icon.svg`
 
 ### Docker Architecture
 
 #### Profile-Based Service Management
-- **No Profile**: Base services only
-- **`subprocess` Profile**: Lightweight web service only
-- **`celery` Profile**: Full stack with Redis, PostgreSQL, workers
+- **`subprocess` Profile**: `web` only (SQLite at `./data`)
+- **`celery` Profile**: `web_celery`, `redis`, `postgres`, `worker` (+ `beat`, `flower`)
 
 #### Container Configuration
 - **Network**: Uses `korail_prod_network` bridge network
 - **Port Mapping**: Port 8391 for production Docker deployment
-- **Note**: Local execution uses port 8390 (non-Docker)
+- **Image**: Multi-stage — `node:22-alpine` builds `webapp/dist` → copied to `/app/webapp_dist`
 
 #### Service Definitions
 ```yaml
 # Subprocess Mode Services
-web: FastAPI application (subprocess mode)
+web: FastAPI application (subprocess mode, SQLite volume ./data)
 
 # MQ Mode Services
-web_celery: FastAPI application (Celery mode (MQ pattern))
-redis: Message broker and state storage (REQUIRED for MQ)
-postgres: Persistent database (CURRENTLY UNUSED - reserved for future use)
+web_celery: FastAPI application (Celery mode), INTERNAL_CALLBACK_URL=http://web_celery:8391/internal/events
+redis: Message broker and result backend (REQUIRED for MQ)
+postgres: Users / sessions / reservation history (REQUIRED for MQ web_celery)
 worker: Celery worker processes (REQUIRED for MQ)
 beat: MQ scheduler (NOT NEEDED - no periodic tasks defined)
 flower: Web-based monitoring (OPTIONAL - for debugging)
 ```
 
 **Important Notes:**
-- **PostgreSQL**: Currently not used in the codebase. MQ uses Redis for both broker and result backend. Can be removed to save resources or kept for future development.
-- **Beat**: No periodic tasks (`@periodic_task`) are defined, so this service is unused. Can be removed.
+- **PostgreSQL**: Now used by `web_celery` (healthcheck-gated). Workers do not access the DB.
+- **Beat**: No periodic tasks are defined (housekeeping runs inside the web process). Can be removed.
 - **Flower**: Only needed during development/debugging to monitor MQ tasks.
 
 ### State Management Architecture
 
-#### Subprocess Mode State
 ```python
-# In-memory storage (bot.py)
-userDict = {}        # User conversation state and reservation details
-runningStatus = {}   # Active reservation processes
-                     # Key: PID (subprocess mode) or task_id (Celery mode (MQ pattern))
-                     # Value: {chat_id, task_id/pid, korailId, method}
-subscribes = []      # Users receiving broadcast notifications
+# DB (SQLAlchemy, core/models.py) - both modes
+users              # id = phone digits, is_active, telegram_chat_id, telegram_notify
+web_sessions       # id = sha256(cookie token), encrypted Korail password, csrf_token, expires_at
+reservations       # id = reservation_id, owner_id, origin, chat_id, status, runner_ref, attempts, ...
+push_subscriptions # Web Push endpoints per user
+
+# In-memory (bot.py) - Telegram conversation only
+userDict = {}      # chat_id -> {inProgress, lastAction, userInfo{korailId, korailPw, ownerId, isAdmin}, trainInfo}
+subscribes = []    # chats receiving broadcast notifications
 ```
 
-#### MQ Mode State
-```python
-# Redis-based storage
-redis_client: Redis connection for state persistence
-celery_app: MQ application for task management
-# PostgreSQL for optional long-term data persistence
+Reservation status: `queued → running → success | failed | error | cancelled`.
+Housekeeping (every 10 min): RUNNING idle > 30 min or QUEUED > 24 h → `error`; terminal reservations older than `RESERVATION_RETENTION_DAYS` (default **30**) are deleted; expired sessions are deleted.
 
-# Task-based isolation
-# Each reservation uses MQ task_id as unique identifier
-# Redis key format: reservation_task:{task_id}
-# This allows same user to have multiple concurrent reservations
-```
+The DB schema is created with `create_all` (no migrations yet). Add Alembic before changing existing columns.
 
 ### Multiple Reservation Support (Important!)
 
-**Design Philosophy**: Each reservation task is completely independent, identified by its unique task_id (MQ) or PID (subprocess).
+**Design Philosophy**: Each reservation is completely independent, identified by the `reservation_id` issued by `ReservationService`.
 
-#### Key Implementation Details
+- `runner_ref` holds the PID (subprocess) or Celery task id (== `reservation_id`); it is only used for cancellation.
+- Celery Redis guard key: `reservation_task:{task_id}` (task_id == reservation_id)
+- Worker callbacks carry `reservation_id` + token → only that reservation is updated
+- Same user can run several reservations at once, from Telegram and the web (per-user limit applies)
+- Telegram cancel menu: callback data `cancel_{reservation_id}` or `cancel_all`
+- Owner vs. chat: Telegram lists reservations where `owner_id == logged-in phone` OR `chat_id == this chat`; the web lists by `owner_id`; admin can use `scope=all`
 
-1. **Task Isolation**
-   - **Subprocess Mode**: Uses process PID as unique identifier
-   - **MQ Mode**: Uses MQ task_id (`self.request.id`) as unique identifier
-   - Each reservation maintains independent state in `runningStatus[task_id]`
-
-2. **Redis Key Structure (MQ Mode)**
-   ```python
-   # tasks.py line 54
-   reservation_key = f"reservation_task:{self.request.id}"
-
-   # This allows:
-   # - Same user, multiple different reservations (different routes)
-   # - Same user, same route, multiple attempts (retry after failure)
-   # - Complete task independence
-   ```
-
-3. **runningStatus Structure**
-   ```python
-   # bot.py line 682-687
-   self.runningStatus[task_id] = {
-       "chat_id": chat_id,      # User's Telegram chat ID
-       "task_id": task_id,      # MQ task ID or subprocess PID
-       "korailId": user_info["korailId"],  # Korail account
-       "method": "celery",      # "celery" or "subprocess"
-   }
-   ```
-
-4. **Cancel Menu Interface**
-   - Shows list of ongoing reservations for the user
-   - User can select specific reservation to cancel
-   - Or cancel all reservations at once
-   - Implementation: `_show_cancel_menu()` at bot.py:832-874
-
-5. **Callback Handling**
-   - All callbacks include `task_id` parameter
-   - App identifies and cleans up specific task: `app.py:163`
-   - Preserves other concurrent reservations for same user
-
-#### Why task_id Instead of chat_id?
-
-**Problem with chat_id**: Would only allow one reservation per user
-```python
-# ❌ OLD (wrong):
-runningStatus[chat_id] = {...}  # Second reservation overwrites first!
-```
-
-**Solution with task_id**: Allows unlimited concurrent reservations
-```python
-# ✅ NEW (correct):
-runningStatus[task_id_1] = {chat_id: 123, ...}  # First reservation
-runningStatus[task_id_2] = {chat_id: 123, ...}  # Second reservation (same user!)
-```
+**Never key reservation state by chat_id or user** — a second reservation would overwrite the first.
 
 ### Configuration-Based Initialization
 
-The bot uses configuration-based service initialization instead of ImportError checking:
-
 ```python
-def __init__(self, token: str, enable_redis_celery: bool = False):
-    self.use_celery = enable_redis_celery
-    if self.use_celery and REDIS_AVAILABLE:
-        # Initialize Redis and MQ
-    else:
-        # Use in-memory storage and subprocess execution
+services = build_services(settings, use_celery)   # core/services.py
+# use_celery=True  -> CeleryLauncher (Redis ping OK) else SubprocessLauncher
+bot = TelegramBot(token, services)                 # if ENABLE_TELEGRAM
+services.notifier.add(bot)
+app = create_app(settings, services, bot)
 ```
 
 **Important Note on Environment Variables:**
@@ -221,16 +186,18 @@ def __init__(self, token: str, enable_redis_celery: bool = False):
 - Makefile commands use `PIPENV_DONT_LOAD_ENV=1` to prevent .env from overriding command-line settings
 - This ensures `make dev` and `make run` always use subprocess mode
 - And `make dev-mq` and `make run-mq` always use Celery mode (MQ pattern)
+- `WEBAPP_ENC_KEY` must be identical for the web server and Celery workers (workers decrypt the password)
 
 ### Station Search Feature
 
-Station names are selected via an API-driven search + inline keyboard flow, preventing typo-related reservation failures.
+Station names are selected via an API-driven search + selection flow (Telegram inline keyboard / web autocomplete), preventing typo-related reservation failures.
 
 #### Data Source
 - **API**: 공공데이터포털 (`apis.data.go.kr/B551457/run/v2/codes2`)
 - **Search Method**: `cond[type::EQ]=stn_cd` + `cond[value::LIKE]={query}` (partial match)
-- **Pagination**: `numOfRows=5`, navigated via inline keyboard buttons
+- **Pagination**: `numOfRows=6`, navigated via inline keyboard buttons / "더 보기" on the web
 - **Auth**: `DATAGOV_API_KEY` environment variable (서비스키)
+- **Web**: `GET /api/stations?q=&page=` with a 24h in-process cache
 
 #### Flow (Steps 5-6 in Conversation)
 ```
@@ -252,30 +219,32 @@ User types new text → searches again (lastAction stays at 5 until selection)
 - **`station_keyboard.py`**: `search_stations()` (async httpx call) + `create_station_keyboard()` (2-column layout)
 - **`bot.py`**: `_input_src/dst_station()` triggers search, `_select_src/dst_station()` finalizes selection
 - **Two-phase flow**: Text input = search (lastAction unchanged), button click = select (lastAction advances)
+- **`webapp/src/components/StationInput.tsx`**: same rule — a station is confirmed only when chosen from results
 
-### Conversation Flow Architecture
+### Conversation Flow Architecture (Telegram)
 
-1. **User Authentication**: Phone number verification against `ALLOW_LIST`
-2. **Korail Login**: Account credential validation
-3. **Interactive Selection**:
-   - Date selection via calendar keyboard
-   - Station search via 공공데이터포털 API + inline keyboard selection
-   - Time preferences and train type selection
-   - Seat type preferences
-4. **Reservation Execution**: Mode-specific background processing
-5. **Status Updates**: Webhook-based real-time notifications
-6. **Completion Handling**: State cleanup and user notifications
+1. **User Authentication**: Phone number must be an active user in the DB
+2. **Korail Login**: Account credential validation (links `telegram_chat_id` to the user)
+3. **Interactive Selection**: date, stations, time range, train type (`KTX`/`ALL`), seat type (`general`/`general_only`/`special`/`special_only`)
+4. **Reservation Execution**: `ReservationService.start(..., origin="telegram", chat_id=...)`
+5. **Status Updates**: worker → `/internal/events` → `Notifier` (Telegram/SSE/Web Push)
+6. **Completion Handling**: `TelegramBot.deliver()` sends the result and resets `userDict` if no reservation remains
+
+The web app submits the same fields in one form (`ReservationRequest` validates both channels).
 
 ### Background Task Processing
 
 #### Subprocess Flow
 ```
-Bot -> subprocess.Popen() -> worker.py -> Korail API -> HTTP callback -> Bot
+ReservationService -> SubprocessLauncher (Popen + stdin JSON) -> worker.py -> core/runner.py -> Korail API
+                   <- POST /internal/events {reservation_id, token, status, ...}
 ```
 
-#### MQ Flow  
+#### MQ Flow
 ```
-Bot -> MQ task -> Redis queue -> Worker process -> HTTP callback -> Bot
+ReservationService -> CeleryLauncher (apply_async, task_id=reservation_id) -> Redis -> Celery worker
+                   -> core/runner.py -> Korail API
+                   <- POST INTERNAL_CALLBACK_URL {reservation_id, token, status, ...}
 ```
 
 ## Development Commands
@@ -332,9 +301,19 @@ docker compose --profile celery up -d --build     # Rebuild and start Celery mod
 docker compose --profile subprocess up -d --build # Rebuild and start subprocess mode
 ```
 
+### Web App (PWA)
+```bash
+make webapp-install   # npm ci in webapp/
+make webapp-dev       # Vite dev server http://localhost:5173/app/ (proxies /api to 8390; run `make dev` too)
+make webapp-build     # Build webapp/dist (served by FastAPI at /app when ENABLE_WEBAPP=true)
+make vapid-keys       # Generate VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY for Web Push
+```
+
 ### Code Quality
 ```bash
-make lint             # Format code with black
+make lint             # Format code with black (CI pins black 25.9.0)
+make test             # All Python tests (TEST_DATABASE_URL=postgresql://... to run DB tests on Postgres)
+cd webapp && npm run build   # Typecheck (tsc) + build
 ```
 
 ### Important Notes About Local MQ Mode
@@ -384,6 +363,7 @@ brew install redis
 | `make run` | Production | 8391 | PRODUCTION | Web only (subprocess) |
 | `make run-mq` | Production | 8391 | PRODUCTION | Redis + Worker + Flower + Web |
 | `make docker-compose-up-mq` | Production | 8391 | PRODUCTION | All services in Docker |
+| `make webapp-dev` | Development | 5173 | - | PWA dev server (API proxied to 8390) |
 
 ## Environment Variables
 
@@ -391,8 +371,24 @@ brew install redis
 ```bash
 BOTTOKEN_DEV          # Development Telegram bot token (for local execution)
 WEBHOOK_URL_DEV       # Development webhook URL (for local execution)
-ALLOW_LIST            # Comma-separated phone numbers
-ADMINPW               # Admin password for privileged access
+ALLOW_LIST            # Phone numbers seeded into the user DB on startup (DB is the source of truth afterwards)
+ADMINPW               # Admin password for privileged access (Telegram + web admin login)
+```
+
+### Channels / Web App Variables
+```bash
+ENABLE_TELEGRAM       # true (default) / false
+ENABLE_WEBAPP         # false (default) / true
+DATABASE_URL          # default sqlite:///./korail_bot.db (postgresql://... is mapped to psycopg)
+WEBAPP_ENC_KEY        # Korail password encryption secret (REQUIRED in production; same value for workers)
+SESSION_TTL_HOURS     # "로그인 유지" session lifetime, default 168
+COOKIE_SECURE         # override Secure cookie flag (default: not IS_DEV)
+WEBAPP_ORIGIN         # only if the PWA is served from another origin (enables CORS for it)
+INTERNAL_CALLBACK_URL # worker -> web callback (default http://127.0.0.1:{8390|8391}/internal/events)
+VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT   # Web Push (make vapid-keys)
+MAX_RESERVATIONS_PER_USER   # default 3 (admin exempt)
+RESERVATION_RETENTION_DAYS  # default 30
+LOGIN_MAX_FAILURES / LOGIN_LOCK_MINUTES   # default 3 per 10 min (Korail locks after 5)
 ```
 
 ### Production Variables (Docker Environment)
@@ -436,11 +432,12 @@ ADMIN_KORAIL_PW       # Default Korail password for admin quick-login
 - **Response times**: Webhook response latency and task completion times
 
 ### Critical Testing Scenarios
-1. **Authentication flow**: Phone number verification and Korail login
+1. **Authentication flow**: Phone number verification and Korail login (Telegram + web, throttling)
 2. **Reservation process**: Date/time selection and background execution
 3. **Error recovery**: Network failures and session timeouts
 4. **Concurrent usage**: Multiple users in Celery mode (MQ pattern)
 5. **Environment switching**: Dev to prod deployment verification
+6. **PWA**: install, offline shell, push permission after first reservation, update prompt
 
 ## Architecture Decisions and Rationales
 
@@ -454,29 +451,33 @@ ADMIN_KORAIL_PW       # Default Korail password for admin quick-login
 - **Environment isolation**: Prevent port conflicts and resource contention
 - **Simplified deployment**: Single command deployment for different modes
 
-### Why In-Memory vs Redis Storage?
-- **Performance**: In-memory access is faster for single-user scenarios
-- **Simplicity**: Reduces infrastructure complexity for basic deployments
-- **Persistence**: Redis provides durability for production environments
+### Why a Channel-Agnostic Core?
+- Telegram and the web app share one reservation implementation (`core/`), so limits, validation, callbacks and history behave identically
+- Adding a channel means adding an adapter + a `Notifier` channel, not touching workers
+
+### Why a Database (SQLite / PostgreSQL)?
+- Users are managed at runtime (admin screen, `/adduser`) instead of redeploying `ALLOW_LIST`
+- Web sessions and reservation history (30 days) must survive restarts
+- Subprocess mode stays lightweight with SQLite; Celery mode uses PostgreSQL from the compose stack
+
+### Why Server Sessions (not JWT)?
+- The Korail password must be kept (encrypted) server-side for workers to re-login
+- Immediate revocation on logout / user deactivation
 
 Always run `make lint` before committing changes to maintain code formatting consistency.
 
 ## Service Optimization Recommendations
 
 ### Services That Can Be Removed (MQ Profile)
-1. **PostgreSQL (`postgres`)**: Not used anywhere in the codebase. MQ uses Redis for results.
-   - Remove to save ~50MB RAM and disk space
-   - Keep if planning to add persistent data storage in future
-
-2. **Beat (`beat`)**: No periodic tasks defined in the application.
+1. **Beat (`beat`)**: No periodic tasks defined in the application (housekeeping runs in the web process).
    - Remove to save ~100MB RAM
    - Only add back if implementing scheduled tasks
 
 ### Minimal MQ Profile (Recommended)
 ```yaml
-Services needed: web_celery, redis, worker
+Services needed: web_celery, redis, postgres, worker
 Optional: flower (for debugging only)
-Remove: postgres, beat
+Remove: beat
 ```
 
 ## Important Notes for AI Assistant
@@ -487,8 +488,10 @@ Remove: postgres, beat
 4. **State Management**: Understand the different storage mechanisms for each mode
 5. **Configuration Over Detection**: Use configuration parameters instead of ImportError patterns
 6. **Resource Considerations**: Subprocess mode should remain lightweight, Celery mode (MQ pattern) can use more resources
-7. **PostgreSQL**: Currently unused - MQ uses Redis for all storage needs
-7. **Docker Build Strategy**: **CRITICAL** - When code changes, ALWAYS use `docker compose up -d --build` to ensure containers get updated code. All services use `build: .` context and share the same codebase. Never manually rebuild individual services or use complex docker build/tag workflows. The correct process is:
+7. **Reservation identity**: Always use `reservation_id`; never key reservation state by chat_id/user. Workers must only talk to the web server via `/internal/events`.
+8. **Secrets**: Never pass the Korail password via argv or log it; subprocess gets stdin JSON, Celery gets `korail_pw_enc`.
+9. **Both channels**: Changes to reservation rules belong in `core/` (and `ReservationRequest` validation), not in `bot.py` or `web/`.
+10. **Docker Build Strategy**: **CRITICAL** - When code changes, ALWAYS use `docker compose up -d --build` to ensure containers get updated code. All services use `build: .` context and share the same codebase. Never manually rebuild individual services or use complex docker build/tag workflows. The correct process is:
    ```bash
    docker compose down
    docker compose --profile celery up -d --build     # For Celery mode (MQ pattern)

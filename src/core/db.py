@@ -81,6 +81,9 @@ class Database:
                 )
                 time.sleep(delay)
 
+    def dispose(self) -> None:
+        self.engine.dispose()
+
     @contextmanager
     def session(self) -> Iterator[Session]:
         session = self._sessionmaker()

@@ -121,18 +121,25 @@ def korail_login():
 
 @pytest.fixture
 def services(test_settings, fake_launcher, korail_login):
-    """메모리 SQLite + 가짜 Launcher로 구성한 서비스 (ALLOW_LIST 시드 완료)"""
-    from core.db import Database
+    """메모리 SQLite + 가짜 Launcher로 구성한 서비스 (ALLOW_LIST 시드 완료)
+
+    TEST_DATABASE_URL을 지정하면 해당 DB(예: PostgreSQL)에서 실행하고 테스트 후 테이블을 삭제합니다.
+    """
+    from core.db import Base, Database
     from core.services import build_services
 
+    db = Database(os.getenv("TEST_DATABASE_URL", "sqlite://"))
     svc = build_services(
         test_settings,
-        db=Database("sqlite://"),
+        db=db,
         launcher=fake_launcher,
         korail_login=korail_login,
     )
     svc.init_storage()
-    return svc
+    yield svc
+    if os.getenv("TEST_DATABASE_URL"):
+        Base.metadata.drop_all(db.engine)
+    db.dispose()
 
 
 @pytest.fixture

@@ -1,6 +1,8 @@
 # 웹앱(PWA) 지원 설계
 
-> 상태: 설계 제안 (Draft) · 작성일: 2026-09-26
+> 상태: **구현 완료** · 작성일: 2026-09-26
+>
+> 구현 과정에서 달라진 점은 [12. 구현 결과](#12-구현-결과-설계-대비-변경점)를 참고하세요.
 
 ## 1. 목표와 범위
 
@@ -427,9 +429,33 @@ LOGIN_MAX_FAILURES=3
 
 ---
 
-## 11. 결정이 필요한 사항
+## 11. 확정된 결정사항
 
-1. **비밀번호 보관 정책**: 세션 동안 암호화 보관(권장) vs 예약 시작마다 재입력.
-2. **프론트엔드 스택**: React(권장) vs Preact vs htmx.
-3. **웹 사용자도 ALLOW_LIST만으로 관리할지**: 사용자가 늘면 허용 목록을 Redis/DB로 옮기고 관리자 화면에서 관리하는 방안 검토 (현재 미사용인 PostgreSQL 활용 가능).
-4. **예약 이력 보존 기간**: 완료된 예약을 얼마나 보여줄지 (예: Redis TTL 7일).
+| 항목 | 결정 |
+|------|------|
+| 비밀번호 보관 | 세션 동안 Fernet 암호화 보관, 로그아웃/만료 시 삭제 |
+| 프론트엔드 스택 | Vite + React + TypeScript + vite-plugin-pwa + TanStack Query |
+| 사용자 관리 | **DB** (`users` 테이블). `ALLOW_LIST`는 최초 시드 용도, 관리자 화면/봇 명령으로 관리 |
+| 예약 이력 보존 | **30일** (`RESERVATION_RETENTION_DAYS`) |
+
+## 12. 구현 결과 (설계 대비 변경점)
+
+| 설계 | 구현 | 이유 |
+|------|------|------|
+| 세션/예약 저장소를 모드별로 InMemory/Redis | 두 모드 모두 **SQLAlchemy DB** (subprocess: SQLite, Celery: PostgreSQL) | 사용자 DB 관리와 30일 이력 요구로 DB가 필요해졌고, 저장소를 하나로 통일하면 재시작에도 세션·이력이 유지됨 |
+| 워커 콜백을 공유 비밀키(`INTERNAL_CALLBACK_SECRET`)로 인증 | **예약별 1회용 토큰** (DB에는 SHA-256만 저장) | 별도 비밀값 설정이 필요 없고, 한 예약의 토큰으로 다른 예약을 조작할 수 없음 |
+| SSE 멀티 인스턴스용 Redis Pub/Sub | 프로세스 내 브로커 | 현재 compose 구성은 웹 인스턴스 1개. 여러 대로 늘릴 때 추가 |
+| `DELETE /api/push/subscriptions` | `POST /api/push/unsubscribe` | 본문(endpoint)이 있는 DELETE를 피함 |
+| 공통 예약 루프 없음 | `core/runner.py`로 subprocess/Celery 루프 통합 | 두 모드의 재시도·재로그인·진행 보고 로직 중복 제거 |
+| 사용자별 동시 예약 한도 권장 | `MAX_RESERVATIONS_PER_USER=3` (관리자 제외) + 전체 한도 | 기존 봇의 "다른 사용자 이용 중" 전역 차단을 대체 |
+
+추가로 구현한 것:
+- 응답이 끊긴 예약 자동 정리 (RUNNING 30분 무응답, QUEUED 24시간)
+- 봇 관리자 명령 `/users`, `/adduser`, `/deluser`
+- 텔레그램 봇의 좌석 옵션이 Celery 모드에서 항상 "일반실 우선"으로 전달되던 문제 수정
+- 로컬 `make dev-mq`에서 콜백 주소가 Docker 호스트명(`web_celery`)으로 고정되던 문제 수정 (`INTERNAL_CALLBACK_URL`, 기본값 로컬 포트)
+- 오프라인에서도 마지막 사용자 정보로 앱 셸 표시, 날짜/시각은 클라이언트·서버 모두 KST 기준으로 검증
+
+남은 과제:
+- DB 마이그레이션 도구(Alembic) 도입 — 현재는 `create_all`로 테이블 생성만 수행
+- 웹 인스턴스를 여러 대로 늘릴 경우 SSE용 Redis Pub/Sub, 로그인 실패 카운터의 공유 저장소

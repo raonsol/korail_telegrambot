@@ -21,10 +21,19 @@ from core.schemas import Owner
 from core.services import build_services
 
 
-def _services(test_settings, launcher):
-    svc = build_services(test_settings, db=Database("sqlite://"), launcher=launcher)
-    svc.init_storage()
-    return svc
+@pytest.fixture
+def make_services(test_settings):
+    created = []
+
+    def factory(launcher):
+        svc = build_services(test_settings, db=Database("sqlite://"), launcher=launcher)
+        svc.init_storage()
+        created.append(svc)
+        return svc
+
+    yield factory
+    for svc in created:
+        svc.db.dispose()
 
 
 async def _wait_until(predicate, timeout=10.0):
@@ -61,7 +70,7 @@ class TestSubprocessLauncher:
 
     @pytest.mark.asyncio
     async def test_process_exit_without_report_marks_error(
-        self, test_settings, valid_request
+        self, make_services, valid_request
     ):
         # 명세만 읽고 결과 보고 없이 종료하는 워커
         launcher = SubprocessLauncher(
@@ -71,7 +80,7 @@ class TestSubprocessLauncher:
                 "import sys, json; json.load(sys.stdin); sys.exit(3)",
             ]
         )
-        services = _services(test_settings, launcher)
+        services = make_services(launcher)
 
         reservation = await services.reservations.start(
             Owner(user_id="01012345678"), valid_request, "010", "pw", origin="web"
@@ -86,11 +95,11 @@ class TestSubprocessLauncher:
         assert "code 3" in r.error
 
     @pytest.mark.asyncio
-    async def test_cancel_terminates_process(self, test_settings, valid_request):
+    async def test_cancel_terminates_process(self, make_services, valid_request):
         launcher = SubprocessLauncher(
             command=[sys.executable, "-c", "import time; time.sleep(30)"]
         )
-        services = _services(test_settings, launcher)
+        services = make_services(launcher)
         exits = []
         original = launcher.on_exit
         launcher.on_exit = lambda rid, code: (exits.append(code), original(rid, code))

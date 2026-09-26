@@ -118,6 +118,22 @@ celery-flower-stop:  ## Stop Flower monitoring UI
 lint:	## Run lint
 	pipenv run black .
 
+.PHONY: webapp-install
+webapp-install:	## Install web app (PWA) dependencies
+	cd webapp && npm ci
+
+.PHONY: webapp-dev
+webapp-dev:	## Run web app dev server (http://localhost:5173/app/, proxies /api to port 8390)
+	cd webapp && npm run dev
+
+.PHONY: webapp-build
+webapp-build:	## Build web app into webapp/dist (served by FastAPI at /app)
+	cd webapp && npm ci && npm run build
+
+.PHONY: vapid-keys
+vapid-keys:	## Generate VAPID keys for Web Push notifications
+	@cd src && PIPENV_DONT_LOAD_ENV=1 pipenv run python -m core.vapid
+
 .PHONY: test
 test:	## Run all tests
 	pipenv run pytest
@@ -163,6 +179,10 @@ coverage-html:	## Generate HTML coverage report and open in browser
 	pipenv run pytest --cov=src --cov-report=html
 	@echo "Opening coverage report..."
 	@which xdg-open > /dev/null && xdg-open htmlcov/index.html || open htmlcov/index.html || echo "Please open htmlcov/index.html manually"
+
+.PHONY: docker-build
+docker-build:	## Build Docker image (includes web app build)
+	docker build -t ${IMAGE_NAME} .
 
 .PHONY: docker-push
 docker-push:  	## Publish Docker Image

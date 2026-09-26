@@ -113,6 +113,7 @@ class TestCeleryLauncher:
         assert [r.id for r in services.reservations.list(owner, active=True)] == [
             second.id
         ]
+        services.db.dispose()
 
 
 @pytest.mark.integration
