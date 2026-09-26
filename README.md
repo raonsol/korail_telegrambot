@@ -73,6 +73,10 @@ ADMINPW=관리자_비밀번호
 REDIS_URL=redis://localhost:6379
 CELERY_BROKER=redis://localhost:6379
 CELERY_RESULT_BACKEND=redis://localhost:6379
+
+# Cloudflare WARP 프록시 (코레일 API 요청 우회, 로컬 실행용)
+WARP_PROXY_URL=socks5h://127.0.0.1:40000
+WARP_LICENSE_KEY=  # WARP+ 라이선스 (선택)
 ```
 
 ### 설치
@@ -136,6 +140,8 @@ make docker-compose-down
 | `make dev-mq` | 개발 서버 실행 (MQ 방식, 포트 8390) |
 | `make run` | 운영 서버 실행 (subprocess 모드, 포트 8391) |
 | `make run-mq` | 운영 서버 실행 (MQ 방식, 포트 8391) |
+| `make warp-check` | `WARP_PROXY_URL`이 Cloudflare WARP를 거치는지 확인 |
+| `make docker-warp-check` | Docker `warp` 컨테이너가 Cloudflare WARP를 거치는지 확인 |
 
 ### Celery 명령어
 
@@ -252,6 +258,24 @@ korail_telegrambot/
 
 - **관리자 계정**: `.env` 파일에 `USERID`, `USERPW` 설정
 - **사용자 계정**: 봇 사용 시 개별적으로 입력
+
+### Cloudflare WARP 설정
+
+코레일 API 요청([pykorail](https://github.com/devgyurak/pykorail))은 Cloudflare WARP 프록시를 거쳐 전송됩니다.
+프록시는 코레일 요청에만 적용되며, 텔레그램 API나 내부 콜백 요청은 직접 전송됩니다.
+
+- **Docker Compose**: `warp` 컨테이너([caomingjun/warp](https://github.com/cmj2002/warp-docker))가 함께 실행되고
+  `WARP_PROXY_URL=socks5h://warp:1080`이 자동으로 설정됩니다. 확인: `make docker-warp-check`
+- **로컬 실행**: [WARP 클라이언트](https://developers.cloudflare.com/warp-client/)를 설치한 뒤 proxy 모드로 실행하고
+  `.env`에 `WARP_PROXY_URL`을 설정합니다.
+  ```bash
+  warp-cli registration new
+  warp-cli mode proxy
+  warp-cli proxy port 40000
+  warp-cli connect
+  make warp-check   # warp=on 또는 warp=plus 가 출력되면 정상
+  ```
+- `WARP_PROXY_URL`을 비워두면 WARP 없이 직접 요청합니다. 서버 시작 시 WARP 연결 상태가 로그에 출력됩니다.
 
 ### 사용자 권한 관리
 

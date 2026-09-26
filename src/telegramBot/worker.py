@@ -3,7 +3,7 @@ import signal
 import logging
 import os
 from datetime import datetime
-from .korail_client import ReserveHandler
+from .korail_client import ReserveHandler, FATAL_ERRORS
 
 # Configure logging
 # Create logs directory if it doesn't exist
@@ -97,6 +97,9 @@ class BackProcess(object):
                         self.maxDepTime,
                     )
                     break
+                except FATAL_ERRORS:
+                    # 역 이름 오류, 지난 날짜 등은 재시도해도 같은 결과
+                    raise
                 except Exception as e:
                     self.retry_count += 1
                     logger.error(

@@ -2,16 +2,75 @@ import os
 import requests
 import time
 import sys
-from korail2 import Korail
-from korail2 import ReserveOption, TrainType, SoldOutError, NoResultsError
+from datetime import datetime, timedelta, timezone
+from pykorail import Korail
+from pykorail import (
+    ReserveOption,
+    TrainType,
+    SoldOutError,
+    NoResultsError,
+    PastDepartureError,
+    StationNotFoundError,
+)
 from .messages import Messages
 
 sys.setrecursionlimit(10**7)
+
+KST = timezone(timedelta(hours=9))
+
+# 재시도해도 결과가 바뀌지 않는 오류 (역 이름 오류, 이미 지난 날짜)
+FATAL_ERRORS = (StationNotFoundError, PastDepartureError)
+
+WARP_TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"
+
+
+def get_warp_proxy_url():
+    """Cloudflare WARP 프록시 주소 (예: socks5h://127.0.0.1:40000). 미설정 시 빈 문자열"""
+    return os.getenv("WARP_PROXY_URL", "").strip()
+
+
+def create_korail_client():
+    """pykorail 클라이언트 생성. WARP_PROXY_URL 이 설정되어 있으면 코레일 요청을 WARP 로 보냄"""
+    client = Korail()
+    proxy_url = get_warp_proxy_url()
+    if proxy_url:
+        # pykorail 은 프록시 옵션을 제공하지 않으므로 내부 HTTP 세션(curl_cffi)에 직접 지정.
+        # 텔레그램, 콜백 등 다른 요청은 프록시를 거치지 않음
+        client._api._session.proxies = {"http": proxy_url, "https": proxy_url}
+    return client
+
+
+def check_warp_status(timeout=5):
+    """WARP 프록시를 거친 요청이 실제로 Cloudflare WARP 로 나가는지 확인
+
+    Returns:
+        str: "on"/"plus" (WARP 사용 중), "off" (프록시는 되지만 WARP 아님),
+             "disabled" (WARP_PROXY_URL 미설정), "error: ..." (프록시 연결 실패)
+    """
+    proxy_url = get_warp_proxy_url()
+    if not proxy_url:
+        return "disabled"
+    try:
+        from curl_cffi import requests as curl_requests
+
+        response = curl_requests.get(
+            WARP_TRACE_URL,
+            proxies={"http": proxy_url, "https": proxy_url},
+            timeout=timeout,
+        )
+        trace = dict(
+            line.split("=", 1) for line in response.text.splitlines() if "=" in line
+        )
+        return trace.get("warp", "unknown")
+    except Exception as e:
+        return f"error: {e}"
 
 
 class ReserveHandler:
     def __init__(self):
         self.korail_client = None
+        self.username = ""
+        self.password = ""
         self.s = requests.session()
         self.reserveInfo = {
             "depDate": "",
@@ -42,14 +101,34 @@ class ReserveHandler:
         )
 
     def login(self, username, password):
+        client = None
         try:
-            self.korail_client = Korail(username, password, auto_login=False)
-            self.loginSuc = self.korail_client.login()
-            return self.loginSuc
+            client = create_korail_client()
+            # pykorail 은 로그인 실패 시 LoginFailedError 를 발생시킴
+            client.login(username, password)
         except Exception as e:
             print(f"Login failed with exception: {e}")
+            if client is not None:
+                client.close()
             self.loginSuc = False
             return False
+
+        # 재로그인 성공 시에만 기존 세션을 교체
+        self.close()
+        self.korail_client = client
+        self.username = username
+        self.password = password
+        self.loginSuc = True
+        return True
+
+    def close(self):
+        """코레일 HTTP 세션 정리"""
+        if self.korail_client is not None:
+            try:
+                self.korail_client.close()
+            except Exception as e:
+                print(f"Failed to close korail client: {e}")
+            self.korail_client = None
 
     def reserve(
         self,
@@ -113,6 +192,7 @@ class ReserveHandler:
 
         Returns:
             dict: {'success': bool, 'result': reservation_object_or_none, 'error': str_or_none}
+                재시도가 무의미한 오류(역 이름 오류, 지난 날짜)이면 'fatal': True 가 추가됨
         """
         self._update_reserve_info(
             depDate, srcLocate, dstLocate, depTime, trainType, special, maxDepTime
@@ -157,6 +237,8 @@ class ReserveHandler:
 
             return {"success": False, "result": None, "error": "All trains sold out"}
 
+        except FATAL_ERRORS as e:
+            return {"success": False, "result": None, "error": str(e), "fatal": True}
         except Exception as e:
             error_str = str(e)
             # Check for duplicate reservation at top level too
@@ -210,6 +292,8 @@ class ReserveHandler:
                 attempt_count += 1
                 time.sleep(self.interval)
 
+            except FATAL_ERRORS:
+                raise
             except Exception as e:
                 error_count += 1
                 last_error_time = time.time()
@@ -219,9 +303,7 @@ class ReserveHandler:
                 if error_count >= 10:
                     print("연속 에러 발생으로 세션 재로그인 시도")
                     try:
-                        self.login(
-                            self.korail_client.username, self.korail_client.password
-                        )
+                        self.login(self.username, self.password)
                         error_count = 0
                     except Exception as login_error:
                         print(f"세션 재로그인 실패: {str(login_error)}")
@@ -246,24 +328,39 @@ class ReserveHandler:
 
     def _search_trains(self):
         try:
-            trains = self.korail_client.search_train(
+            trains = self.korail_client.trains.search(
                 self.reserveInfo["srcLocate"],
                 self.reserveInfo["dstLocate"],
-                self.reserveInfo["depDate"],
-                self.reserveInfo["depTime"],
+                depart_after=self._depart_after(),
                 train_type=self.reserveInfo["trainType"],
             )
-            if trains:  # Check if trains list is not empty
-                timeL = "".join(str(trains[0]).split("(")[1].split("~")[0].split(":"))
-                if int(timeL) >= int(self.reserveInfo["maxDepTime"]):
-                    trains = []
         except NoResultsError:
-            trains = []
-        return trains
+            return []
+        # 최대 출발 시간(HHMM) 이전에 출발하는 열차만 남김
+        maxDepTime = int(self.reserveInfo["maxDepTime"])
+        return [train for train in trains if int(train.dep_time[:4]) < maxDepTime]
+
+    def _depart_after(self):
+        """열차 검색 기준 시각 (KST)
+
+        pykorail 은 이미 지난 시각으로 검색하면 PastDepartureError 를 발생시키므로,
+        출발일이 오늘이고 시작 시각이 지났다면 현재 시각부터 검색한다.
+        출발일 자체가 지난 경우에는 그대로 넘겨 PastDepartureError 로 중단되게 한다.
+        """
+        requested = datetime.strptime(
+            f"{self.reserveInfo['depDate']}{self.reserveInfo['depTime']}",
+            "%Y%m%d%H%M%S",
+        ).replace(tzinfo=KST)
+        now = datetime.now(KST)
+        if requested < now and requested.date() == now.date():
+            return now
+        return requested
 
     def _try_reserve(self, train):
         try:
-            return self.korail_client.reserve(train, option=self.reserveInfo["special"])
+            return self.korail_client.reservations.create(
+                train, option=self.reserveInfo["special"]
+            )
         except SoldOutError:
             print("예약을 놓쳤습니다. 다음 열차를 찾습니다.")
             return None

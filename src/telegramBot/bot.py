@@ -12,7 +12,7 @@ try:
 except ImportError:
     REDIS_AVAILABLE = False
 
-from korail2 import ReserveOption, TrainType
+from pykorail import ReserveOption, TrainType
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -428,7 +428,9 @@ class TelegramBot:
             )
 
             reserve_handler = ReserveHandler()
-            if reserve_handler.login(username, password):
+            loginSuc = reserve_handler.login(username, password)
+            reserve_handler.close()
+            if loginSuc:
                 msg = Messages.Info.INPUT_DATE
                 self.userDict[chat_id]["lastAction"] = 4
                 await self.send_message(chat_id, msg, reply_markup=create_calendar())
@@ -486,6 +488,7 @@ class TelegramBot:
         password = self.userDict[chat_id]["userInfo"]["korailPw"]
         reserve_handler = ReserveHandler()
         loginSuc = reserve_handler.login(username, password)
+        reserve_handler.close()
         print(loginSuc)
         if loginSuc:
             msg = Messages.Info.INPUT_DATE

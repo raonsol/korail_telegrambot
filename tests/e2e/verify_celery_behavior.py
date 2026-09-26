@@ -2,14 +2,15 @@
 """
 Verify what actually happens in Celery worker reservation
 """
+
 import sys
 import os
 from datetime import datetime, timedelta
 
 sys.path.insert(0, "src")
 
-from telegramBot.korail_client import ReserveHandler
-from korail2 import TrainType, ReserveOption
+from telegramBot.korail_client import ReserveHandler, create_korail_client
+from pykorail import TrainType, ReserveOption
 
 korail_id = os.getenv("ADMIN_KORAIL_ID")
 korail_pw = os.getenv("ADMIN_KORAIL_PW")
@@ -60,11 +61,9 @@ print("Checking final reservation count...")
 print(f"{'='*60}")
 
 try:
-    from korail2 import Korail
-
-    korail = Korail(korail_id, korail_pw, auto_login=False)
-    korail.login()
-    reservations = korail.reservations()
+    korail = create_korail_client()
+    korail.login(korail_id, korail_pw)
+    reservations = korail.reservations.all()
     print(f"Total reservations: {len(reservations)}")
     for idx, res in enumerate(reservations, 1):
         print(f"  {idx}. {res}")

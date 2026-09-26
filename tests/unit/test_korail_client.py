@@ -4,7 +4,16 @@ Unit tests for Korail API client (korail_client.py)
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
-from korail2 import TrainType, ReserveOption, SoldOutError, NoResultsError
+from datetime import datetime
+from pykorail import (
+    TrainType,
+    ReserveOption,
+    SoldOutError,
+    NoResultsError,
+    LoginFailedError,
+    StationNotFoundError,
+    PastDepartureError,
+)
 
 
 class TestReserveHandler:
@@ -33,17 +42,59 @@ class TestReserveHandler:
             assert result is True
             assert reserve_handler.loginSuc is True
             assert reserve_handler.korail_client is not None
+            assert reserve_handler.username == "test_user"
+            assert reserve_handler.password == "test_password"
+            mock_korail_client.login.assert_called_once_with(
+                "test_user", "test_password"
+            )
 
     def test_login_failure(self, reserve_handler):
-        """Test failed login"""
+        """Test failed login (pykorail raises LoginFailedError)"""
         mock_client = Mock()
-        mock_client.login = Mock(return_value=False)
+        mock_client.login = Mock(side_effect=LoginFailedError("비밀번호 오류"))
 
         with patch("telegramBot.korail_client.Korail", return_value=mock_client):
             result = reserve_handler.login("test_user", "wrong_password")
 
             assert result is False
             assert reserve_handler.loginSuc is False
+            assert reserve_handler.korail_client is None
+            mock_client.close.assert_called_once()
+
+    def test_relogin_failure_keeps_previous_client(self, reserve_handler):
+        """A failed re-login keeps the existing session instead of dropping it"""
+        previous_client = Mock()
+        reserve_handler.korail_client = previous_client
+        failing_client = Mock()
+        failing_client.login = Mock(side_effect=LoginFailedError())
+
+        with patch("telegramBot.korail_client.Korail", return_value=failing_client):
+            assert reserve_handler.login("test_user", "test_password") is False
+
+        assert reserve_handler.korail_client is previous_client
+        previous_client.close.assert_not_called()
+
+    def test_relogin_success_replaces_previous_client(
+        self, reserve_handler, mock_korail_client
+    ):
+        """A successful re-login closes and replaces the previous session"""
+        previous_client = Mock()
+        reserve_handler.korail_client = previous_client
+
+        with patch("telegramBot.korail_client.Korail", return_value=mock_korail_client):
+            assert reserve_handler.login("test_user", "test_password") is True
+
+        previous_client.close.assert_called_once()
+        assert reserve_handler.korail_client is mock_korail_client
+
+    def test_close(self, reserve_handler, mock_korail_client):
+        """Test close releases the Korail client"""
+        reserve_handler.korail_client = mock_korail_client
+
+        reserve_handler.close()
+
+        mock_korail_client.close.assert_called_once()
+        assert reserve_handler.korail_client is None
 
     def test_login_exception(self, reserve_handler):
         """Test login with exception"""
@@ -80,7 +131,7 @@ class TestReserveHandler:
         self, reserve_handler, mock_korail_client, sample_train_data
     ):
         """Test successful train search"""
-        mock_korail_client.search_train = Mock(return_value=[sample_train_data])
+        mock_korail_client.trains.search = Mock(return_value=[sample_train_data])
         reserve_handler.korail_client = mock_korail_client
         reserve_handler.reserveInfo = {
             "srcLocate": "서울",
@@ -91,17 +142,18 @@ class TestReserveHandler:
             "maxDepTime": "1200",
         }
 
-        # Mock train __str__ method
-        sample_train_data.__str__ = Mock(return_value="KTX 001(09:00~11:30)")
-
         trains = reserve_handler._search_trains()
 
         assert len(trains) == 1
         assert trains[0] == sample_train_data
+        args, kwargs = mock_korail_client.trains.search.call_args
+        assert args == ("서울", "부산")
+        assert kwargs["train_type"] == TrainType.KTX
+        assert kwargs["depart_after"].strftime("%Y%m%d%H%M%S") == "20250115090000"
 
     def test_search_trains_no_results(self, reserve_handler, mock_korail_client):
         """Test train search with no results"""
-        mock_korail_client.search_train = Mock(side_effect=NoResultsError())
+        mock_korail_client.trains.search = Mock(side_effect=NoResultsError())
         reserve_handler.korail_client = mock_korail_client
         reserve_handler.reserveInfo = {
             "srcLocate": "서울",
@@ -120,7 +172,7 @@ class TestReserveHandler:
         self, reserve_handler, mock_korail_client, sample_train_data
     ):
         """Test train search filters out trains exceeding maxDepTime"""
-        mock_korail_client.search_train = Mock(return_value=[sample_train_data])
+        mock_korail_client.trains.search = Mock(return_value=[sample_train_data])
         reserve_handler.korail_client = mock_korail_client
         reserve_handler.reserveInfo = {
             "srcLocate": "서울",
@@ -131,26 +183,66 @@ class TestReserveHandler:
             "maxDepTime": "0800",  # Earlier than train departure
         }
 
-        # Mock train __str__ method
-        sample_train_data.__str__ = Mock(return_value="KTX 001(09:00~11:30)")
-
         trains = reserve_handler._search_trains()
 
         assert trains == []
+
+    def test_search_trains_filters_each_train_by_max_time(
+        self, reserve_handler, mock_korail_client
+    ):
+        """Only trains departing before maxDepTime are kept"""
+        early, late = Mock(dep_time="093000"), Mock(dep_time="120000")
+        mock_korail_client.trains.search = Mock(return_value=[early, late])
+        reserve_handler.korail_client = mock_korail_client
+        reserve_handler.reserveInfo = {
+            "srcLocate": "서울",
+            "dstLocate": "부산",
+            "depDate": "20250115",
+            "depTime": "090000",
+            "trainType": TrainType.KTX,
+            "maxDepTime": "1200",
+        }
+
+        assert reserve_handler._search_trains() == [early]
+
+    @pytest.mark.parametrize(
+        "depDate, depTime, expected",
+        [
+            # 오늘 이미 지난 시각 -> 현재 시각부터 검색
+            ("20260315", "060000", "20260315103000"),
+            # 오늘 아직 오지 않은 시각 -> 그대로
+            ("20260315", "150000", "20260315150000"),
+            # 미래 날짜 -> 그대로
+            ("20260316", "060000", "20260316060000"),
+            # 이미 지난 날짜 -> 그대로 (pykorail 이 PastDepartureError 로 거부)
+            ("20260314", "150000", "20260314150000"),
+        ],
+    )
+    def test_depart_after(self, reserve_handler, depDate, depTime, expected):
+        """_depart_after clamps past times of today to now (KST)"""
+        from freezegun import freeze_time
+
+        reserve_handler.reserveInfo.update({"depDate": depDate, "depTime": depTime})
+        # 2026-03-15 10:30 KST
+        with freeze_time("2026-03-15 01:30:00"):
+            result = reserve_handler._depart_after()
+
+        assert result.strftime("%Y%m%d%H%M%S") == expected
+        assert result.utcoffset().total_seconds() == 9 * 3600
 
     def test_try_reserve_success(
         self, reserve_handler, mock_korail_client, sample_train_data
     ):
         """Test successful reservation attempt"""
         mock_reservation = Mock()
-        mock_korail_client.reserve = Mock(return_value=mock_reservation)
+        mock_korail_client.reservations.create = Mock(return_value=mock_reservation)
         reserve_handler.korail_client = mock_korail_client
         reserve_handler.reserveInfo = {"special": ReserveOption.GENERAL_FIRST}
 
         result = reserve_handler._try_reserve(sample_train_data)
 
         assert result == mock_reservation
-        mock_korail_client.reserve.assert_called_once_with(
+        mock_korail_client.reservations.create.assert_called_once_with(
             sample_train_data, option=ReserveOption.GENERAL_FIRST
         )
 
@@ -158,7 +250,7 @@ class TestReserveHandler:
         self, reserve_handler, mock_korail_client, sample_train_data
     ):
         """Test reservation attempt when sold out"""
-        mock_korail_client.reserve = Mock(side_effect=SoldOutError())
+        mock_korail_client.reservations.create = Mock(side_effect=SoldOutError())
         reserve_handler.korail_client = mock_korail_client
         reserve_handler.reserveInfo = {"special": ReserveOption.GENERAL_FIRST}
 
@@ -171,12 +263,9 @@ class TestReserveHandler:
     ):
         """Test reserve_single_attempt with successful reservation"""
         mock_reservation = Mock()
-        mock_korail_client.search_train = Mock(return_value=[sample_train_data])
-        mock_korail_client.reserve = Mock(return_value=mock_reservation)
+        mock_korail_client.trains.search = Mock(return_value=[sample_train_data])
+        mock_korail_client.reservations.create = Mock(return_value=mock_reservation)
         reserve_handler.korail_client = mock_korail_client
-
-        # Mock train __str__ method
-        sample_train_data.__str__ = Mock(return_value="KTX 001(09:00~11:30)")
 
         result = reserve_handler.reserve_single_attempt(
             depDate="20250115",
@@ -197,7 +286,7 @@ class TestReserveHandler:
         self, reserve_handler, mock_korail_client
     ):
         """Test reserve_single_attempt with no available trains"""
-        mock_korail_client.search_train = Mock(return_value=[])
+        mock_korail_client.trains.search = Mock(return_value=[])
         reserve_handler.korail_client = mock_korail_client
 
         result = reserve_handler.reserve_single_attempt(
@@ -218,12 +307,9 @@ class TestReserveHandler:
         self, reserve_handler, mock_korail_client, sample_train_data
     ):
         """Test reserve_single_attempt when all trains are sold out"""
-        mock_korail_client.search_train = Mock(return_value=[sample_train_data])
-        mock_korail_client.reserve = Mock(side_effect=SoldOutError())
+        mock_korail_client.trains.search = Mock(return_value=[sample_train_data])
+        mock_korail_client.reservations.create = Mock(side_effect=SoldOutError())
         reserve_handler.korail_client = mock_korail_client
-
-        # Mock train __str__ method
-        sample_train_data.__str__ = Mock(return_value="KTX 001(09:00~11:30)")
 
         result = reserve_handler.reserve_single_attempt(
             depDate="20250115",
@@ -243,14 +329,11 @@ class TestReserveHandler:
         self, reserve_handler, mock_korail_client, sample_train_data
     ):
         """Test reserve_single_attempt with duplicate reservation"""
-        mock_korail_client.search_train = Mock(return_value=[sample_train_data])
-        mock_korail_client.reserve = Mock(
+        mock_korail_client.trains.search = Mock(return_value=[sample_train_data])
+        mock_korail_client.reservations.create = Mock(
             side_effect=Exception("동일한 예약 내역이 있으니 확인하시기 바랍니다")
         )
         reserve_handler.korail_client = mock_korail_client
-
-        # Mock train __str__ method
-        sample_train_data.__str__ = Mock(return_value="KTX 001(09:00~11:30)")
 
         result = reserve_handler.reserve_single_attempt(
             depDate="20250115",
@@ -266,6 +349,51 @@ class TestReserveHandler:
         assert result["result"] == "duplicate_reservation"
         assert result["error"] is None
         assert reserve_handler.reserveInfo["reserveSuc"] is True
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            StationNotFoundError(["광주열분"], ["광주", "광주송정"]),
+            PastDepartureError(datetime(2025, 1, 15, 9), datetime(2025, 1, 16, 9)),
+        ],
+    )
+    def test_reserve_single_attempt_fatal_error(
+        self, reserve_handler, mock_korail_client, error
+    ):
+        """Errors that retrying cannot fix are flagged as fatal"""
+        mock_korail_client.trains.search = Mock(side_effect=error)
+        reserve_handler.korail_client = mock_korail_client
+
+        result = reserve_handler.reserve_single_attempt(
+            depDate="20250115",
+            srcLocate="광주열분",
+            dstLocate="부산",
+            depTime="090000",
+            trainType=TrainType.KTX,
+            special=ReserveOption.GENERAL_FIRST,
+            maxDepTime="1200",
+        )
+
+        assert result["success"] is False
+        assert result["fatal"] is True
+        assert result["error"] == str(error)
+
+    def test_attempt_reservation_stops_on_fatal_error(
+        self, reserve_handler, mock_korail_client
+    ):
+        """Retry loop (subprocess mode) re-raises fatal errors immediately"""
+        mock_korail_client.trains.search = Mock(
+            side_effect=StationNotFoundError(["광주열분"])
+        )
+        reserve_handler.korail_client = mock_korail_client
+        reserve_handler._update_reserve_info(
+            "20250115", "광주열분", "부산", "090000", TrainType.KTX, "", "1200"
+        )
+
+        with pytest.raises(StationNotFoundError):
+            reserve_handler._attempt_reservation()
+
+        assert mock_korail_client.trains.search.call_count == 1
 
     @patch("telegramBot.korail_client.requests.session")
     @patch("telegramBot.korail_client.os.getenv")
@@ -337,3 +465,58 @@ class TestReserveHandler:
         reserve_handler.sendBotStateChange("123456", "Test message", 1)
 
         assert reserve_handler.s.post.call_count == 3
+
+
+class TestWarpProxy:
+    """Cloudflare WARP proxy wiring for Korail requests"""
+
+    def test_create_client_uses_warp_proxy(self, monkeypatch):
+        """WARP_PROXY_URL is applied to pykorail's HTTP session"""
+        from telegramBot.korail_client import create_korail_client
+
+        monkeypatch.setenv("WARP_PROXY_URL", "socks5h://warp:1080")
+        client = create_korail_client()
+        try:
+            assert client._api._session.proxies == {
+                "http": "socks5h://warp:1080",
+                "https": "socks5h://warp:1080",
+            }
+        finally:
+            client.close()
+
+    def test_create_client_without_proxy(self, monkeypatch):
+        """No proxy is set when WARP_PROXY_URL is empty"""
+        from telegramBot.korail_client import create_korail_client
+
+        monkeypatch.setenv("WARP_PROXY_URL", "")
+        client = create_korail_client()
+        try:
+            assert not client._api._session.proxies
+        finally:
+            client.close()
+
+    def test_check_warp_status_disabled(self, monkeypatch):
+        """check_warp_status reports disabled without WARP_PROXY_URL"""
+        from telegramBot.korail_client import check_warp_status
+
+        monkeypatch.delenv("WARP_PROXY_URL", raising=False)
+        assert check_warp_status() == "disabled"
+
+    def test_check_warp_status_parses_trace(self, monkeypatch):
+        """check_warp_status reads warp=... from the Cloudflare trace"""
+        from telegramBot.korail_client import check_warp_status
+
+        monkeypatch.setenv("WARP_PROXY_URL", "socks5h://warp:1080")
+        response = Mock(text="fl=1\nip=104.28.0.1\nloc=KR\nwarp=on\n")
+        with patch("curl_cffi.requests.get", return_value=response) as mock_get:
+            assert check_warp_status() == "on"
+
+        assert mock_get.call_args[1]["proxies"]["https"] == "socks5h://warp:1080"
+
+    def test_check_warp_status_error(self, monkeypatch):
+        """check_warp_status reports proxy connection errors"""
+        from telegramBot.korail_client import check_warp_status
+
+        monkeypatch.setenv("WARP_PROXY_URL", "socks5h://warp:1080")
+        with patch("curl_cffi.requests.get", side_effect=Exception("refused")):
+            assert check_warp_status().startswith("error: refused")

@@ -12,7 +12,7 @@ import redis
 
 from .korail_client import ReserveHandler
 from config import celery_settings, web_settings
-from korail2 import ReserveOption, TrainType
+from pykorail import ReserveOption, TrainType
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +185,18 @@ def reservation_task(self, chat_id: int, reservation_data: dict, callback_url: s
                         "message": success_msg,
                         "attempts": attempt_count,
                     }
+
+                # Stop immediately on errors that retrying cannot fix
+                # (e.g. unknown station name, departure date already passed)
+                if result.get("fatal"):
+                    error_msg = result["error"]
+                    logger.warning(
+                        f"Reservation stopped for chat_id: {chat_id}: {error_msg}"
+                    )
+                    _send_callback(
+                        callback_url, chat_id, "failed", error_msg, self.request.id
+                    )
+                    return {"status": "failed", "message": error_msg}
 
                 # No success, wait before next attempt
                 time.sleep(2)

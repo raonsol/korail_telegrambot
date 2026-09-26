@@ -10,7 +10,8 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 
 - **FastAPI**: Modern web framework for webhook-based Telegram bot backend
 - **python-telegram-bot**: Comprehensive library for Telegram Bot API interactions
-- **korail2**: KTX reservation API client library
+- **pykorail**: KTX reservation API client library (코레일톡 앱 API, curl_cffi 기반)
+- **Cloudflare WARP**: Korail API requests are routed through a WARP proxy (`WARP_PROXY_URL`)
 - **Redis + Celery**: Optional distributed task processing system (MQ pattern)
 - **PostgreSQL**: Optional persistent data storage for Celery mode (MQ pattern)
 - **Docker**: Complete containerization with multi-environment support
@@ -82,7 +83,10 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
   - **Callback system**: HTTP status updates via completion endpoint
 
 #### Supporting Modules
-- **src/telegramBot/korail_client.py**: Korail API client wrapper
+- **src/telegramBot/korail_client.py**: Korail API client wrapper (pykorail)
+  - `create_korail_client()`: Creates the pykorail client and applies `WARP_PROXY_URL` to its HTTP session
+  - `check_warp_status()`: Checks `warp=on/plus` via Cloudflare trace (logged at app startup)
+  - `FATAL_ERRORS`: `StationNotFoundError`, `PastDepartureError` - stop retry loops immediately
 - **src/telegramBot/messages.py**: Centralized message templates
 - **src/telegramBot/calendar_keyboard.py**: Interactive date selection interface
 - **src/telegramBot/time_keyboard.py**: Time preference selection interface
@@ -102,6 +106,9 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 
 #### Service Definitions
 ```yaml
+# Shared (subprocess + celery profiles)
+warp: Cloudflare WARP proxy (HTTP/SOCKS5 on warp:1080, internal network only)
+
 # Subprocess Mode Services
 web: FastAPI application (subprocess mode)
 
@@ -413,6 +420,20 @@ CELERY_RESULT_BACKEND # MQ result backend URL
 ```bash
 DATAGOV_API_KEY       # 공공데이터포털 API 서비스키 (역 검색용)
 ```
+
+### Cloudflare WARP
+```bash
+WARP_PROXY_URL        # Proxy for Korail API requests (local: socks5h://127.0.0.1:40000 via `warp-cli mode proxy`)
+                      # Docker Compose sets socks5h://warp:1080 automatically. Empty = direct requests
+WARP_LICENSE_KEY      # Optional WARP+ license for the Docker warp container
+```
+
+### Korail Client (pykorail) Notes
+- The proxy is applied only to pykorail's curl_cffi session (`client._api._session.proxies`), so Telegram/callback traffic is not proxied. pykorail is pinned (`==0.2.0`) because this uses a private attribute
+- `login()` raises `LoginFailedError` instead of returning `False`; `ReserveHandler.login()` still returns a bool
+- Station names are validated against Korail's station master before searching (`StationNotFoundError`)
+- Searching a past time raises `PastDepartureError`; `ReserveHandler._depart_after()` clamps today's past times to now (KST)
+- `TrainType` / `ReserveOption` are plain string constants (same values as korail2), safe for subprocess argv / Celery JSON
 
 ### Optional Variables
 ```bash

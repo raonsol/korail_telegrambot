@@ -114,6 +114,16 @@ celery-flower-stop:  ## Stop Flower monitoring UI
 		rm -f ${FLOWER_PID_FILE}; \
 	fi
 
+.PHONY: warp-check
+warp-check:  ## Check that WARP_PROXY_URL routes through Cloudflare WARP (local, expects warp=on or warp=plus)
+	@if [ -z "$(WARP_PROXY_URL)" ]; then echo "❌ WARP_PROXY_URL is not set"; exit 1; fi
+	@echo "🔍 Checking Cloudflare WARP via $(WARP_PROXY_URL)..."
+	@curl -sS --max-time 10 --proxy "$(WARP_PROXY_URL)" https://www.cloudflare.com/cdn-cgi/trace | grep -E "^(ip|loc|warp)="
+
+.PHONY: docker-warp-check
+docker-warp-check:  ## Check that the warp container routes through Cloudflare WARP (Docker, expects warp=on or warp=plus)
+	docker compose exec warp curl -sS --max-time 10 --socks5-hostname 127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace | grep -E "^(ip|loc|warp)="
+
 .PHONY: lint
 lint:	## Run lint
 	pipenv run black .

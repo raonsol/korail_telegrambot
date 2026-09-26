@@ -101,13 +101,11 @@ def mock_telegram_callback_query():
 
 @pytest.fixture
 def mock_korail_client():
-    """Mock Korail API client"""
+    """Mock Korail API client (pykorail)"""
     client = Mock()
-    client.login = Mock(return_value=True)
-    client.search_train = Mock(return_value=[])
-    client.reserve = Mock(return_value=Mock())
-    client.username = "test_user"
-    client.password = "test_password"
+    client.login = Mock(return_value=None)  # pykorail raises on failure
+    client.trains.search = Mock(return_value=[])
+    client.reservations.create = Mock(return_value=Mock())
     return client
 
 
@@ -174,8 +172,8 @@ def sample_train_data():
     """Sample train data for testing"""
     train = Mock()
     train.train_name = "KTX 001"
-    train.dep_time = "09:00"
-    train.arr_time = "11:30"
+    train.dep_time = "090000"  # pykorail: HHMMSS
+    train.arr_time = "113000"
     train.train_no = "001"
     return train
 
