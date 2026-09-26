@@ -15,6 +15,9 @@ celery = "*"
 flower = "*"
 sqlalchemy = "*"
 httpx = "*"
+pywebpush = "*"
+psycopg = {extras = ["binary"], version = "*"}
+cryptography = "*"
 
 [dev-packages]
 black = "*"

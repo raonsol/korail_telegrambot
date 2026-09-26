@@ -1,11 +1,13 @@
 """
-End-to-end tests for complete reservation flow
+End-to-end tests for complete reservation flow (Telegram channel)
 """
 
+from datetime import datetime, timedelta
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from telegram import Update
-from korail2 import TrainType, ReserveOption
+
+from core.schemas import Owner, WorkerEvent
 
 
 @pytest.mark.e2e
@@ -14,18 +16,21 @@ class TestCompleteReservationFlow:
     """Test complete reservation flow from start to finish"""
 
     @pytest.fixture
-    def bot_with_mocks(self):
+    def bot_with_mocks(self, services):
         """Create bot instance with all necessary mocks"""
         with patch("telegramBot.bot.ApplicationBuilder"):
             from telegramBot.bot import TelegramBot
 
-            bot = TelegramBot("test_token", enable_redis_celery=False)
+            bot = TelegramBot("test_token", services)
+            services.notifier.add(bot)
             bot.send_message = AsyncMock()
             return bot
 
     @pytest.mark.asyncio
-    async def test_full_reservation_flow_subprocess_mode(self, bot_with_mocks):
-        """Test complete reservation flow from /start to reservation"""
+    async def test_full_reservation_flow_subprocess_mode(
+        self, bot_with_mocks, fake_launcher
+    ):
+        """Test complete reservation flow from /start to reservation result"""
         bot = bot_with_mocks
         chat_id = 123456
 
@@ -43,12 +48,10 @@ class TestCompleteReservationFlow:
         await bot._start_accept(chat_id, "start_yes")
         assert bot.userDict[chat_id]["lastAction"] == 2
 
-        # Step 3: Input phone number (ID)
-        with patch("telegramBot.bot.settings") as mock_settings:
-            mock_settings.allow_list = "01012345678"
-            await bot._input_id(chat_id, "01012345678")
-            assert bot.userDict[chat_id]["lastAction"] == 3
-            assert bot.userDict[chat_id]["userInfo"]["korailId"] == "010-1234-5678"
+        # Step 3: Input phone number (registered in user DB)
+        await bot._input_id(chat_id, "01012345678")
+        assert bot.userDict[chat_id]["lastAction"] == 3
+        assert bot.userDict[chat_id]["userInfo"]["korailId"] == "010-1234-5678"
 
         # Step 4: Input password
         with patch("telegramBot.bot.ReserveHandler") as mock_handler_class:
@@ -60,10 +63,7 @@ class TestCompleteReservationFlow:
             assert bot.userDict[chat_id]["lastAction"] == 4
             assert bot.userDict[chat_id]["userInfo"]["korailPw"] == "test_password"
 
-        # Step 5: Select date
-        from datetime import datetime, timedelta
-
-        # Use a future date (tomorrow) to ensure it passes validation
+        # Step 5: Select date (future date to pass validation)
         selected_date = datetime.now() + timedelta(days=1)
         await bot._input_date(chat_id, selected_date)
         assert bot.userDict[chat_id]["lastAction"] == 5
@@ -82,7 +82,6 @@ class TestCompleteReservationFlow:
             await bot._input_src_station(chat_id, "서울")
         # Station search keeps lastAction at 5 until user selects
         assert bot.userDict[chat_id]["lastAction"] == 5
-        # Simulate user clicking the station button
         await bot._select_src_station(chat_id, "서울")
         assert bot.userDict[chat_id]["lastAction"] == 6
         assert bot.userDict[chat_id]["trainInfo"]["srcLocate"] == "서울"
@@ -115,53 +114,67 @@ class TestCompleteReservationFlow:
         # Step 10: Select train type
         await bot._input_train_type(chat_id, "train_type_1")
         assert bot.userDict[chat_id]["lastAction"] == 10
-        assert bot.userDict[chat_id]["trainInfo"]["trainType"] == TrainType.KTX
+        assert bot.userDict[chat_id]["trainInfo"]["trainType"] == "KTX"
 
         # Step 11: Select seat type
-        await bot._input_seat_type(chat_id, "seat_type_1")
+        await bot._input_seat_type(chat_id, "seat_type_3")
         assert bot.userDict[chat_id]["lastAction"] == 11
-        assert (
-            bot.userDict[chat_id]["trainInfo"]["specialInfo"]
-            == ReserveOption.GENERAL_FIRST
-        )
+        assert bot.userDict[chat_id]["trainInfo"]["specialInfo"] == "special"
 
         # Step 12: Confirm and start reservation
-        with patch.object(bot, "_start_background_process", return_value=12345):
-            await bot._start_reserve(chat_id, "confirm_yes")
+        await bot._start_reserve(chat_id, "confirm_yes")
+        assert bot.userDict[chat_id]["lastAction"] == 12
+        spec = fake_launcher.launched[0]
+        assert spec["korail_id"] == "010-1234-5678"
+        assert spec["seat_type"] == "special"
+        [reservation] = bot._active_reservations(chat_id)
 
-            assert bot.userDict[chat_id]["lastAction"] == 12
-            assert "12345" in bot.runningStatus
-            assert bot.runningStatus["12345"]["chat_id"] == chat_id
+        # Step 13: Worker reports success → user is notified and state resets
+        await bot.reservations.handle_worker_event(
+            WorkerEvent(
+                reservation_id=reservation.id,
+                token=spec["callback_token"],
+                status="success",
+                train_info="KTX 101 서울~부산",
+            )
+        )
+        last_message = bot.send_message.call_args[0][1]
+        assert "예약에 성공" in last_message
+        assert "KTX 101" in last_message
+        assert bot.userDict[chat_id]["lastAction"] == 0
+        assert bot._active_reservations(chat_id) == []
 
     @pytest.mark.asyncio
-    async def test_full_reservation_flow_cancellation(self, bot_with_mocks):
-        """Test user cancels during reservation flow"""
+    async def test_full_reservation_flow_cancellation(
+        self, bot_with_mocks, valid_request, fake_launcher
+    ):
+        """Test user cancels a running reservation"""
         bot = bot_with_mocks
         chat_id = 123456
 
-        # Setup user in progress
         bot._create_user(chat_id)
         bot.userDict[chat_id]["inProgress"] = True
-        bot.userDict[chat_id]["lastAction"] = 5
+        bot.userDict[chat_id]["lastAction"] = 12
+        bot.userDict[chat_id]["userInfo"]["ownerId"] = "01012345678"
+        await bot.reservations.start(
+            Owner(user_id="01012345678"),
+            valid_request,
+            "010-1234-5678",
+            "pw",
+            origin="telegram",
+            chat_id=chat_id,
+        )
 
-        # User sends /cancel at any point
         update = Mock()
         update.message = Mock()
         update.message.chat_id = chat_id
 
-        bot.runningStatus["12345"] = {
-            "chat_id": chat_id,
-            "pid": 12345,
-            "korailId": "010-1234-5678",
-            "method": "subprocess",
-        }
+        await bot.cancel_func(update, None)
+        await bot._handle_cancel_callback(chat_id, "cancel_all")
 
-        with patch("telegramBot.bot.os.killpg"), patch("telegramBot.bot.os.getpgid"):
-            await bot.cancel_func(update, None)
-            await bot._handle_cancel_callback(chat_id, "cancel_all")
-
-        # Should reset state
-        assert "12345" not in bot.runningStatus
+        assert bot._active_reservations(chat_id) == []
+        assert fake_launcher.cancelled == ["ref-1"]
+        assert bot.userDict[chat_id]["lastAction"] == 0
 
     @pytest.mark.asyncio
     async def test_reservation_flow_with_admin_login(self, bot_with_mocks):
@@ -169,14 +182,12 @@ class TestCompleteReservationFlow:
         bot = bot_with_mocks
         chat_id = 123456
 
-        # Start
         update = Mock()
         update.message = Mock()
         update.message.chat_id = chat_id
 
         await bot.start_func(update, None)
 
-        # Use admin password for quick login
         with patch("telegramBot.bot.settings") as mock_settings, patch(
             "telegramBot.bot.ReserveHandler"
         ) as mock_handler_class:
@@ -193,6 +204,7 @@ class TestCompleteReservationFlow:
             # Should skip directly to date selection
             assert bot.userDict[chat_id]["lastAction"] == 4
             assert bot.userDict[chat_id]["userInfo"]["korailId"] == "admin_user"
+            assert bot._chat_owner(chat_id) == Owner(user_id="admin", is_admin=True)
 
     @pytest.mark.asyncio
     async def test_reservation_flow_login_failure_recovery(self, bot_with_mocks):
@@ -205,7 +217,6 @@ class TestCompleteReservationFlow:
         bot.userDict[chat_id]["lastAction"] = 3
         bot.userDict[chat_id]["userInfo"]["korailId"] = "010-1234-5678"
 
-        # First attempt: wrong password
         with patch("telegramBot.bot.ReserveHandler") as mock_handler_class:
             mock_handler = Mock()
             mock_handler.login = Mock(return_value=False)
@@ -235,47 +246,46 @@ class TestCompleteReservationFlow:
         assert bot.userDict[chat_id]["lastAction"] == 2
 
         # Invalid time format
-        from datetime import datetime, timedelta
-
         bot.userDict[chat_id]["lastAction"] = 7
         future_date = (datetime.now() + timedelta(days=1)).strftime("%Y%m%d")
         bot.userDict[chat_id]["trainInfo"]["depDate"] = future_date
         await bot._input_dep_time(chat_id, "invalid_time")
-        # Should send error message but stay at same stage
-
-        # Past time for today's date
-        today = datetime.today().strftime("%Y%m%d")
-        bot.userDict[chat_id]["trainInfo"]["depDate"] = today
-        bot.userDict[chat_id]["lastAction"] = 7
-        await bot._input_dep_time(chat_id, "0001")  # Past time
-        # Should send error message
+        assert bot.userDict[chat_id]["lastAction"] == 7
 
     @pytest.mark.asyncio
-    async def test_concurrent_reservation_prevention(self, bot_with_mocks):
-        """Test that concurrent reservations are prevented in subprocess mode"""
+    async def test_other_users_not_blocked_by_running_reservation(
+        self, bot_with_mocks, valid_request
+    ):
+        """다른 사용자의 예약이 진행 중이어도 대화를 계속할 수 있음"""
         bot = bot_with_mocks
-
         user1_id = 111111
         user2_id = 222222
 
-        # User 1 starts reservation
-        bot.runningStatus["12345"] = {
-            "chat_id": user1_id,
-            "pid": 12345,
-            "korailId": "010-1111-1111",
-            "method": "subprocess",
-        }
+        await bot.reservations.start(
+            Owner(user_id="01012345678"),
+            valid_request,
+            "010-1234-5678",
+            "pw",
+            origin="telegram",
+            chat_id=user1_id,
+        )
 
-        # User 2 tries to proceed
         bot._create_user(user2_id)
         bot.userDict[user2_id]["inProgress"] = True
-        bot.userDict[user2_id]["lastAction"] = 4
+        bot.userDict[user2_id]["lastAction"] = 5
+        bot.userDict[user2_id]["trainInfo"]["depDate"] = valid_request.dep_date_compact
 
-        # Should be prevented
-        await bot.handle_progress(user2_id, 5, "서울")
+        with patch(
+            "telegramBot.bot.search_stations",
+            return_value={
+                "stations": [{"code": "0001", "name": "서울"}],
+                "total": 1,
+                "page": 1,
+            },
+        ):
+            await bot.handle_progress(user2_id, 5, "서울")
 
-        # Should receive message about another user
-        assert bot.send_message.called
+        assert "검색 결과" in bot.send_message.call_args[0][1]
 
 
 @pytest.mark.e2e
@@ -284,46 +294,46 @@ class TestErrorRecovery:
     """Test error recovery scenarios"""
 
     @pytest.mark.asyncio
-    async def test_subprocess_crash_recovery(self):
-        """Test recovery when subprocess crashes"""
+    async def test_subprocess_crash_recovery(self, services, valid_request):
+        """Worker process that exits without reporting is marked as error"""
         with patch("telegramBot.bot.ApplicationBuilder"):
             from telegramBot.bot import TelegramBot
 
-            bot = TelegramBot("test_token", enable_redis_celery=False)
+            bot = TelegramBot("test_token", services)
+            services.notifier.add(bot)
             bot.send_message = AsyncMock()
             chat_id = 123456
 
-            # Simulate crashed process
-            bot._create_user(chat_id)
-            bot.runningStatus["99999"] = {
-                "chat_id": chat_id,
-                "pid": 99999,
-                "korailId": "010-1234-5678",
-                "method": "subprocess",
-            }
+            reservation = await services.reservations.start(
+                Owner(user_id="01012345678"),
+                valid_request,
+                "010-1234-5678",
+                "pw",
+                origin="telegram",
+                chat_id=chat_id,
+            )
 
-            # Try to cancel
-            with patch("telegramBot.bot.os.killpg", side_effect=ProcessLookupError()):
-                with patch("telegramBot.bot.os.getpgid", return_value=99999):
-                    success = await bot._cancel_reservation(chat_id)
+            await services.reservations.handle_process_exit(reservation.id, -9)
 
-            # Should clean up state even if process doesn't exist
-            assert "99999" not in bot.runningStatus
+            assert bot._active_reservations(chat_id) == []
+            r = services.reservations.get(reservation.id, chat_id=chat_id)
+            assert r.status.value == "error"
+            assert "비정상 종료" in bot.send_message.call_args[0][1]
 
-    @pytest.mark.asyncio
-    async def test_network_error_during_callback(self):
-        """Test handling of network errors during callback"""
-        with patch("telegramBot.korail_client.requests.session") as mock_session:
-            mock_post = Mock(side_effect=Exception("Network error"))
-            mock_session.return_value.post = mock_post
+    def test_network_error_during_callback(self):
+        """Callback reporter does not crash on network errors"""
+        import requests
 
-            from telegramBot.korail_client import ReserveHandler
+        from core.runner import CallbackReporter
 
-            handler = ReserveHandler()
-            handler.chatId = "123456"
+        reporter = CallbackReporter("http://127.0.0.1:1/internal/events", "id", "tok")
+        reporter.session.post = Mock(
+            side_effect=requests.exceptions.ConnectionError("Network error")
+        )
 
-            # Should not crash on network error
-            handler.sendBotStateChange("123456", "Test message", 1)
+        with patch("core.runner.time.sleep"):
+            assert reporter.send("error", message="Test message") is False
+        assert reporter.session.post.call_count == 3
 
 
 @pytest.mark.e2e
@@ -331,69 +341,55 @@ class TestErrorRecovery:
 class TestUserExperience:
     """Test overall user experience flows"""
 
+    @pytest.fixture
+    def bot(self, services):
+        with patch("telegramBot.bot.ApplicationBuilder"):
+            from telegramBot.bot import TelegramBot
+
+            bot = TelegramBot("test_token", services)
+            bot.send_message = AsyncMock()
+            return bot
+
     @pytest.mark.asyncio
-    async def test_help_command(self):
+    async def test_help_command(self, bot):
         """Test /help command"""
-        with patch("telegramBot.bot.ApplicationBuilder"):
-            from telegramBot.bot import TelegramBot
+        update = Mock()
+        update.message = Mock()
+        update.message.chat_id = 123456
 
-            bot = TelegramBot("test_token", enable_redis_celery=False)
-            bot.send_message = AsyncMock()
+        await bot.return_help(update, None)
 
-            update = Mock()
-            update.message = Mock()
-            update.message.chat_id = 123456
-
-            await bot.return_help(update, None)
-
-            bot.send_message.assert_called_once()
+        bot.send_message.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_subscribe_and_broadcast(self):
+    async def test_subscribe_and_broadcast(self, bot):
         """Test subscribe and broadcast functionality"""
-        with patch("telegramBot.bot.ApplicationBuilder"):
-            from telegramBot.bot import TelegramBot
+        update = Mock()
+        update.message = Mock()
+        update.message.chat_id = 123456
 
-            bot = TelegramBot("test_token", enable_redis_celery=False)
-            bot.send_message = AsyncMock()
+        await bot.subscribe_user(update, None)
+        assert 123456 in bot.subscribes
 
-            # User subscribes
-            update = Mock()
-            update.message = Mock()
-            update.message.chat_id = 123456
-
-            await bot.subscribe_user(update, None)
-            assert 123456 in bot.subscribes
-
-            # Broadcast message
-            await bot.broadcast_message("Test broadcast")
-            assert bot.send_message.call_count >= 1
+        await bot.broadcast_message("Test broadcast")
+        assert bot.send_message.call_count >= 1
 
     @pytest.mark.asyncio
-    async def test_status_command(self):
+    async def test_status_command(self, bot, services, valid_request):
         """Test /status command"""
-        with patch("telegramBot.bot.ApplicationBuilder"):
-            from telegramBot.bot import TelegramBot
+        await services.reservations.start(
+            Owner(user_id="01011111111"), valid_request, "010", "pw", origin="web"
+        )
+        await services.reservations.start(
+            Owner(user_id="01022222222"), valid_request, "010", "pw", origin="web"
+        )
 
-            bot = TelegramBot("test_token", enable_redis_celery=False)
-            bot.send_message = AsyncMock()
+        update = Mock()
+        update.message = Mock()
+        update.message.chat_id = 123456
 
-            # Add some running reservations
-            bot.runningStatus[111111] = {
-                "korailId": "010-1111-1111",
-                "method": "subprocess",
-            }
-            bot.runningStatus[222222] = {
-                "korailId": "010-2222-2222",
-                "method": "subprocess",
-            }
+        await bot.get_status_info(update, None)
 
-            update = Mock()
-            update.message = Mock()
-            update.message.chat_id = 123456
-
-            await bot.get_status_info(update, None)
-
-            bot.send_message.assert_called_once()
-            call_args = bot.send_message.call_args[0]
-            assert "2개의 예약이 실행중입니다" in call_args[1]
+        bot.send_message.assert_called_once()
+        call_args = bot.send_message.call_args[0]
+        assert "2개의 예약이 실행중입니다" in call_args[1]

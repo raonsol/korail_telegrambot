@@ -1,237 +1,211 @@
 """
 Integration tests for subprocess execution mode
+
+실제 자식 프로세스를 띄워 Launcher ↔ ReservationService ↔ /internal/events 흐름을 검증합니다.
+(코레일 API는 호출하지 않음)
 """
 
+import asyncio
+import io
+import json
+import sys
+import time
+from unittest.mock import Mock, patch
+
+import httpx
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-import subprocess
-import os
+
+from core.db import Database
+from core.launchers import SubprocessLauncher
+from core.schemas import Owner
+from core.services import build_services
+
+
+def _services(test_settings, launcher):
+    svc = build_services(test_settings, db=Database("sqlite://"), launcher=launcher)
+    svc.init_storage()
+    return svc
+
+
+async def _wait_until(predicate, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(0.05)
+    return False
 
 
 @pytest.mark.integration
 @pytest.mark.subprocess
-class TestSubprocessMode:
-    """Test subprocess execution mode integration"""
+class TestSubprocessLauncher:
+    def test_spec_is_sent_via_stdin_not_argv(self):
+        """비밀번호가 프로세스 인자(ps)에 노출되지 않아야 함"""
+        launcher = SubprocessLauncher()
+        spec = {"reservation_id": "abcd1234", "korail_pw": "secret-pw"}
+
+        with patch("core.launchers.subprocess.Popen") as mock_popen, patch(
+            "builtins.open"
+        ), patch("core.launchers.threading.Thread"):
+            process = Mock(pid=4321, stdin=io.StringIO())
+            process.stdin.close = Mock()
+            mock_popen.return_value = process
+
+            ref = launcher.launch(spec)
+
+        assert ref == "4321"
+        argv = mock_popen.call_args[0][0]
+        assert "secret-pw" not in " ".join(argv)
+        assert argv[-2:] == ["-m", "telegramBot.worker"]
+        assert json.loads(process.stdin.getvalue()) == spec
 
     @pytest.mark.asyncio
-    async def test_subprocess_reservation_flow(self, sample_user_data):
-        """Test complete reservation flow in subprocess mode"""
-        with patch("telegramBot.bot.ApplicationBuilder"), patch(
-            "telegramBot.bot.subprocess.Popen"
-        ) as mock_popen:
-            from telegramBot.bot import TelegramBot
-
-            # Setup mocks
-            mock_process = Mock()
-            mock_process.pid = 12345
-            mock_popen.return_value = mock_process
-
-            # Create bot instance in subprocess mode
-            bot = TelegramBot("test_token", enable_redis_celery=False)
-            bot.send_message = AsyncMock()
-            chat_id = 123456
-
-            # Setup user data
-            bot.userDict[chat_id] = sample_user_data.copy()
-
-            # Simulate starting reservation
-            arguments = [
-                sample_user_data["userInfo"]["korailId"],
-                sample_user_data["userInfo"]["korailPw"],
-                sample_user_data["trainInfo"]["depDate"],
-                sample_user_data["trainInfo"]["srcLocate"],
-                sample_user_data["trainInfo"]["dstLocate"],
-                f"{sample_user_data['trainInfo']['depTime']}00",
-                sample_user_data["trainInfo"]["trainType"],
-                sample_user_data["trainInfo"]["specialInfo"],
-                str(chat_id),
-                sample_user_data["trainInfo"]["maxDepTime"],
+    async def test_process_exit_without_report_marks_error(
+        self, test_settings, valid_request
+    ):
+        # 명세만 읽고 결과 보고 없이 종료하는 워커
+        launcher = SubprocessLauncher(
+            command=[
+                sys.executable,
+                "-c",
+                "import sys, json; json.load(sys.stdin); sys.exit(3)",
             ]
+        )
+        services = _services(test_settings, launcher)
 
-            with patch("builtins.open"), patch("telegramBot.bot.os.makedirs"), patch(
-                "telegramBot.bot.threading.Thread"
-            ):
-                pid = bot._start_background_process(arguments)
+        reservation = await services.reservations.start(
+            Owner(user_id="01012345678"), valid_request, "010", "pw", origin="web"
+        )
 
-            # Verify process was started
-            assert pid == 12345
-            assert str(pid) not in bot.runningStatus  # Not added yet
+        def is_error():
+            r = services.reservations.get(reservation.id, Owner(user_id="01012345678"))
+            return r.status.value == "error"
 
-            # Add to running status manually (as would happen in actual flow)
-            bot.runningStatus[str(pid)] = {
-                "chat_id": chat_id,
-                "pid": pid,
-                "korailId": "010-1234-5678",
-                "method": "subprocess",
-            }
-
-            # Verify status
-            assert str(pid) in bot.runningStatus
-            assert bot.runningStatus[str(pid)]["pid"] == 12345
-
-            # Simulate cancellation
-            with patch("telegramBot.bot.os.killpg"), patch(
-                "telegramBot.bot.os.getpgid"
-            ):
-                success = await bot._cancel_reservation(chat_id)
-
-            assert success is True
-            assert str(pid) not in bot.runningStatus
+        assert await _wait_until(is_error)
+        r = services.reservations.get(reservation.id, Owner(user_id="01012345678"))
+        assert "code 3" in r.error
 
     @pytest.mark.asyncio
-    async def test_subprocess_multiple_concurrent_users(self):
-        """Test multiple users with subprocess mode (should handle sequentially)"""
-        with patch("telegramBot.bot.ApplicationBuilder"):
-            from telegramBot.bot import TelegramBot
+    async def test_cancel_terminates_process(self, test_settings, valid_request):
+        launcher = SubprocessLauncher(
+            command=[sys.executable, "-c", "import time; time.sleep(30)"]
+        )
+        services = _services(test_settings, launcher)
+        exits = []
+        original = launcher.on_exit
+        launcher.on_exit = lambda rid, code: (exits.append(code), original(rid, code))
 
-            bot = TelegramBot("test_token", enable_redis_celery=False)
-            bot.send_message = AsyncMock()
+        owner = Owner(user_id="01012345678")
+        reservation = await services.reservations.start(
+            owner, valid_request, "010", "pw", origin="web"
+        )
+        cancelled = await services.reservations.cancel(
+            reservation.id, owner=owner, source="web"
+        )
 
-            # Create multiple users
-            user1_id = 111111
-            user2_id = 222222
-
-            bot._create_user(user1_id)
-            bot._create_user(user2_id)
-
-            # Simulate first user starting reservation
-            bot.runningStatus["12345"] = {
-                "chat_id": user1_id,
-                "pid": 12345,
-                "korailId": "010-1111-1111",
-                "method": "subprocess",
-            }
-
-            # Second user tries to start
-            # In actual implementation, this should be prevented
-            bot.runningStatus["67890"] = {
-                "chat_id": user2_id,
-                "pid": 67890,
-                "korailId": "010-2222-2222",
-                "method": "subprocess",
-            }
-
-            # Verify both are tracked
-            assert len(bot.runningStatus) == 2
-
-    def test_subprocess_worker_initialization(self):
-        """Test worker process initialization"""
-        test_args = [
-            "test_script.py",
-            "010-1234-5678",
-            "password",
-            "20250115",
-            "서울",
-            "부산",
-            "090000",
-            "KTX",
-            "1",
-            "123456",
-            "1200",
-        ]
-
-        with patch("sys.argv", test_args), patch(
-            "telegramBot.worker.ReserveHandler"
-        ) as mock_handler_class:
-            mock_handler = Mock()
-            mock_handler.login = Mock(return_value=True)
-            mock_handler_class.return_value = mock_handler
-
-            from telegramBot.worker import BackProcess
-
-            process = BackProcess()
-
-            assert process.username == "010-1234-5678"
-            assert process.password == "password"
-            assert process.depDate == "20250115"
-            assert process.srcLocate == "서울"
-            assert process.dstLocate == "부산"
-            assert process.chatId == "123456"
-
-    @pytest.mark.asyncio
-    async def test_subprocess_callback_on_completion(self):
-        """Test callback mechanism when subprocess completes"""
-        from unittest.mock import patch
-
-        with patch("telegramBot.bot.ApplicationBuilder"):
-            with patch("app.bot") as mock_bot:
-                mock_bot.runningStatus = {
-                    "12345": {"chat_id": 123456, "pid": 12345, "method": "subprocess"}
-                }
-                mock_bot.send_message = AsyncMock()
-                mock_bot._reset_user_state = Mock()
-                mock_bot.userDict = {123456: {"inProgress": True}}
-
-                from app import send_reservation_status
-
-                # Simulate successful reservation callback handler directly
-                await send_reservation_status(
-                    chat_id=123456,
-                    status=1,
-                    reserveInfo="Train KTX 001 reserved",
-                )
-
-                # Verify callback side-effects
-                mock_bot.send_message.assert_awaited_once()
-                mock_bot._reset_user_state.assert_called_once_with(123456)
-                assert "12345" not in mock_bot.runningStatus
+        assert cancelled.status.value == "cancelled"
+        assert await _wait_until(lambda: exits)
+        assert exits[0] != 0  # SIGTERM
+        # 취소 후 프로세스 종료가 상태를 덮어쓰지 않음
+        await asyncio.sleep(0.1)
+        r = services.reservations.get(reservation.id, owner)
+        assert r.status.value == "cancelled"
 
 
 @pytest.mark.integration
 @pytest.mark.subprocess
-class TestSubprocessErrorHandling:
-    """Test error handling in subprocess mode"""
+class TestWorkerEntrypoint:
+    def test_worker_reads_spec_from_stdin(self):
+        from telegramBot import worker
 
+        spec = {field: "x" for field in worker.REQUIRED_FIELDS}
+        with patch("sys.stdin", io.StringIO(json.dumps(spec))), patch.object(
+            worker, "run_reservation", return_value={"status": "success"}
+        ) as run, patch.object(worker, "build_reporter") as build_reporter, patch(
+            "logging.FileHandler"
+        ):
+            assert worker.main() == 0
+
+        run.assert_called_once()
+        assert run.call_args[0][0] == spec
+        build_reporter.assert_called_once_with(spec)
+
+    def test_worker_rejects_incomplete_spec(self):
+        from telegramBot import worker
+
+        with patch("sys.stdin", io.StringIO('{"reservation_id": "x"}')), patch(
+            "logging.FileHandler"
+        ):
+            assert worker.main() == 2
+
+    def test_worker_reports_crash(self):
+        from telegramBot import worker
+
+        spec = {field: "x" for field in worker.REQUIRED_FIELDS}
+        reporter = Mock()
+        with patch("sys.stdin", io.StringIO(json.dumps(spec))), patch.object(
+            worker, "run_reservation", side_effect=RuntimeError("boom")
+        ), patch.object(worker, "build_reporter", return_value=reporter), patch(
+            "logging.FileHandler"
+        ):
+            assert worker.main() == 1
+
+        assert reporter.send.call_args[0][0] == "error"
+
+
+@pytest.mark.integration
+@pytest.mark.subprocess
+class TestCallbackOverHttp:
     @pytest.mark.asyncio
-    async def test_subprocess_crash_handling(self):
-        """Test handling of crashed subprocess"""
-        with patch("telegramBot.bot.ApplicationBuilder"):
-            from telegramBot.bot import TelegramBot
+    async def test_worker_callback_updates_reservation(
+        self, services, fake_launcher, valid_request
+    ):
+        from web.factory import create_app
 
-            bot = TelegramBot("test_token", enable_redis_celery=False)
-            chat_id = 123456
+        app = create_app(services.settings, services, run_housekeeping=False)
+        owner = Owner(user_id="01012345678")
+        reservation = await services.reservations.start(
+            owner, valid_request, "010", "pw", origin="web"
+        )
+        token = fake_launcher.launched[0]["callback_token"]
 
-            # Simulate crashed process
-            bot.runningStatus["99999"] = {
-                "chat_id": chat_id,
-                "pid": 99999,
-                "korailId": "010-1234-5678",
-                "method": "subprocess",
-            }
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+            bad = await c.post(
+                "/internal/events",
+                json={
+                    "reservation_id": reservation.id,
+                    "token": "x",
+                    "status": "success",
+                },
+            )
+            assert bad.status_code == 403
 
-            # Try to cancel non-existent process
-            with patch("telegramBot.bot.os.killpg", side_effect=ProcessLookupError()):
-                with patch("telegramBot.bot.os.getpgid", return_value=99999):
-                    success = await bot._cancel_reservation(chat_id)
+            ok = await c.post(
+                "/internal/events",
+                json={
+                    "reservation_id": reservation.id,
+                    "token": token,
+                    "status": "success",
+                    "attempts": 12,
+                    "train_info": "KTX 101",
+                },
+            )
+            assert ok.status_code == 200
+            assert ok.json() == {"applied": True}
 
-            # Should still clean up state
-            assert "99999" not in bot.runningStatus
+            # 종료된 예약에 대한 늦은 보고는 무시
+            late = await c.post(
+                "/internal/events",
+                json={
+                    "reservation_id": reservation.id,
+                    "token": token,
+                    "status": "failed",
+                },
+            )
+            assert late.json() == {"applied": False}
 
-    def test_subprocess_login_failure(self):
-        """Test subprocess behavior when login fails"""
-        test_args = [
-            "test_script.py",
-            "010-1234-5678",
-            "wrong_password",
-            "20250115",
-            "서울",
-            "부산",
-            "090000",
-            "KTX",
-            "1",
-            "123456",
-            "1200",
-        ]
-
-        with patch("sys.argv", test_args), patch(
-            "telegramBot.worker.ReserveHandler"
-        ) as mock_handler_class:
-            mock_handler = Mock()
-            mock_handler.login = Mock(return_value=False)
-            mock_handler_class.return_value = mock_handler
-
-            from telegramBot.worker import BackProcess
-
-            # Should raise exception during initialization
-            with pytest.raises(SystemExit):
-                process = BackProcess()
+        r = services.reservations.get(reservation.id, owner)
+        assert r.status.value == "success"
+        assert r.attempts == 12
+        assert r.result_text == "KTX 101"

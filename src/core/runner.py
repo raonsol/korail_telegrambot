@@ -1,0 +1,170 @@
+"""워커 공통 예약 루프
+
+subprocess 워커(``telegramBot.worker``)와 Celery 태스크(``telegramBot.tasks``)가
+같은 로직으로 예약을 시도하고, 결과를 ``/internal/events``로 보고합니다.
+이 모듈은 DB/웹 계층을 import하지 않습니다(워커 프로세스는 가볍게 유지).
+"""
+
+import logging
+import time
+from typing import Callable, Optional
+
+import requests
+from korail2 import ReserveOption, TrainType
+
+from telegramBot.korail_client import ReserveHandler
+
+logger = logging.getLogger(__name__)
+
+TRAIN_TYPES = {"KTX": TrainType.KTX, "ALL": TrainType.ALL}
+SEAT_TYPES = {
+    "general": ReserveOption.GENERAL_FIRST,
+    "general_only": ReserveOption.GENERAL_ONLY,
+    "special": ReserveOption.SPECIAL_FIRST,
+    "special_only": ReserveOption.SPECIAL_ONLY,
+}
+
+# reserve_single_attempt가 돌려주는 '정상적인 실패' (재로그인 불필요)
+EXPECTED_MISSES = ("No trains available", "All trains sold out")
+
+MAX_ATTEMPTS_MESSAGE = "최대 시도 횟수를 초과하여 예약이 중단되었습니다."
+
+
+class CallbackReporter:
+    """예약 상태를 웹 서버에 보고"""
+
+    def __init__(self, callback_url: str, reservation_id: str, token: str):
+        self.callback_url = callback_url
+        self.reservation_id = reservation_id
+        self.token = token
+        self.session = requests.Session()
+
+    def send(
+        self,
+        status: str,
+        message: Optional[str] = None,
+        attempts: Optional[int] = None,
+        train_info: Optional[str] = None,
+        retries: int = 3,
+    ) -> bool:
+        payload = {
+            "reservation_id": self.reservation_id,
+            "token": self.token,
+            "status": status,
+        }
+        if message is not None:
+            payload["message"] = message
+        if attempts is not None:
+            payload["attempts"] = attempts
+        if train_info is not None:
+            payload["train_info"] = train_info
+
+        for attempt in range(retries):
+            try:
+                response = self.session.post(
+                    self.callback_url, json=payload, timeout=10
+                )
+                response.raise_for_status()
+                return True
+            except requests.RequestException as e:
+                if attempt == retries - 1:
+                    logger.error(f"Failed to report '{status}': {e}")
+                else:
+                    time.sleep(1)
+        return False
+
+
+def build_reporter(spec: dict) -> CallbackReporter:
+    return CallbackReporter(
+        spec["callback_url"], spec["reservation_id"], spec["callback_token"]
+    )
+
+
+def run_reservation(
+    spec: dict,
+    reporter: CallbackReporter,
+    should_stop: Callable[[], bool] = lambda: False,
+    on_success: Callable[[], None] = lambda: None,
+    max_attempts: int = 1000,
+    interval: float = 2.0,
+    progress_every: int = 50,
+    relogin_after_errors: int = 10,
+    sleep: Callable[[float], None] = time.sleep,
+    handler_factory: Callable[[], ReserveHandler] = ReserveHandler,
+) -> dict:
+    """예약이 성공하거나 최대 시도 횟수에 도달할 때까지 반복
+
+    Args:
+        spec: 예약 명세 (ReservationService._build_spec 참고)
+        reporter: 상태 보고 객체
+        should_stop: True를 반환하면 즉시 종료 (Celery 중복 실행 방지용)
+        on_success: 성공 직후 호출 (Celery의 Redis 완료 표시용)
+
+    Returns:
+        dict: {"status": "success"|"failed"|"error"|"stopped", ...}
+    """
+    korail_id = spec["korail_id"]
+    korail_pw = spec["korail_pw"]
+    train_type = TRAIN_TYPES.get(spec["train_type"], TrainType.KTX)
+    seat_type = SEAT_TYPES.get(spec["seat_type"], ReserveOption.GENERAL_FIRST)
+
+    handler = handler_factory()
+    if not handler.login(korail_id, korail_pw):
+        message = "코레일 로그인에 실패했습니다."
+        reporter.send("error", message=message)
+        return {"status": "error", "message": message}
+
+    reporter.send("running", attempts=0)
+
+    consecutive_errors = 0
+    for attempt in range(1, max_attempts + 1):
+        if should_stop():
+            return {"status": "stopped", "attempts": attempt - 1}
+
+        try:
+            result = handler.reserve_single_attempt(
+                depDate=spec["dep_date"],
+                srcLocate=spec["src_station"],
+                dstLocate=spec["dst_station"],
+                depTime=f"{spec['dep_time']}00",
+                trainType=train_type,
+                special=seat_type,
+                maxDepTime=spec["max_dep_time"],
+            )
+        except Exception as e:  # reserve_single_attempt는 보통 예외를 삼키지만 방어
+            result = {"success": False, "result": None, "error": str(e)}
+
+        if result["success"]:
+            if result["result"] == "duplicate_reservation":
+                train_info = "이미 동일한 예약이 존재합니다. 장바구니를 확인해주세요."
+            else:
+                train_info = str(result["result"])
+            on_success()
+            reporter.send("success", attempts=attempt, train_info=train_info)
+            return {"status": "success", "attempts": attempt, "train_info": train_info}
+
+        error = result.get("error") or ""
+        if error and error not in EXPECTED_MISSES:
+            consecutive_errors += 1
+            if attempt % 10 == 0:
+                logger.warning(f"Attempt {attempt} failed: {error}")
+            needs_login = any(
+                word in error.lower() for word in ("login", "session", "로그인")
+            )
+            if needs_login or consecutive_errors >= relogin_after_errors:
+                logger.info("Re-logging in to Korail")
+                if not handler.login(korail_id, korail_pw):
+                    message = "세션 오류로 재로그인에 실패하여 예약이 중단되었습니다."
+                    reporter.send("error", message=message, attempts=attempt)
+                    return {"status": "error", "message": message}
+                consecutive_errors = 0
+        else:
+            consecutive_errors = 0
+
+        if attempt % progress_every == 0:
+            reporter.send("progress", attempts=attempt)
+
+        sleep(interval)
+
+    reporter.send("failed", message=MAX_ATTEMPTS_MESSAGE, attempts=max_attempts)
+    return {"status": "failed", "attempts": max_attempts}

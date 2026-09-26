@@ -11,41 +11,28 @@ class TestTelegramBot:
     """Test TelegramBot class"""
 
     @pytest.fixture
-    def bot_instance(self):
+    def bot_instance(self, services):
         """Create a TelegramBot instance for testing"""
         with patch("telegramBot.bot.ApplicationBuilder"):
             from telegramBot.bot import TelegramBot
 
-            bot = TelegramBot("test_token", enable_redis_celery=False)
+            bot = TelegramBot("test_token", services)
+            services.notifier.add(bot)
             return bot
 
-    def test_bot_initialization_subprocess_mode(self):
-        """Test bot initialization in subprocess mode"""
+    def test_bot_initialization(self, services):
+        """Bot keeps only conversation state and delegates reservations to services"""
         with patch("telegramBot.bot.ApplicationBuilder"):
             from telegramBot.bot import TelegramBot
 
-            bot = TelegramBot("test_token", enable_redis_celery=False)
+            bot = TelegramBot("test_token", services)
 
             assert bot.token == "test_token"
-            assert bot.use_celery is False
-            assert bot.redis_client is None
-            assert bot.celery_app is None
+            assert bot.reservations is services.reservations
+            assert bot.users is services.users
             assert isinstance(bot.userDict, dict)
-            assert isinstance(bot.runningStatus, dict)
             assert isinstance(bot.subscribes, list)
-
-    def test_bot_initialization_celery_mode_no_redis(self):
-        """Test bot initialization in Celery mode when Redis is not available"""
-        with patch("telegramBot.bot.ApplicationBuilder"), patch(
-            "telegramBot.bot.REDIS_AVAILABLE", False
-        ):
-            from telegramBot.bot import TelegramBot
-
-            bot = TelegramBot("test_token", enable_redis_celery=True)
-
-            assert bot.use_celery is False
-            assert bot.redis_client is None
-            assert bot.celery_app is None
+            assert not hasattr(bot, "runningStatus")
 
     def test_create_user(self, bot_instance):
         """Test _create_user method"""
@@ -156,7 +143,6 @@ class TestTelegramBot:
             "lastAction": 1,
             "userInfo": {"korailId": "no-login-yet", "korailPw": "no-login-yet"},
             "trainInfo": {},
-            "pid": 9999999,
         }
 
         with patch("telegramBot.bot.settings") as mock_settings, patch(
@@ -176,6 +162,7 @@ class TestTelegramBot:
 
             assert bot_instance.userDict[chat_id]["userInfo"]["korailId"] == "admin_id"
             assert bot_instance.userDict[chat_id]["userInfo"]["korailPw"] == "admin_pw"
+            assert bot_instance.userDict[chat_id]["userInfo"]["isAdmin"] is True
             assert bot_instance.userDict[chat_id]["lastAction"] == 4
 
     @pytest.mark.asyncio
@@ -186,17 +173,15 @@ class TestTelegramBot:
         bot_instance.userDict[chat_id]["inProgress"] = True
         bot_instance.userDict[chat_id]["lastAction"] = 2
 
-        with patch("telegramBot.bot.settings") as mock_settings:
-            mock_settings.allow_list = "01012345678,01087654321"
-            bot_instance.send_message = AsyncMock()
+        # 01012345678 is seeded into the user DB from ALLOW_LIST
+        bot_instance.send_message = AsyncMock()
 
-            await bot_instance._input_id(chat_id, "01012345678")
+        await bot_instance._input_id(chat_id, "010-1234-5678")
 
-            assert (
-                bot_instance.userDict[chat_id]["userInfo"]["korailId"]
-                == "010-1234-5678"
-            )
-            assert bot_instance.userDict[chat_id]["lastAction"] == 3
+        user_info = bot_instance.userDict[chat_id]["userInfo"]
+        assert user_info["korailId"] == "010-1234-5678"
+        assert user_info["ownerId"] == "01012345678"
+        assert bot_instance.userDict[chat_id]["lastAction"] == 3
 
     @pytest.mark.asyncio
     async def test_input_id_invalid_phone(self, bot_instance):
@@ -218,13 +203,24 @@ class TestTelegramBot:
         bot_instance.send_message = AsyncMock()
         bot_instance.broadcast_message = AsyncMock()
 
-        with patch("telegramBot.bot.settings") as mock_settings:
-            mock_settings.allow_list = "01012345678"
+        await bot_instance._input_id(chat_id, "01099999999")
 
-            await bot_instance._input_id(chat_id, "01099999999")
+        assert bot_instance.userDict[chat_id]["inProgress"] is False
+        bot_instance.broadcast_message.assert_called_once()
 
-            assert bot_instance.userDict[chat_id]["inProgress"] is False
-            bot_instance.broadcast_message.assert_called_once()
+    @pytest.mark.asyncio
+    async def test_input_id_deactivated_user(self, bot_instance, services):
+        """Deactivated users in the DB cannot log in"""
+        chat_id = 123456
+        bot_instance._create_user(chat_id)
+        bot_instance.send_message = AsyncMock()
+        bot_instance.broadcast_message = AsyncMock()
+        services.users.update("01012345678", is_active=False)
+
+        await bot_instance._input_id(chat_id, "01012345678")
+
+        assert bot_instance.userDict[chat_id]["lastAction"] == 0
+        bot_instance.broadcast_message.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_input_pw_success(self, bot_instance):
@@ -232,6 +228,7 @@ class TestTelegramBot:
         chat_id = 123456
         bot_instance._create_user(chat_id)
         bot_instance.userDict[chat_id]["userInfo"]["korailId"] = "010-1234-5678"
+        bot_instance.userDict[chat_id]["userInfo"]["ownerId"] = "01012345678"
 
         with patch("telegramBot.bot.ReserveHandler") as mock_handler_class:
             mock_handler = Mock()
@@ -247,6 +244,8 @@ class TestTelegramBot:
                 == "test_password"
             )
             assert bot_instance.userDict[chat_id]["lastAction"] == 4
+            # chat is linked to the user so web reservations notify here too
+            assert bot_instance.users.get("01012345678").telegram_chat_id == chat_id
 
     @pytest.mark.asyncio
     async def test_input_pw_failure(self, bot_instance):
@@ -304,72 +303,273 @@ class TestTelegramBot:
         args = bot_instance.send_message.call_args[0]
         assert "진행중인 예약이 없습니다" in args[1]
 
+    async def _start(self, bot, chat_id, valid_request, owner_id="01012345678"):
+        from core.schemas import Owner
+
+        return await bot.reservations.start(
+            Owner(user_id=owner_id),
+            valid_request,
+            "010-1234-5678",
+            "pw",
+            origin="telegram",
+            chat_id=chat_id,
+        )
+
     @pytest.mark.asyncio
     async def test_cancel_func_with_reservation(
-        self, bot_instance, mock_telegram_update
+        self, bot_instance, mock_telegram_update, valid_request
     ):
         """Test /cancel command with active reservation"""
         chat_id = 123456
         mock_telegram_update.message.chat_id = chat_id
         bot_instance._create_user(chat_id)
-        bot_instance.userDict[chat_id]["userInfo"]["korailId"] = "010-1234-5678"
-        bot_instance.runningStatus["12345"] = {
-            "chat_id": chat_id,
-            "pid": 12345,
-            "korailId": "010-1234-5678",
-            "method": "subprocess",
-        }
         bot_instance.send_message = AsyncMock()
+        reservation = await self._start(bot_instance, chat_id, valid_request)
+
         await bot_instance.cancel_func(mock_telegram_update, None)
 
-        # /cancel now shows a cancel menu first, actual cancellation
-        # happens via callback (e.g. cancel_all / cancel_pid_*).
-        assert "12345" in bot_instance.runningStatus
+        # /cancel shows a cancel menu first, actual cancellation
+        # happens via callback (cancel_all / cancel_{reservation_id}).
+        assert bot_instance.reservations.get(reservation.id, chat_id=chat_id).is_active
         bot_instance.send_message.assert_called_once()
+        markup = bot_instance.send_message.call_args[1]["reply_markup"]
+        callbacks = [row[0].callback_data for row in markup.inline_keyboard]
+        assert f"cancel_{reservation.id}" in callbacks
 
     @pytest.mark.asyncio
-    async def test_start_background_process(self, bot_instance):
-        """Test _start_background_process method"""
-        arguments = [
-            "010-1234-5678",
-            "password",
-            "20250115",
-            "서울",
-            "부산",
-            "090000",
-            "KTX",
-            "1",
-            "123456",
-            "1200",
-        ]
+    async def test_cancel_callback_cancels_only_selected(
+        self, bot_instance, valid_request, fake_launcher
+    ):
+        chat_id = 123456
+        bot_instance._create_user(chat_id)
+        bot_instance.send_message = AsyncMock()
+        first = await self._start(bot_instance, chat_id, valid_request)
+        second = await self._start(bot_instance, chat_id, valid_request)
 
-        with patch("telegramBot.bot.subprocess.Popen") as mock_popen, patch(
-            "telegramBot.bot.os.makedirs"
-        ), patch("builtins.open"), patch("telegramBot.bot.threading.Thread"):
-            mock_process = Mock()
-            mock_process.pid = 12345
-            mock_popen.return_value = mock_process
+        await bot_instance._handle_cancel_callback(chat_id, f"cancel_{first.id}")
 
-            pid = bot_instance._start_background_process(arguments)
-
-            assert pid == 12345
-            mock_popen.assert_called_once()
+        assert not bot_instance.reservations.get(first.id, chat_id=chat_id).is_active
+        assert bot_instance.reservations.get(second.id, chat_id=chat_id).is_active
+        assert fake_launcher.cancelled == ["ref-1"]
 
     @pytest.mark.asyncio
-    async def test_get_status_info(self, bot_instance, mock_telegram_update):
+    async def test_cancel_callback_cancel_all(self, bot_instance, valid_request):
+        chat_id = 123456
+        bot_instance._create_user(chat_id)
+        bot_instance.send_message = AsyncMock()
+        await self._start(bot_instance, chat_id, valid_request)
+        await self._start(bot_instance, chat_id, valid_request)
+
+        await bot_instance._handle_cancel_callback(chat_id, "cancel_all")
+
+        assert bot_instance._active_reservations(chat_id) == []
+        assert "모든 예약이 취소" in bot_instance.send_message.call_args[0][1]
+
+    @pytest.mark.asyncio
+    async def test_start_reserve_launches_via_service(
+        self, bot_instance, fake_launcher, valid_request
+    ):
+        """confirm_yes starts a reservation through ReservationService"""
+        chat_id = 123456
+        bot_instance._create_user(chat_id)
+        bot_instance.userDict[chat_id]["userInfo"].update(
+            {"korailId": "010-1234-5678", "korailPw": "pw", "ownerId": "01012345678"}
+        )
+        bot_instance.userDict[chat_id]["trainInfo"] = {
+            "depDate": valid_request.dep_date_compact,
+            "srcLocate": "서울",
+            "dstLocate": "부산",
+            "depTime": "0900",
+            "maxDepTime": "1200",
+            "trainType": "ALL",
+            "specialInfo": "special_only",
+        }
+        bot_instance.send_message = AsyncMock()
+
+        await bot_instance._start_reserve(chat_id, "confirm_yes")
+
+        assert bot_instance.userDict[chat_id]["lastAction"] == 12
+        spec = fake_launcher.launched[0]
+        assert spec["train_type"] == "ALL"
+        assert spec["seat_type"] == "special_only"
+        assert spec["dep_time"] == "0900"
+        reservations = bot_instance._active_reservations(chat_id)
+        assert len(reservations) == 1
+        assert reservations[0].origin == "telegram"
+
+    @pytest.mark.asyncio
+    async def test_start_reserve_rejects_invalid_request(
+        self, bot_instance, fake_launcher
+    ):
+        chat_id = 123456
+        bot_instance._create_user(chat_id)
+        bot_instance.userDict[chat_id]["userInfo"].update(
+            {"korailId": "010-1234-5678", "korailPw": "pw", "ownerId": "01012345678"}
+        )
+        bot_instance.userDict[chat_id]["trainInfo"] = {
+            "depDate": "20000101",
+            "srcLocate": "서울",
+            "dstLocate": "부산",
+            "depTime": "0900",
+            "maxDepTime": "1200",
+            "trainType": "KTX",
+            "specialInfo": "general",
+        }
+        bot_instance.send_message = AsyncMock()
+
+        await bot_instance._start_reserve(chat_id, "confirm_yes")
+
+        assert fake_launcher.launched == []
+        assert "출발일" in bot_instance.send_message.call_args[0][1]
+
+    @pytest.mark.asyncio
+    async def test_start_reserve_per_user_limit(
+        self, bot_instance, fake_launcher, valid_request
+    ):
+        chat_id = 123456
+        bot_instance._create_user(chat_id)
+        bot_instance.send_message = AsyncMock()
+        for _ in range(3):
+            await self._start(bot_instance, chat_id, valid_request)
+        bot_instance.userDict[chat_id]["userInfo"].update(
+            {"korailId": "010-1234-5678", "korailPw": "pw", "ownerId": "01012345678"}
+        )
+        bot_instance.userDict[chat_id]["trainInfo"] = {
+            "depDate": valid_request.dep_date_compact,
+            "srcLocate": "서울",
+            "dstLocate": "부산",
+            "depTime": "0900",
+            "maxDepTime": "1200",
+            "trainType": "KTX",
+            "specialInfo": "general",
+        }
+
+        await bot_instance._start_reserve(chat_id, "confirm_yes")
+
+        assert len(fake_launcher.launched) == 3
+        assert "최대 3개" in bot_instance.send_message.call_args[0][1]
+
+    @pytest.mark.asyncio
+    async def test_get_status_info(
+        self, bot_instance, mock_telegram_update, valid_request
+    ):
         """Test /status command handler"""
         chat_id = 123456
         mock_telegram_update.message.chat_id = chat_id
-        bot_instance.runningStatus = {
-            789012: {"korailId": "010-1111-1111", "method": "subprocess"}
-        }
         bot_instance.send_message = AsyncMock()
+        await self._start(bot_instance, 789012, valid_request, owner_id="01011111111")
 
         await bot_instance.get_status_info(mock_telegram_update, None)
 
         bot_instance.send_message.assert_called_once()
         args = bot_instance.send_message.call_args[0]
         assert "1개의 예약이 실행중입니다" in args[1]
+        assert "010-1111-1111" in args[1]
+
+    @pytest.mark.asyncio
+    async def test_deliver_success_notifies_chat_and_resets_state(
+        self, bot_instance, valid_request, services
+    ):
+        from core.schemas import WorkerEvent
+
+        chat_id = 123456
+        bot_instance._create_user(chat_id)
+        bot_instance.userDict[chat_id]["inProgress"] = True
+        bot_instance.userDict[chat_id]["lastAction"] = 12
+        bot_instance.send_message = AsyncMock()
+        reservation = await self._start(bot_instance, chat_id, valid_request)
+        spec_token = bot_instance.reservations.launcher.launched[0]["callback_token"]
+
+        await bot_instance.reservations.handle_worker_event(
+            WorkerEvent(
+                reservation_id=reservation.id,
+                token=spec_token,
+                status="success",
+                train_info="KTX 001 (09:00~11:30)",
+            )
+        )
+
+        sent = [c[0] for c in bot_instance.send_message.call_args_list]
+        assert any(
+            c[0] == chat_id and "KTX 001" in c[1] and "예약에 성공" in c[1]
+            for c in sent
+        )
+        assert bot_instance.userDict[chat_id]["lastAction"] == 0
+
+    @pytest.mark.asyncio
+    async def test_deliver_web_reservation_to_linked_chat(
+        self, bot_instance, valid_request, services
+    ):
+        from core.schemas import Owner
+
+        services.users.link_telegram("01012345678", 555)
+        bot_instance.send_message = AsyncMock()
+        reservation = await services.reservations.start(
+            Owner(user_id="01012345678"), valid_request, "010", "pw", origin="web"
+        )
+
+        await services.reservations.cancel(
+            reservation.id, owner=Owner(user_id="admin", is_admin=True), source="admin"
+        )
+
+        chat, text = bot_instance.send_message.call_args[0][:2]
+        assert chat == 555
+        assert "[웹 예약]" in text
+        assert "관리자에 의해" in text
+
+    @pytest.mark.asyncio
+    async def test_deliver_skips_when_telegram_notify_disabled(
+        self, bot_instance, valid_request, services
+    ):
+        from core.schemas import Owner
+
+        services.users.link_telegram("01012345678", 555)
+        services.users.update("01012345678", telegram_notify=False)
+        bot_instance.send_message = AsyncMock()
+        reservation = await services.reservations.start(
+            Owner(user_id="01012345678"), valid_request, "010", "pw", origin="web"
+        )
+
+        await services.reservations.cancel(
+            reservation.id, owner=Owner(user_id="01012345678"), source="web"
+        )
+
+        bot_instance.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_admin_user_commands_require_admin(
+        self, bot_instance, mock_telegram_update
+    ):
+        chat_id = 123456
+        mock_telegram_update.message.chat_id = chat_id
+        bot_instance.send_message = AsyncMock()
+        context = Mock(args=["01055556666"])
+
+        await bot_instance.add_registered_user(mock_telegram_update, context)
+
+        assert bot_instance.users.get("01055556666") is None
+        assert "관리자만" in bot_instance.send_message.call_args[0][1]
+
+    @pytest.mark.asyncio
+    async def test_admin_user_commands(self, bot_instance, mock_telegram_update):
+        chat_id = 123456
+        mock_telegram_update.message.chat_id = chat_id
+        bot_instance._create_user(chat_id)
+        bot_instance.userDict[chat_id]["userInfo"]["isAdmin"] = True
+        bot_instance.send_message = AsyncMock()
+
+        await bot_instance.add_registered_user(
+            mock_telegram_update, Mock(args=["010-5555-6666", "홍길동"])
+        )
+        assert bot_instance.users.get("01055556666").name == "홍길동"
+
+        await bot_instance.list_registered_users(mock_telegram_update, Mock(args=[]))
+        assert "010-5555-6666 홍길동" in bot_instance.send_message.call_args[0][1]
+
+        await bot_instance.delete_registered_user(
+            mock_telegram_update, Mock(args=["01055556666"])
+        )
+        assert bot_instance.users.get("01055556666") is None
 
 
 class TestUtilityFunctions:

@@ -38,20 +38,23 @@ class ParallelReservationTester:
             self.redis_client.delete(*keys)
             print(f"✓ Cleaned up {len(keys)} test keys")
 
-    def create_test_reservation_data(self, user_id: int):
-        """Create test reservation data for a user"""
+    def create_test_reservation_data(self, task_id: str):
+        """Create a reservation spec (see ReservationService.start)"""
         tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y%m%d")
 
         return {
+            "reservation_id": task_id,
+            "callback_url": web_settings.callback_url,
+            "callback_token": "manual-test",
             "korail_id": os.getenv("ADMIN_KORAIL_ID", "test_user"),
             "korail_pw": os.getenv("ADMIN_KORAIL_PW", "test_pass"),
             "dep_date": tomorrow,
-            "dep_station": "서울",
-            "arr_station": "부산",
+            "src_station": "서울",
+            "dst_station": "부산",
             "dep_time": "0600",
-            "arr_time": "2400",
+            "max_dep_time": "2359",
             "train_type": "KTX",
-            "prefer_seat_type": "general",
+            "seat_type": "general",
         }
 
     def test_parallel_tasks(self, num_users=5):
@@ -70,19 +73,15 @@ class ParallelReservationTester:
 
         # Create test tasks
         tasks = []
-        callback_url = f"http://localhost:{8390 if web_settings.is_dev else 8391}/reservation-complete"
-
         print(f"Submitting {num_users} reservation tasks...\n")
 
         for i in range(num_users):
             chat_id = 1000000 + i  # test_user_1000000, test_user_1000001, etc.
-            reservation_data = self.create_test_reservation_data(chat_id)
+            task_id = f"test_reservation_{chat_id}"
+            spec = self.create_test_reservation_data(task_id)
 
             # Submit task to Celery
-            task = reservation_task.apply_async(
-                args=[chat_id, reservation_data, callback_url],
-                task_id=f"test_reservation_{chat_id}",
-            )
+            task = reservation_task.apply_async(kwargs={"spec": spec}, task_id=task_id)
             tasks.append({"task": task, "chat_id": chat_id, "start_time": time.time()})
 
             print(f"  User {i+1} (chat_id={chat_id}): Task ID = {task.id}")
@@ -197,16 +196,14 @@ class ParallelReservationTester:
         self.redis_client.delete(f"reservation:{chat_id}")
 
         # Submit multiple tasks for the same user
-        callback_url = f"http://localhost:{8390 if web_settings.is_dev else 8391}/reservation-complete"
-        reservation_data = self.create_test_reservation_data(chat_id)
-
         print(f"Submitting 3 concurrent tasks for same user (chat_id={chat_id})...\n")
 
         tasks = []
         for i in range(3):
+            task_id = f"concurrent_test_{chat_id}_{i}"
             task = reservation_task.apply_async(
-                args=[chat_id, reservation_data, callback_url],
-                task_id=f"concurrent_test_{chat_id}_{i}",
+                kwargs={"spec": self.create_test_reservation_data(task_id)},
+                task_id=task_id,
             )
             tasks.append(task)
             print(f"  Task {i+1}: {task.id}")

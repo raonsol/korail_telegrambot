@@ -101,6 +101,9 @@ class Messages:
 - 예약 상태 확인 : /status
 - 전체 취소 : /cancelall
 - 전체 유저 확인 : /allusers
+- 등록 사용자 목록 : /users (관리자)
+- 사용자 등록 : /adduser 010-1234-5678 [이름] (관리자)
+- 사용자 삭제 : /deluser 010-1234-5678 (관리자)
 """
         RESERVE_SUCCESS: str = """
 열차 예약에 성공했습니다!!

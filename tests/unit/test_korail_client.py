@@ -23,7 +23,6 @@ class TestReserveHandler:
         assert reserve_handler.loginSuc is False
         assert reserve_handler.reserveInfo["reserveSuc"] is False
         assert reserve_handler.interval == 1
-        assert reserve_handler.chatId == ""
 
     def test_login_success(self, reserve_handler, mock_korail_client):
         """Test successful login"""
@@ -266,74 +265,3 @@ class TestReserveHandler:
         assert result["result"] == "duplicate_reservation"
         assert result["error"] is None
         assert reserve_handler.reserveInfo["reserveSuc"] is True
-
-    @patch("telegramBot.korail_client.requests.session")
-    @patch("telegramBot.korail_client.os.getenv")
-    def test_send_reservation_status_success(
-        self, mock_getenv, mock_session, reserve_handler
-    ):
-        """Test sendReservationStatus with success status"""
-        mock_getenv.return_value = "true"  # IS_DEV=true
-        mock_post = Mock()
-        mock_session.return_value.post = mock_post
-
-        reserve_handler.chatId = "123456"
-        reserve_handler.reserveInfo["reserveSuc"] = True
-
-        reserve_handler.sendReservationStatus("Train reserved successfully")
-
-        mock_post.assert_called_once()
-        call_args = mock_post.call_args
-        assert "127.0.0.1:8390" in call_args[0][0]
-        assert call_args[1]["params"]["status"] == 1
-
-    @patch("telegramBot.korail_client.requests.session")
-    @patch("telegramBot.korail_client.os.getenv")
-    def test_send_reservation_status_failure(
-        self, mock_getenv, mock_session, reserve_handler
-    ):
-        """Test sendReservationStatus with failure status"""
-        mock_getenv.return_value = "false"  # IS_DEV=false
-        mock_post = Mock()
-        mock_session.return_value.post = mock_post
-
-        reserve_handler.chatId = "123456"
-        reserve_handler.reserveInfo["reserveSuc"] = False
-
-        reserve_handler.sendReservationStatus(None)
-
-        mock_post.assert_called_once()
-        call_args = mock_post.call_args
-        assert "127.0.0.1:8391" in call_args[0][0]
-        assert call_args[1]["params"]["status"] == 0
-
-    def test_send_bot_state_change(self, reserve_handler):
-        """Test sendBotStateChange method"""
-        mock_response = Mock()
-        mock_response.raise_for_status = Mock()
-
-        # Mock the session's post method
-        reserve_handler.s.post = Mock(return_value=mock_response)
-
-        reserve_handler.sendBotStateChange("123456", "Test message", 1)
-
-        reserve_handler.s.post.assert_called_once()
-        call_args = reserve_handler.s.post.call_args
-        assert call_args[1]["params"]["status"] == 1
-        assert call_args[1]["params"]["reserveInfo"] == "Test message"
-
-    def test_send_bot_state_change_with_retry(self, reserve_handler):
-        """Test sendBotStateChange retries on failure"""
-        import requests
-
-        # Mock the session's post method to fail twice, then succeed
-        reserve_handler.s.post = Mock()
-        reserve_handler.s.post.side_effect = [
-            requests.exceptions.RequestException("Network error"),
-            requests.exceptions.RequestException("Network error"),
-            Mock(),  # Third attempt succeeds
-        ]
-
-        reserve_handler.sendBotStateChange("123456", "Test message", 1)
-
-        assert reserve_handler.s.post.call_count == 3
