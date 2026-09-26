@@ -83,7 +83,7 @@ class TestMessages:
 
         assert train_info in formatted
         assert "20분내에" in formatted
-        assert "letskorail.com" in formatted
+        assert "https://www.korail.com/ticket/reservation/list" in formatted
 
     def test_reserve_already_doing_formatting(self):
         """Test RESERVE_ALREADY_DOING message formatting"""
