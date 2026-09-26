@@ -239,7 +239,7 @@ Docker 이미지는 멀티 스테이지 빌드로 웹앱을 함께 빌드하므�
 
 ## 모드 선택 가이드
 
-모드별 처리량 측정 결과(서버 크기별 동시 예약 수 등)는 [docs/capacity-review.md](docs/capacity-review.md)를 참고하세요.
+모드별 처리량 측정 결과(2026-09-26 측정, 서버 크기별 동시 예약 수 등)는 [docs/capacity-review.md](docs/capacity-review.md)를 참고하세요.
 
 ### Subprocess 모드를 사용해야 할 때
 - ✅ 단일 사용자 또는 소규모 팀 사용

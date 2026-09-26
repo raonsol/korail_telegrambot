@@ -467,7 +467,7 @@ ADMIN_KORAIL_PW       # Default Korail password for admin quick-login
 - **MQ Mode**: Enables scalability for multi-user scenarios
 - **Configuration-based**: Clean separation without code duplication
 
-### Capacity (measured, see `docs/capacity-review.md`)
+### Capacity (measured 2026-09-26, see `docs/capacity-review.md`)
 - Subprocess mode is memory-bound: ~22MB PSS per concurrent reservation; CPU ~0.035% of a core each; the web server is not a bottleneck
 - Celery prefork pre-allocates every slot (~35MB each); Celery threads is tiny but `revoke(terminate=True)` does not work (needs cooperative cancel)
 - The practical ceiling for both modes is Korail's per-IP request limit, not server resources
