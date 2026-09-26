@@ -863,6 +863,13 @@ class TelegramBot:
             train_type_str = (
                 "KTX" if train_info["trainType"] == TrainType.KTX else "ALL"
             )
+            # Convert ReserveOption to the seat type key expected by tasks.py
+            seat_type_keys = {
+                ReserveOption.GENERAL_FIRST: "general",
+                ReserveOption.GENERAL_ONLY: "general_only",
+                ReserveOption.SPECIAL_FIRST: "special",
+                ReserveOption.SPECIAL_ONLY: "special_only",
+            }
 
             # Prepare reservation data for Celery task
             reservation_data = {
@@ -874,8 +881,8 @@ class TelegramBot:
                 "dep_time": f"{train_info['depTime']}00",
                 "arr_time": train_info.get("maxDepTime"),
                 "train_type": train_type_str,
-                "prefer_seat_type": (
-                    "special" if train_info["specialInfo"] == "Y" else "general"
+                "prefer_seat_type": seat_type_keys.get(
+                    train_info["specialInfo"], "general"
                 ),
                 "attempts": 0,
             }
