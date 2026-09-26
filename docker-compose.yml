@@ -1,6 +1,7 @@
 services:
   # Cloudflare WARP - 코레일 API 요청을 WARP 로 우회하는 프록시 (HTTP/SOCKS5, warp:1080)
   # 오픈 프록시가 되지 않도록 호스트에 포트를 노출하지 않고 내부 네트워크에서만 사용
+  # USE_WARP=false 이면 make docker-compose-up(-mq) 가 docker-compose.nowarp.yml 을 덧붙여 제외함
   warp:
     image: caomingjun/warp
     restart: always
@@ -69,6 +70,7 @@ services:
       - TZ=Asia/Seoul
       - USE_CELERY=false
       - WARP_PROXY_URL=socks5h://warp:1080
+      - USE_WARP=${USE_WARP:-true}
     depends_on:
       warp:
         condition: service_healthy
@@ -93,6 +95,7 @@ services:
       - CELERY_BROKER=redis://redis:6379
       - CELERY_RESULT_BACKEND=redis://redis:6379
       - WARP_PROXY_URL=socks5h://warp:1080
+      - USE_WARP=${USE_WARP:-true}
     depends_on:
       redis:
         condition: service_started
@@ -122,6 +125,7 @@ services:
       - USE_CELERY=true
       - CELERY_WORKER_NAME=worker
       - WARP_PROXY_URL=socks5h://warp:1080
+      - USE_WARP=${USE_WARP:-true}
     depends_on:
       redis:
         condition: service_started

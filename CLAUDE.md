@@ -11,7 +11,7 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 - **FastAPI**: Modern web framework for webhook-based Telegram bot backend
 - **python-telegram-bot**: Comprehensive library for Telegram Bot API interactions
 - **pykorail**: KTX reservation API client library (코레일톡 앱 API, curl_cffi 기반)
-- **Cloudflare WARP**: Korail API requests are routed through a WARP proxy (`WARP_PROXY_URL`)
+- **Cloudflare WARP**: Korail API requests are routed through a WARP proxy (`WARP_PROXY_URL`, toggle with `USE_WARP`)
 - **Redis + Celery**: Optional distributed task processing system (MQ pattern)
 - **PostgreSQL**: Optional persistent data storage for Celery mode (MQ pattern)
 - **Docker**: Complete containerization with multi-environment support
@@ -85,6 +85,7 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 #### Supporting Modules
 - **src/telegramBot/korail_client.py**: Korail API client wrapper (pykorail)
   - `create_korail_client()`: Creates the pykorail client and applies `WARP_PROXY_URL` to its HTTP session
+  - `is_warp_enabled()` / `get_warp_proxy_url()`: `USE_WARP=false` (or empty `WARP_PROXY_URL`) means direct requests
   - `check_warp_status()`: Checks `warp=on/plus` via Cloudflare trace (logged at app startup)
   - `FATAL_ERRORS`: `StationNotFoundError`, `PastDepartureError` - stop retry loops immediately
 - **src/telegramBot/messages.py**: Centralized message templates
@@ -108,6 +109,7 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 ```yaml
 # Shared (subprocess + celery profiles)
 warp: Cloudflare WARP proxy (HTTP/SOCKS5 on warp:1080, internal network only)
+      # USE_WARP=false → Makefile adds docker-compose.nowarp.yml (removes warp + its depends_on)
 
 # Subprocess Mode Services
 web: FastAPI application (subprocess mode)
@@ -423,6 +425,7 @@ DATAGOV_API_KEY       # 공공데이터포털 API 서비스키 (역 검색용)
 
 ### Cloudflare WARP
 ```bash
+USE_WARP              # WARP toggle (default true). false → direct Korail requests, Docker skips the warp container
 WARP_PROXY_URL        # Proxy for Korail API requests (local: socks5h://127.0.0.1:40000 via `warp-cli mode proxy`)
                       # Docker Compose sets socks5h://warp:1080 automatically. Empty = direct requests
 WARP_LICENSE_KEY      # Optional WARP+ license for the Docker warp container

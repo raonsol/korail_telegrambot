@@ -2,6 +2,17 @@
 export
 
 IMAGE_NAME := raonsol/korail_telegrambot:v0.9
+
+# Cloudflare WARP toggle (.env 의 USE_WARP, 기본값 true)
+# false 이면 Docker Compose 실행 시 warp 컨테이너를 제외하고 코레일에 직접 요청
+USE_WARP ?= true
+ifneq ($(filter false 0 no off,$(shell echo '$(USE_WARP)' | tr '[:upper:]' '[:lower:]')),)
+WARP_ENABLED := false
+COMPOSE_FILES := -f docker-compose.yml -f docker-compose.nowarp.yml
+else
+WARP_ENABLED := true
+COMPOSE_FILES := -f docker-compose.yml
+endif
 WORKER_PID_FILE := .celery-worker.pid
 FLOWER_PID_FILE := .celery-flower.pid
 
@@ -116,12 +127,14 @@ celery-flower-stop:  ## Stop Flower monitoring UI
 
 .PHONY: warp-check
 warp-check:  ## Check that WARP_PROXY_URL routes through Cloudflare WARP (local, expects warp=on or warp=plus)
+	@if [ "$(WARP_ENABLED)" = "false" ]; then echo "ℹ️  WARP is disabled (USE_WARP=$(USE_WARP))"; exit 0; fi
 	@if [ -z "$(WARP_PROXY_URL)" ]; then echo "❌ WARP_PROXY_URL is not set"; exit 1; fi
 	@echo "🔍 Checking Cloudflare WARP via $(WARP_PROXY_URL)..."
 	@curl -sS --max-time 10 --proxy "$(WARP_PROXY_URL)" https://www.cloudflare.com/cdn-cgi/trace | grep -E "^(ip|loc|warp)="
 
 .PHONY: docker-warp-check
 docker-warp-check:  ## Check that the warp container routes through Cloudflare WARP (Docker, expects warp=on or warp=plus)
+	@if [ "$(WARP_ENABLED)" = "false" ]; then echo "ℹ️  WARP is disabled (USE_WARP=$(USE_WARP))"; exit 0; fi
 	docker compose exec warp curl -sS --max-time 10 --socks5-hostname 127.0.0.1:1080 https://www.cloudflare.com/cdn-cgi/trace | grep -E "^(ip|loc|warp)="
 
 .PHONY: lint
@@ -179,12 +192,12 @@ docker-push:  	## Publish Docker Image
 	docker push ${IMAGE_NAME}
 
 .PHONY: docker-compose-up
-docker-compose-up:	## Start all services with Docker Compose (subprocess mode)
-	docker compose --profile subprocess up -d --build
+docker-compose-up:	## Start all services with Docker Compose (subprocess mode, WARP unless USE_WARP=false)
+	docker compose $(COMPOSE_FILES) --profile subprocess up -d --build
 
 .PHONY: docker-compose-up-mq
-docker-compose-up-mq:	## Start all services with Docker Compose (Celery/MQ mode - RECOMMENDED for production)
-	docker compose --profile celery up -d --build
+docker-compose-up-mq:	## Start all services with Docker Compose (Celery/MQ mode - RECOMMENDED for production, WARP unless USE_WARP=false)
+	docker compose $(COMPOSE_FILES) --profile celery up -d --build
 
 .PHONY: docker-compose-down
 docker-compose-down:	## Stop all Docker Compose services

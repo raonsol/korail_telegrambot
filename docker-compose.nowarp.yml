@@ -1,0 +1,18 @@
+# USE_WARP=false 일 때 docker-compose.yml 위에 덧붙이는 설정
+# - warp 컨테이너를 기본 프로필(subprocess/celery)에서 제외
+# - 봇 컨테이너가 warp 컨테이너 상태를 기다리지 않도록 의존성 제거
+# make docker-compose-up / docker-compose-up-mq 가 .env 의 USE_WARP 를 보고 자동으로 사용합니다.
+# 직접 실행: docker compose -f docker-compose.yml -f docker-compose.nowarp.yml --profile celery up -d --build
+# (Docker Compose v2.24 이상 필요: !override / !reset)
+services:
+  warp:
+    profiles: !override ["warp"]
+
+  web:
+    depends_on: !reset {}
+
+  web_celery:
+    depends_on: !override [redis, postgres]
+
+  worker:
+    depends_on: !override [redis, postgres]

@@ -74,8 +74,9 @@ REDIS_URL=redis://localhost:6379
 CELERY_BROKER=redis://localhost:6379
 CELERY_RESULT_BACKEND=redis://localhost:6379
 
-# Cloudflare WARP 프록시 (코레일 API 요청 우회, 로컬 실행용)
-WARP_PROXY_URL=socks5h://127.0.0.1:40000
+# Cloudflare WARP 프록시 (코레일 API 요청 우회)
+USE_WARP=true                               # false 면 WARP 없이 직접 요청
+WARP_PROXY_URL=socks5h://127.0.0.1:40000    # 로컬 실행용 (Docker 는 자동 설정)
 WARP_LICENSE_KEY=  # WARP+ 라이선스 (선택)
 ```
 
@@ -275,7 +276,10 @@ korail_telegrambot/
   warp-cli connect
   make warp-check   # warp=on 또는 warp=plus 가 출력되면 정상
   ```
-- `WARP_PROXY_URL`을 비워두면 WARP 없이 직접 요청합니다. 서버 시작 시 WARP 연결 상태가 로그에 출력됩니다.
+- **WARP 끄기**: `.env`에 `USE_WARP=false`를 설정하면 WARP 없이 코레일에 직접 요청합니다.
+  `make docker-compose-up` / `make docker-compose-up-mq`는 이때 `docker-compose.nowarp.yml`을 덧붙여
+  warp 컨테이너를 실행하지 않습니다. `docker compose`를 직접 실행한다면 같은 파일을 `-f`로 추가하세요.
+- 서버 시작 시 WARP 연결 상태가 로그에 출력됩니다.
 
 ### 사용자 권한 관리
 

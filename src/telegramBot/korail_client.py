@@ -24,8 +24,23 @@ FATAL_ERRORS = (StationNotFoundError, PastDepartureError)
 WARP_TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"
 
 
+def is_warp_enabled():
+    """USE_WARP 토글 (기본값 true). false/0/no/off 이면 WARP 를 사용하지 않음"""
+    return os.getenv("USE_WARP", "true").strip().lower() not in (
+        "false",
+        "0",
+        "no",
+        "off",
+    )
+
+
 def get_warp_proxy_url():
-    """Cloudflare WARP 프록시 주소 (예: socks5h://127.0.0.1:40000). 미설정 시 빈 문자열"""
+    """Cloudflare WARP 프록시 주소 (예: socks5h://127.0.0.1:40000)
+
+    USE_WARP=false 이거나 WARP_PROXY_URL 이 비어 있으면 빈 문자열 (코레일에 직접 요청)
+    """
+    if not is_warp_enabled():
+        return ""
     return os.getenv("WARP_PROXY_URL", "").strip()
 
 
@@ -45,7 +60,8 @@ def check_warp_status(timeout=5):
 
     Returns:
         str: "on"/"plus" (WARP 사용 중), "off" (프록시는 되지만 WARP 아님),
-             "disabled" (WARP_PROXY_URL 미설정), "error: ..." (프록시 연결 실패)
+             "disabled" (USE_WARP=false 또는 WARP_PROXY_URL 미설정),
+             "error: ..." (프록시 연결 실패)
     """
     proxy_url = get_warp_proxy_url()
     if not proxy_url:

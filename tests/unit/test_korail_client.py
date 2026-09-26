@@ -470,6 +470,53 @@ class TestReserveHandler:
 class TestWarpProxy:
     """Cloudflare WARP proxy wiring for Korail requests"""
 
+    @pytest.fixture(autouse=True)
+    def _clear_use_warp(self, monkeypatch):
+        """Each test starts with the default USE_WARP (enabled)"""
+        monkeypatch.delenv("USE_WARP", raising=False)
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            (None, True),
+            ("true", True),
+            ("TRUE", True),
+            ("1", True),
+            ("false", False),
+            ("False", False),
+            (" false ", False),
+            ("0", False),
+            ("no", False),
+            ("off", False),
+        ],
+    )
+    def test_is_warp_enabled(self, monkeypatch, value, expected):
+        """USE_WARP defaults to enabled and accepts false/0/no/off to disable"""
+        from telegramBot.korail_client import is_warp_enabled
+
+        if value is not None:
+            monkeypatch.setenv("USE_WARP", value)
+        assert is_warp_enabled() is expected
+
+    def test_use_warp_false_skips_proxy(self, monkeypatch):
+        """USE_WARP=false sends Korail requests directly even if WARP_PROXY_URL is set"""
+        from telegramBot.korail_client import (
+            check_warp_status,
+            create_korail_client,
+            get_warp_proxy_url,
+        )
+
+        monkeypatch.setenv("WARP_PROXY_URL", "socks5h://warp:1080")
+        monkeypatch.setenv("USE_WARP", "false")
+
+        assert get_warp_proxy_url() == ""
+        assert check_warp_status() == "disabled"
+        client = create_korail_client()
+        try:
+            assert not client._api._session.proxies
+        finally:
+            client.close()
+
     def test_create_client_uses_warp_proxy(self, monkeypatch):
         """WARP_PROXY_URL is applied to pykorail's HTTP session"""
         from telegramBot.korail_client import create_korail_client

@@ -75,7 +75,10 @@ async def lifespan(_: FastAPI):
     if warp_status in ("on", "plus"):
         logger.info(f"Korail requests go through Cloudflare WARP (warp={warp_status})")
     elif warp_status == "disabled":
-        logger.warning("WARP_PROXY_URL is not set - Korail requests are sent directly")
+        logger.warning(
+            "WARP is disabled (USE_WARP=false or WARP_PROXY_URL is empty) "
+            "- Korail requests are sent directly"
+        )
     else:
         logger.warning(
             f"Cloudflare WARP check failed via {get_warp_proxy_url()}: warp={warp_status}"
