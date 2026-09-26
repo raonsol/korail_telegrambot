@@ -1,6 +1,5 @@
 import os
 import sys
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Query, Request, Response, status
@@ -8,7 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from telegram import Update
 from telegramBot.bot import TelegramBot
-from telegramBot.korail_client import check_warp_status, get_warp_proxy_url
 from telegramBot.messages import Messages
 from config import web_settings as settings
 
@@ -69,20 +67,6 @@ async def lifespan(_: FastAPI):
     except Exception as e:
         logger.error(f"Error setting webhook: {e}")
         # webhook 설정 실패해도 서버는 계속 실행되도록 함
-
-    # 코레일 요청이 Cloudflare WARP 를 거치는지 확인 (실패해도 서버는 계속 실행)
-    warp_status = await asyncio.to_thread(check_warp_status)
-    if warp_status in ("on", "plus"):
-        logger.info(f"Korail requests go through Cloudflare WARP (warp={warp_status})")
-    elif warp_status == "disabled":
-        logger.warning(
-            "WARP is disabled (USE_WARP=false or WARP_PROXY_URL is empty) "
-            "- Korail requests are sent directly"
-        )
-    else:
-        logger.warning(
-            f"Cloudflare WARP check failed via {get_warp_proxy_url()}: warp={warp_status}"
-        )
 
     async with bot.app:
         await bot.app.start()

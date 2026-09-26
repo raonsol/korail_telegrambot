@@ -528,92 +528,15 @@ class TestReserveHandler:
         assert reserve_handler.s.post.call_count == 3
 
 
-class TestWarpProxy:
-    """Cloudflare WARP proxy wiring for Korail requests"""
+class TestKorailBlockLogging:
+    """Korail server block responses (code -2000) are written to the server log"""
 
-    @pytest.fixture(autouse=True)
-    def _clear_use_warp(self, monkeypatch):
-        """Each test starts with the default USE_WARP (enabled)"""
-        monkeypatch.delenv("USE_WARP", raising=False)
-
-    @pytest.mark.parametrize(
-        "value, expected",
-        [
-            (None, True),
-            ("true", True),
-            ("TRUE", True),
-            ("1", True),
-            ("false", False),
-            ("False", False),
-            (" false ", False),
-            ("0", False),
-            ("no", False),
-            ("off", False),
-            ('"false"', False),
-            ("'false'", False),
-            ("false\r", False),
-            ('"true"', True),
-        ],
-    )
-    def test_is_warp_enabled(self, monkeypatch, value, expected):
-        """USE_WARP defaults to enabled and accepts false/0/no/off to disable"""
-        from telegramBot.korail_client import is_warp_enabled
-
-        if value is not None:
-            monkeypatch.setenv("USE_WARP", value)
-        assert is_warp_enabled() is expected
-
-    def test_use_warp_false_skips_proxy(self, monkeypatch):
-        """USE_WARP=false sends Korail requests directly even if WARP_PROXY_URL is set"""
-        from telegramBot.korail_client import (
-            check_warp_status,
-            create_korail_client,
-            get_warp_proxy_url,
-        )
-
-        monkeypatch.setenv("WARP_PROXY_URL", "socks5h://warp:1080")
-        monkeypatch.setenv("USE_WARP", "false")
-
-        assert get_warp_proxy_url() == ""
-        assert check_warp_status() == "disabled"
-        client = create_korail_client()
-        try:
-            assert not client._api._session.proxies
-        finally:
-            client.close()
-
-    def test_create_client_uses_warp_proxy(self, monkeypatch):
-        """WARP_PROXY_URL is applied to pykorail's HTTP session"""
-        from telegramBot.korail_client import create_korail_client
-
-        monkeypatch.setenv("WARP_PROXY_URL", "socks5h://warp:1080")
-        client = create_korail_client()
-        try:
-            assert client._api._session.proxies == {
-                "http": "socks5h://warp:1080",
-                "https": "socks5h://warp:1080",
-            }
-        finally:
-            client.close()
-
-    def test_create_client_without_proxy(self, monkeypatch):
-        """No proxy is set when WARP_PROXY_URL is empty"""
-        from telegramBot.korail_client import create_korail_client
-
-        monkeypatch.setenv("WARP_PROXY_URL", "")
-        client = create_korail_client()
-        try:
-            assert not client._api._session.proxies
-        finally:
-            client.close()
-
-    def test_korail_block_response_is_logged(self, monkeypatch, caplog):
+    def test_korail_block_response_is_logged(self, caplog):
         """Korail server block (code -2000) is written to the server log"""
         import json
         import logging
         from telegramBot.korail_client import create_korail_client
 
-        monkeypatch.setenv("WARP_PROXY_URL", "socks5h://warp:1080")
         block = {
             "code": -2000,
             "id": "2c0a2515-6ea1-9bef-5dca-0f6d37da13c1",
@@ -634,17 +557,15 @@ class TestWarpProxy:
         assert "코레일 서버 차단 응답" in log
         assert "code=-2000" in log
         assert "2c0a2515-6ea1-9bef-5dca-0f6d37da13c1" in log
-        assert "socks5h://warp:1080" in log
         assert "매크로 등 미허가 도구" in log
         assert "mbCrdNo" not in log  # 쿼리스트링은 남기지 않음
 
-    def test_normal_korail_response_is_not_logged(self, monkeypatch, caplog):
+    def test_normal_korail_response_is_not_logged(self, caplog):
         """Regular Korail responses (even failures) are not logged as blocks"""
         import json
         import logging
         from telegramBot.korail_client import create_korail_client
 
-        monkeypatch.setenv("WARP_PROXY_URL", "")
         payload = {"strResult": "FAIL", "h_msg_cd": "WRR000101", "h_msg_txt": "x"}
         response = Mock(text=json.dumps(payload), url="https://smart.letskorail.com/x")
         client = create_korail_client()
@@ -655,31 +576,3 @@ class TestWarpProxy:
             client.close()
 
         assert "코레일 서버 차단 응답" not in caplog.text
-
-    def test_check_warp_status_disabled(self, monkeypatch):
-        """check_warp_status reports disabled without WARP_PROXY_URL"""
-        from telegramBot.korail_client import check_warp_status
-
-        monkeypatch.delenv("WARP_PROXY_URL", raising=False)
-        assert check_warp_status() == "disabled"
-
-    def test_check_warp_status_parses_trace(self, monkeypatch):
-        """check_warp_status reads warp=... from the Cloudflare trace"""
-        from telegramBot.korail_client import check_warp_status
-
-        monkeypatch.setenv("WARP_PROXY_URL", "socks5h://warp:1080")
-        response = Mock(text="fl=1\nip=104.28.0.1\nloc=KR\nwarp=on\n")
-        with patch("curl_cffi.requests.get", return_value=response) as mock_get:
-            assert check_warp_status() == "on"
-
-        assert mock_get.call_args[1]["proxies"]["https"] == "socks5h://warp:1080"
-        # 코레일(IPv4 전용)과 같은 IPv4 출구를 보도록 IP 주소로 확인
-        assert mock_get.call_args[0][0] == "https://1.1.1.1/cdn-cgi/trace"
-
-    def test_check_warp_status_error(self, monkeypatch):
-        """check_warp_status reports proxy connection errors"""
-        from telegramBot.korail_client import check_warp_status
-
-        monkeypatch.setenv("WARP_PROXY_URL", "socks5h://warp:1080")
-        with patch("curl_cffi.requests.get", side_effect=Exception("refused")):
-            assert check_warp_status().startswith("error: refused")

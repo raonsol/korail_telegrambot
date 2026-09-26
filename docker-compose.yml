@@ -1,32 +1,4 @@
 services:
-  # Cloudflare WARP - 코레일 API 요청을 WARP 로 우회하는 프록시 (HTTP/SOCKS5, warp:1080)
-  # 오픈 프록시가 되지 않도록 호스트에 포트를 노출하지 않고 내부 네트워크에서만 사용
-  # USE_WARP=false 이면 make docker-compose-up(-mq) 가 docker-compose.nowarp.yml 을 덧붙여 제외함
-  warp:
-    image: caomingjun/warp
-    restart: always
-    # runc 1.2 이후 기본 device 규칙에서 빠진 tun 장치 접근 허용
-    device_cgroup_rules:
-      - 'c 10:200 rwm'
-    environment:
-      - TZ=Asia/Seoul
-      - WARP_SLEEP=2
-      - WARP_LICENSE_KEY=${WARP_LICENSE_KEY:-}  # WARP+ 라이선스 (선택)
-    cap_add:
-      - MKNOD
-      - AUDIT_WRITE
-      - NET_ADMIN
-    sysctls:
-      - net.ipv6.conf.all.disable_ipv6=0
-      - net.ipv4.conf.all.src_valid_mark=1
-    volumes:
-      - warp_data:/var/lib/cloudflare-warp
-    networks:
-      - korail_network
-    profiles:
-      - subprocess
-      - celery
-
   # Redis - 상태 관리 및 메시지 브로커 (Celery 모드에서만 사용)
   # 컨테이너끼리만 사용하므로 호스트 포트를 열지 않음
   # (로컬 make run-mq/dev-mq 의 Redis(6379)와 충돌 방지, 인증 없는 Redis 외부 노출 방지)
@@ -72,11 +44,6 @@ services:
     environment:
       - TZ=Asia/Seoul
       - USE_CELERY=false
-      - WARP_PROXY_URL=socks5h://warp:1080
-      - USE_WARP=${USE_WARP:-true}
-    depends_on:
-      warp:
-        condition: service_healthy
     volumes:
       - ./logs:/app/logs
     networks:
@@ -97,15 +64,11 @@ services:
       - REDIS_URL=redis://redis:6379
       - CELERY_BROKER=redis://redis:6379
       - CELERY_RESULT_BACKEND=redis://redis:6379
-      - WARP_PROXY_URL=socks5h://warp:1080
-      - USE_WARP=${USE_WARP:-true}
     depends_on:
       redis:
         condition: service_healthy
       postgres:
         condition: service_started
-      warp:
-        condition: service_healthy
     volumes:
       - ./logs:/app/logs
     networks:
@@ -127,15 +90,11 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379
       - USE_CELERY=true
       - CELERY_WORKER_NAME=worker
-      - WARP_PROXY_URL=socks5h://warp:1080
-      - USE_WARP=${USE_WARP:-true}
     depends_on:
       redis:
         condition: service_healthy
       postgres:
         condition: service_started
-      warp:
-        condition: service_healthy
     volumes:
       - ./logs:/app/logs
     networks:
@@ -189,7 +148,6 @@ services:
 volumes:
   redis_data:
   postgres_data:
-  warp_data:
 
 networks:
   korail_network:

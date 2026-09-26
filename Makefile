@@ -4,22 +4,6 @@ export
 VERSION := $(shell sed -n 's/^VERSION = "\(.*\)"/\1/p' src/version.py)
 IMAGE_NAME := raonsol/korail_telegrambot:$(VERSION)
 
-# Cloudflare WARP toggle (.env 의 USE_WARP, 기본값 true)
-# false 이면 Docker Compose 실행 시 warp 컨테이너를 제외하고 코레일에 직접 요청
-USE_WARP ?= true
-# make 는 .env 의 따옴표를 벗기지 않으므로("false" 가 그대로 들어옴) 따옴표/CR/공백을 지우고 소문자로 판단
-CR := $(shell printf '\r')
-USE_WARP_VALUE := $(shell echo '$(strip $(subst ",,$(subst ',,$(subst $(CR),,$(USE_WARP)))))' | tr '[:upper:]' '[:lower:]')
-ifneq ($(filter false 0 no off,$(USE_WARP_VALUE)),)
-WARP_ENABLED := false
-COMPOSE_FILES := -f docker-compose.yml -f docker-compose.nowarp.yml
-else
-WARP_ENABLED := true
-COMPOSE_FILES := -f docker-compose.yml
-endif
-# 정리된 값(true/false)을 로컬 실행과 docker compose 에 전달
-# (compose 는 .env 보다 셸 환경변수를 우선해 USE_WARP=${USE_WARP:-true} 를 보간함)
-override USE_WARP := $(WARP_ENABLED)
 WORKER_PID_FILE := .celery-worker.pid
 FLOWER_PID_FILE := .celery-flower.pid
 
@@ -145,26 +129,13 @@ celery-flower-stop:  ## Stop Flower monitoring UI
 		rm -f ${FLOWER_PID_FILE}; \
 	fi
 
-# WARP 출구 확인: 코레일은 IPv4 전용이라 IPv4 로만 접속되는 1.1.1.1 로 확인 (ip=104.x, warp=on 이면 정상)
-.PHONY: warp-check
-warp-check:  ## Check that WARP_PROXY_URL routes through Cloudflare WARP (local, expects warp=on or warp=plus)
-	@if [ "$(WARP_ENABLED)" = "false" ]; then echo "ℹ️  WARP is disabled (USE_WARP=$(USE_WARP))"; exit 0; fi
-	@if [ -z "$(WARP_PROXY_URL)" ]; then echo "❌ WARP_PROXY_URL is not set"; exit 1; fi
-	@echo "🔍 Checking Cloudflare WARP via $(WARP_PROXY_URL)..."
-	@curl -sS --max-time 10 --proxy "$(WARP_PROXY_URL)" https://1.1.1.1/cdn-cgi/trace | grep -E "^(ip|loc|warp)="
-
-.PHONY: docker-warp-check
-docker-warp-check:  ## Check that the warp container routes through Cloudflare WARP (Docker, expects warp=on or warp=plus)
-	@if [ "$(WARP_ENABLED)" = "false" ]; then echo "ℹ️  WARP is disabled (USE_WARP=$(USE_WARP))"; exit 0; fi
-	docker compose exec warp curl -sS --max-time 10 --socks5-hostname 127.0.0.1:1080 https://1.1.1.1/cdn-cgi/trace | grep -E "^(ip|loc|warp)="
-
 .PHONY: korail-login-check
 korail-login-check:  ## Diagnose ADMIN_KORAIL_ID/PW login inside Docker (shows server response, never the password; counts as 1 login attempt)
 	@svc=$$(docker compose ps --status running --services 2>/dev/null | grep -xE 'web_celery|web' | head -1); \
 	if [ -n "$$svc" ]; then \
 		docker compose exec -T $$svc python - < scripts/check_korail_login.py; \
 	else \
-		docker compose $(COMPOSE_FILES) run --rm --no-deps -T web_celery python - < scripts/check_korail_login.py; \
+		docker compose run --rm --no-deps -T web_celery python - < scripts/check_korail_login.py; \
 	fi
 
 .PHONY: lint
@@ -222,13 +193,12 @@ docker-push:  	## Publish Docker Image
 	docker push ${IMAGE_NAME}
 
 # Docker Compose 실행: 바뀐 컨테이너만 다시 만든다 (up -d --build 의 기본 동작)
-# 1. 이번 모드에서 쓰지 않는 서비스(반대 모드 전용, USE_WARP=false 일 때 warp)만 내림
+# 1. 이번 모드에서 쓰지 않는 서비스(반대 모드 전용)만 내림
 #    -> subprocess <-> celery 전환 시 8391 등 포트 충돌 방지
 # 2. 포트 확인: 이번 모드의 컨테이너가 쓰고 있는 포트는 통과, 다른 프로세스(로컬 서버 등)가 쓰면 중단
 # $(1): 띄울 프로필, $(2): 반대 프로필, $(3): 확인할 "서비스:포트" 목록
 define COMPOSE_UP
 	@unused=$$(docker compose --profile $(2) config --services | grep -vxF "$$(docker compose --profile $(1) config --services)"); \
-	if [ "$(WARP_ENABLED)" = "false" ]; then unused="$$unused warp"; fi; \
 	if [ -n "$$unused" ] && [ -n "$$(docker compose --profile $(1) --profile $(2) ps -q $$unused)" ]; then \
 		echo "🛑 Removing services not used in $(1) mode:" $$unused; \
 		docker compose --profile $(1) --profile $(2) rm -sf $$unused; \
@@ -240,7 +210,7 @@ define COMPOSE_UP
 			exit 1; \
 		fi; \
 	done
-	docker compose $(COMPOSE_FILES) --profile $(1) up -d --build --remove-orphans
+	docker compose --profile $(1) up -d --build --remove-orphans
 endef
 
 # BuildKit 이 기본으로 붙이는 provenance 증명에는 빌드마다 다른 값이 들어가, 코드가 같아도 이미지 ID 가
@@ -249,11 +219,11 @@ endef
 docker-compose-up docker-compose-up-mq: export BUILDX_NO_DEFAULT_ATTESTATIONS := 1
 
 .PHONY: docker-compose-up
-docker-compose-up:	## Start/update Docker Compose in subprocess mode (recreates only changed containers, WARP unless USE_WARP=false)
+docker-compose-up:	## Start/update Docker Compose in subprocess mode (recreates only changed containers)
 	$(call COMPOSE_UP,subprocess,celery,web:8391)
 
 .PHONY: docker-compose-up-mq
-docker-compose-up-mq:	## Start/update Docker Compose in Celery/MQ mode - RECOMMENDED for production (recreates only changed containers, WARP unless USE_WARP=false)
+docker-compose-up-mq:	## Start/update Docker Compose in Celery/MQ mode - RECOMMENDED for production (recreates only changed containers)
 	$(call COMPOSE_UP,celery,subprocess,web_celery:8391 flower:5555)
 
 .PHONY: docker-compose-down

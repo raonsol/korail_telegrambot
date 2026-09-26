@@ -25,10 +25,6 @@ KST = timezone(timedelta(hours=9))
 # 재시도해도 결과가 바뀌지 않는 오류 (역 이름 오류, 이미 지난 날짜)
 FATAL_ERRORS = (StationNotFoundError, PastDepartureError)
 
-# 코레일(smart.letskorail.com)은 IPv4 전용이라 IPv4 출구를 확인해야 함.
-# www.cloudflare.com 은 IPv6 도 제공해 WARP 경유 시 IPv6 출구가 나오므로 IP 주소로 접속
-WARP_TRACE_URL = "https://1.1.1.1/cdn-cgi/trace"
-
 # 코레일 서버가 매크로/비정상 환경으로 판단해 요청을 차단할 때 주는 응답 코드
 # 응답 형식이 {"code": -2000, "id": ..., "message": ...} 로 일반 API 응답과 달라 pykorail 이 버림
 KORAIL_BLOCKED_CODE = "-2000"
@@ -37,43 +33,14 @@ KORAIL_BLOCKED_CODE = "-2000"
 PYKORAIL_FALLBACK_LOGIN_MSG = "아이디 또는 비밀번호가 올바르지 않습니다"
 
 
-def is_warp_enabled():
-    """USE_WARP 토글 (기본값 true). false/0/no/off 이면 WARP 를 사용하지 않음
-
-    .env 를 읽는 방식에 따라 따옴표가 남을 수 있어("false") 따옴표도 제거하고 판단
-    """
-    value = os.getenv("USE_WARP", "true").strip().strip("\"'").strip().lower()
-    return value not in (
-        "false",
-        "0",
-        "no",
-        "off",
-    )
-
-
-def get_warp_proxy_url():
-    """Cloudflare WARP 프록시 주소 (예: socks5h://127.0.0.1:40000)
-
-    USE_WARP=false 이거나 WARP_PROXY_URL 이 비어 있으면 빈 문자열 (코레일에 직접 요청)
-    """
-    if not is_warp_enabled():
-        return ""
-    return os.getenv("WARP_PROXY_URL", "").strip()
-
-
 def create_korail_client():
-    """pykorail 클라이언트 생성. WARP_PROXY_URL 이 설정되어 있으면 코레일 요청을 WARP 로 보냄"""
+    """pykorail 클라이언트 생성 (코레일 서버 차단 응답을 로그로 남기도록 설정)"""
     client = Korail()
-    proxy_url = get_warp_proxy_url()
-    if proxy_url:
-        # pykorail 은 프록시 옵션을 제공하지 않으므로 내부 HTTP 세션(curl_cffi)에 직접 지정.
-        # 텔레그램, 콜백 등 다른 요청은 프록시를 거치지 않음
-        client._api._session.proxies = {"http": proxy_url, "https": proxy_url}
-    _log_korail_blocks(client, proxy_url)
+    _log_korail_blocks(client)
     return client
 
 
-def _log_korail_blocks(client, proxy_url):
+def _log_korail_blocks(client):
     """코레일 서버 차단 응답(code -2000)을 서버 로그에 남김
 
     pykorail 은 이 응답을 일반 실패(로그인 실패, 열차 없음 등)로 처리해 원본을 버리므로,
@@ -88,43 +55,15 @@ def _log_korail_blocks(client, proxy_url):
             # 조회 파라미터(회원번호 등)가 남지 않도록 쿼리스트링은 제외
             url = str(getattr(response, "url", "") or "").split("?")[0]
             logger.error(
-                "코레일 서버 차단 응답 (code=%s, id=%s, url=%s, 경유=%s): %s",
+                "코레일 서버 차단 응답 (code=%s, id=%s, url=%s): %s",
                 payload.get("code"),
                 payload.get("id"),
                 url or "unknown",
-                proxy_url or "직접 요청",
                 payload.get("message"),
             )
         return payload
 
     api._parse = parse_and_log
-
-
-def check_warp_status(timeout=5):
-    """WARP 프록시를 거친 요청이 실제로 Cloudflare WARP 로 나가는지 확인
-
-    Returns:
-        str: "on"/"plus" (WARP 사용 중), "off" (프록시는 되지만 WARP 아님),
-             "disabled" (USE_WARP=false 또는 WARP_PROXY_URL 미설정),
-             "error: ..." (프록시 연결 실패)
-    """
-    proxy_url = get_warp_proxy_url()
-    if not proxy_url:
-        return "disabled"
-    try:
-        from curl_cffi import requests as curl_requests
-
-        response = curl_requests.get(
-            WARP_TRACE_URL,
-            proxies={"http": proxy_url, "https": proxy_url},
-            timeout=timeout,
-        )
-        trace = dict(
-            line.split("=", 1) for line in response.text.splitlines() if "=" in line
-        )
-        return trace.get("warp", "unknown")
-    except Exception as e:
-        return f"error: {e}"
 
 
 class ReserveHandler:

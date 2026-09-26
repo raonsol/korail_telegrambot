@@ -11,7 +11,6 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 - **FastAPI**: Modern web framework for webhook-based Telegram bot backend
 - **python-telegram-bot**: Comprehensive library for Telegram Bot API interactions
 - **pykorail**: KTX reservation API client library (코레일톡 앱 API, curl_cffi 기반)
-- **Cloudflare WARP**: Korail API requests are routed through a WARP proxy (`WARP_PROXY_URL`, toggle with `USE_WARP`)
 - **Redis + Celery**: Optional distributed task processing system (MQ pattern)
 - **PostgreSQL**: Optional persistent data storage for Celery mode (MQ pattern)
 - **Docker**: Complete containerization with multi-environment support
@@ -86,9 +85,7 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 
 #### Supporting Modules
 - **src/telegramBot/korail_client.py**: Korail API client wrapper (pykorail)
-  - `create_korail_client()`: Creates the pykorail client and applies `WARP_PROXY_URL` to its HTTP session
-  - `is_warp_enabled()` / `get_warp_proxy_url()`: `USE_WARP=false` (or empty `WARP_PROXY_URL`) means direct requests
-  - `check_warp_status()`: Checks `warp=on/plus` via Cloudflare trace (logged at app startup)
+  - `create_korail_client()`: Creates the pykorail client and logs Korail server block responses (code -2000)
   - `FATAL_ERRORS`: `StationNotFoundError`, `PastDepartureError` - stop retry loops immediately
 - **src/telegramBot/messages.py**: Centralized message templates
 - **src/telegramBot/calendar_keyboard.py**: Interactive date selection interface
@@ -109,10 +106,6 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
 
 #### Service Definitions
 ```yaml
-# Shared (subprocess + celery profiles)
-warp: Cloudflare WARP proxy (HTTP/SOCKS5 on warp:1080, internal network only)
-      # USE_WARP=false → Makefile adds docker-compose.nowarp.yml (removes warp + its depends_on)
-
 # Subprocess Mode Services
 web: FastAPI application (subprocess mode)
 
@@ -336,7 +329,7 @@ make docker-compose-up         # Start subprocess mode
 make docker-compose-up-mq  # Start Celery mode (MQ pattern) (RECOMMENDED for production)
 make docker-compose-down       # Stop all services
 # docker-compose-up(-mq) recreates only changed containers (up -d --build). It first removes only the services
-# the target mode does not use (other mode's services, warp when USE_WARP=false) to avoid port clashes, and
+# the target mode does not use (the other mode's services) to avoid port clashes, and
 # fails fast if host port 8391/5555 is taken by something outside this compose project (e.g. a local server)
 # They set BUILDX_NO_DEFAULT_ATTESTATIONS=1: default provenance attestations make every build a new image ID,
 # which would recreate all app containers even without code changes (build.provenance in compose is ignored by compose v5)
@@ -433,18 +426,10 @@ CELERY_RESULT_BACKEND # MQ result backend URL
 DATAGOV_API_KEY       # 공공데이터포털 API 서비스키 (역 검색용)
 ```
 
-### Cloudflare WARP
-```bash
-USE_WARP              # WARP toggle (default true). false → direct Korail requests, Docker skips the warp container
-WARP_PROXY_URL        # Proxy for Korail API requests (local: socks5h://127.0.0.1:40000 via `warp-cli mode proxy`)
-                      # Docker Compose sets socks5h://warp:1080 automatically. Empty = direct requests
-WARP_LICENSE_KEY      # Optional WARP+ license for the Docker warp container
-```
-
 ### Korail Client (pykorail) Notes
-- The proxy is applied only to pykorail's curl_cffi session (`client._api._session.proxies`), so Telegram/callback traffic is not proxied. pykorail is pinned (`==0.2.0`) because this uses a private attribute
+- pykorail is pinned (`==0.2.0`): `create_korail_client()` and `scripts/check_korail_login.py` wrap its private `client._api._parse`
 - `login()` raises `LoginFailedError` instead of returning `False`; `ReserveHandler.login()` still returns a bool and keeps a user-facing reason in `ReserveHandler.loginError`
-- Korail server block (anti-macro) responses look like `{"code": -2000, "id", "message"}`; pykorail drops them (login fails / search looks like "no trains"), so `create_korail_client()` wraps the response parser and logs them at ERROR (`코레일 서버 차단 응답 ...`, with proxy used and URL without query string). Observed: WARP container egress → -2000, direct egress → OK
+- Korail server block (anti-macro) responses look like `{"code": -2000, "id", "message"}`; pykorail drops them (login fails / search looks like "no trains"), so `create_korail_client()` wraps the response parser and logs them at ERROR (`코레일 서버 차단 응답 ...`, URL without query string). Cloudflare WARP egress (container and host proxy mode) was blocked with -2000 while direct egress worked, so WARP support was removed
 - pykorail's fallback "아이디 또는 비밀번호가 올바르지 않습니다" (code `None`) means the server sent no reason - real wrong-password responses carry a code such as `WRR000101`
 - `make korail-login-check` pipes `scripts/check_korail_login.py` into the running web container to diagnose ADMIN_KORAIL_ID/PW (env values as received, raw server response)
 - Station names are validated against Korail's station master before searching (`StationNotFoundError`)
