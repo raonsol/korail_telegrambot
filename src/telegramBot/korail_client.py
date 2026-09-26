@@ -38,8 +38,12 @@ PYKORAIL_FALLBACK_LOGIN_MSG = "아이디 또는 비밀번호가 올바르지 않
 
 
 def is_warp_enabled():
-    """USE_WARP 토글 (기본값 true). false/0/no/off 이면 WARP 를 사용하지 않음"""
-    return os.getenv("USE_WARP", "true").strip().lower() not in (
+    """USE_WARP 토글 (기본값 true). false/0/no/off 이면 WARP 를 사용하지 않음
+
+    .env 를 읽는 방식에 따라 따옴표가 남을 수 있어("false") 따옴표도 제거하고 판단
+    """
+    value = os.getenv("USE_WARP", "true").strip().strip("\"'").strip().lower()
+    return value not in (
         "false",
         "0",
         "no",

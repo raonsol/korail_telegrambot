@@ -7,13 +7,19 @@ IMAGE_NAME := raonsol/korail_telegrambot:$(VERSION)
 # Cloudflare WARP toggle (.env 의 USE_WARP, 기본값 true)
 # false 이면 Docker Compose 실행 시 warp 컨테이너를 제외하고 코레일에 직접 요청
 USE_WARP ?= true
-ifneq ($(filter false 0 no off,$(shell echo '$(USE_WARP)' | tr '[:upper:]' '[:lower:]')),)
+# make 는 .env 의 따옴표를 벗기지 않으므로("false" 가 그대로 들어옴) 따옴표/CR/공백을 지우고 소문자로 판단
+CR := $(shell printf '\r')
+USE_WARP_VALUE := $(shell echo '$(strip $(subst ",,$(subst ',,$(subst $(CR),,$(USE_WARP)))))' | tr '[:upper:]' '[:lower:]')
+ifneq ($(filter false 0 no off,$(USE_WARP_VALUE)),)
 WARP_ENABLED := false
 COMPOSE_FILES := -f docker-compose.yml -f docker-compose.nowarp.yml
 else
 WARP_ENABLED := true
 COMPOSE_FILES := -f docker-compose.yml
 endif
+# 정리된 값(true/false)을 로컬 실행과 docker compose 에 전달
+# (compose 는 .env 보다 셸 환경변수를 우선해 USE_WARP=${USE_WARP:-true} 를 보간함)
+override USE_WARP := $(WARP_ENABLED)
 WORKER_PID_FILE := .celery-worker.pid
 FLOWER_PID_FILE := .celery-flower.pid
 

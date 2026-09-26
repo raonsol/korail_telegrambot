@@ -549,6 +549,10 @@ class TestWarpProxy:
             ("0", False),
             ("no", False),
             ("off", False),
+            ('"false"', False),
+            ("'false'", False),
+            ("false\r", False),
+            ('"true"', True),
         ],
     )
     def test_is_warp_enabled(self, monkeypatch, value, expected):
