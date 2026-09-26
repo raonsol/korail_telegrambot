@@ -146,6 +146,38 @@ class TestSessions:
         assert services.auth.resolve(token) is None
 
 
+class TestConnectionUsage:
+    @pytest.mark.asyncio
+    async def test_resolve_uses_single_connection(self, test_settings, tmp_path):
+        """요청당 DB 연결을 하나만 사용 (중첩 세션은 동시 요청 시 풀 고갈 → 교착)"""
+        from sqlalchemy import event
+
+        from core.db import Database
+        from core.services import build_services
+
+        db = Database(f"sqlite:///{tmp_path}/pool.db")
+        svc = build_services(test_settings, db=db, korail_login=lambda i, p: True)
+        svc.init_storage()
+        token, _ = await svc.auth.login("01012345678", "x")
+
+        in_use = {"now": 0, "max": 0}
+
+        def checkout(*_):
+            in_use["now"] += 1
+            in_use["max"] = max(in_use["max"], in_use["now"])
+
+        def checkin(*_):
+            in_use["now"] -= 1
+
+        event.listen(db.engine, "checkout", checkout)
+        event.listen(db.engine, "checkin", checkin)
+        try:
+            assert svc.auth.resolve(token) is not None
+        finally:
+            db.dispose()
+        assert in_use["max"] == 1
+
+
 class TestVault:
     def test_roundtrip_and_key_isolation(self):
         vault = CredentialVault("k1")

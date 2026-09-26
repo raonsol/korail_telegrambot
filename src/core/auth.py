@@ -19,7 +19,7 @@ from sqlalchemy import delete
 from .crypto import CredentialVault, new_token, sha256_hex
 from .db import Database, utcnow
 from .errors import AuthFailed, NotAllowed, RateLimited, ServiceError
-from .models import WebSession
+from .models import User, WebSession
 from .schemas import ADMIN_USER_ID, Owner, format_phone, is_valid_phone, normalize_phone
 from .users import UserService
 
@@ -240,9 +240,12 @@ class AuthService:
             if m.expires_at <= now:
                 s.delete(m)
                 return None
-            if not m.is_admin and not self.users.is_allowed(m.user_id):
-                s.delete(m)
-                return None
+            if not m.is_admin:
+                # 같은 세션에서 조회 (중첩 세션은 동시 요청 시 커넥션 풀을 고갈시킴)
+                user = s.get(User, m.user_id)
+                if not (user and user.is_active):
+                    s.delete(m)
+                    return None
             if m.remember and m.expires_at - now < self.session_ttl / 2:
                 m.expires_at = now + self.session_ttl
             if now - m.last_seen_at > timedelta(minutes=5):
