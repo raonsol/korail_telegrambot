@@ -21,7 +21,11 @@ class BaseAppSettings(BaseSettings):
     log_level: str = "INFO"
 
     model_config = ConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        # 설정 오류 메시지에 환경변수 값(비밀번호 등)이 찍히지 않도록
+        hide_input_in_errors=True,
     )
 
 

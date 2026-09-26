@@ -232,3 +232,16 @@ class TestConfigurationProperties:
 
         settings_prod = WebSettings()
         assert settings_prod.is_dev is False
+
+
+@pytest.mark.unit
+def test_settings_errors_do_not_leak_env_values(monkeypatch):
+    """설정 검증 오류에 환경변수 값(비밀번호 등)이 포함되지 않아야 함"""
+    from pydantic import ValidationError
+    from config import WebSettings
+
+    monkeypatch.delenv("ADMINPW", raising=False)
+    monkeypatch.setenv("ADMIN_KORAIL_PW", "super-secret-value")
+    with pytest.raises(ValidationError) as exc:
+        WebSettings(_env_file=None)
+    assert "super-secret-value" not in str(exc.value)
