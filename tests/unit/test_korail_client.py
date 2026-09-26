@@ -603,6 +603,55 @@ class TestWarpProxy:
         finally:
             client.close()
 
+    def test_korail_block_response_is_logged(self, monkeypatch, caplog):
+        """Korail server block (code -2000) is written to the server log"""
+        import json
+        import logging
+        from telegramBot.korail_client import create_korail_client
+
+        monkeypatch.setenv("WARP_PROXY_URL", "socks5h://warp:1080")
+        block = {
+            "code": -2000,
+            "id": "2c0a2515-6ea1-9bef-5dca-0f6d37da13c1",
+            "message": "매크로 등 미허가 도구 사용 시 이용이 제한될 수 있습니다.",
+        }
+        response = Mock(
+            text=json.dumps(block, ensure_ascii=False),
+            url="https://smart.letskorail.com/login?mbCrdNo=1234",
+        )
+        client = create_korail_client()
+        try:
+            with caplog.at_level(logging.ERROR, logger="telegramBot.korail_client"):
+                assert client._api._parse(response) == block
+        finally:
+            client.close()
+
+        log = caplog.text
+        assert "코레일 서버 차단 응답" in log
+        assert "code=-2000" in log
+        assert "2c0a2515-6ea1-9bef-5dca-0f6d37da13c1" in log
+        assert "socks5h://warp:1080" in log
+        assert "매크로 등 미허가 도구" in log
+        assert "mbCrdNo" not in log  # 쿼리스트링은 남기지 않음
+
+    def test_normal_korail_response_is_not_logged(self, monkeypatch, caplog):
+        """Regular Korail responses (even failures) are not logged as blocks"""
+        import json
+        import logging
+        from telegramBot.korail_client import create_korail_client
+
+        monkeypatch.setenv("WARP_PROXY_URL", "")
+        payload = {"strResult": "FAIL", "h_msg_cd": "WRR000101", "h_msg_txt": "x"}
+        response = Mock(text=json.dumps(payload), url="https://smart.letskorail.com/x")
+        client = create_korail_client()
+        try:
+            with caplog.at_level(logging.ERROR, logger="telegramBot.korail_client"):
+                assert client._api._parse(response) == payload
+        finally:
+            client.close()
+
+        assert "코레일 서버 차단 응답" not in caplog.text
+
     def test_check_warp_status_disabled(self, monkeypatch):
         """check_warp_status reports disabled without WARP_PROXY_URL"""
         from telegramBot.korail_client import check_warp_status

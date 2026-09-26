@@ -444,6 +444,7 @@ WARP_LICENSE_KEY      # Optional WARP+ license for the Docker warp container
 ### Korail Client (pykorail) Notes
 - The proxy is applied only to pykorail's curl_cffi session (`client._api._session.proxies`), so Telegram/callback traffic is not proxied. pykorail is pinned (`==0.2.0`) because this uses a private attribute
 - `login()` raises `LoginFailedError` instead of returning `False`; `ReserveHandler.login()` still returns a bool and keeps a user-facing reason in `ReserveHandler.loginError`
+- Korail server block (anti-macro) responses look like `{"code": -2000, "id", "message"}`; pykorail drops them (login fails / search looks like "no trains"), so `create_korail_client()` wraps the response parser and logs them at ERROR (`코레일 서버 차단 응답 ...`, with proxy used and URL without query string). Observed: WARP container egress → -2000, direct egress → OK
 - pykorail's fallback "아이디 또는 비밀번호가 올바르지 않습니다" (code `None`) means the server sent no reason - real wrong-password responses carry a code such as `WRR000101`
 - `make korail-login-check` pipes `scripts/check_korail_login.py` into the running web container to diagnose ADMIN_KORAIL_ID/PW (env values as received, raw server response)
 - Station names are validated against Korail's station master before searching (`StationNotFoundError`)

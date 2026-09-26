@@ -1,4 +1,5 @@
 import os
+import logging
 import requests
 import time
 import sys
@@ -17,12 +18,18 @@ from .messages import Messages
 
 sys.setrecursionlimit(10**7)
 
+logger = logging.getLogger(__name__)
+
 KST = timezone(timedelta(hours=9))
 
 # 재시도해도 결과가 바뀌지 않는 오류 (역 이름 오류, 이미 지난 날짜)
 FATAL_ERRORS = (StationNotFoundError, PastDepartureError)
 
 WARP_TRACE_URL = "https://www.cloudflare.com/cdn-cgi/trace"
+
+# 코레일 서버가 매크로/비정상 환경으로 판단해 요청을 차단할 때 주는 응답 코드
+# 응답 형식이 {"code": -2000, "id": ..., "message": ...} 로 일반 API 응답과 달라 pykorail 이 버림
+KORAIL_BLOCKED_CODE = "-2000"
 
 # pykorail(0.2.0) 이 서버 응답에 사유가 없을 때 넣는 기본 로그인 실패 문구
 PYKORAIL_FALLBACK_LOGIN_MSG = "아이디 또는 비밀번호가 올바르지 않습니다"
@@ -56,7 +63,35 @@ def create_korail_client():
         # pykorail 은 프록시 옵션을 제공하지 않으므로 내부 HTTP 세션(curl_cffi)에 직접 지정.
         # 텔레그램, 콜백 등 다른 요청은 프록시를 거치지 않음
         client._api._session.proxies = {"http": proxy_url, "https": proxy_url}
+    _log_korail_blocks(client, proxy_url)
     return client
+
+
+def _log_korail_blocks(client, proxy_url):
+    """코레일 서버 차단 응답(code -2000)을 서버 로그에 남김
+
+    pykorail 은 이 응답을 일반 실패(로그인 실패, 열차 없음 등)로 처리해 원본을 버리므로,
+    모든 응답이 지나가는 파싱 단계에서 확인한다.
+    """
+    api = client._api
+    parse = api._parse
+
+    def parse_and_log(response):
+        payload = parse(response)
+        if str(payload.get("code")) == KORAIL_BLOCKED_CODE:
+            # 조회 파라미터(회원번호 등)가 남지 않도록 쿼리스트링은 제외
+            url = str(getattr(response, "url", "") or "").split("?")[0]
+            logger.error(
+                "코레일 서버 차단 응답 (code=%s, id=%s, url=%s, 경유=%s): %s",
+                payload.get("code"),
+                payload.get("id"),
+                url or "unknown",
+                proxy_url or "직접 요청",
+                payload.get("message"),
+            )
+        return payload
+
+    api._parse = parse_and_log
 
 
 def check_warp_status(timeout=5):
