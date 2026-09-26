@@ -1,7 +1,8 @@
 -include .env
 export
 
-IMAGE_NAME := raonsol/korail_telegrambot:v0.9
+VERSION := $(shell sed -n 's/^VERSION = "\(.*\)"/\1/p' src/version.py)
+IMAGE_NAME := raonsol/korail_telegrambot:$(VERSION)
 
 # Cloudflare WARP toggle (.env 의 USE_WARP, 기본값 true)
 # false 이면 Docker Compose 실행 시 warp 컨테이너를 제외하고 코레일에 직접 요청

@@ -59,6 +59,8 @@ This is a Telegram bot for KTX (Korean train) reservation automation built with 
   - Reservation completion callbacks
   - MQ task result handling
 
+- **src/version.py**: Internal version (`VERSION = "vX.Y"`) - single source for the bot start message and the Docker image tag (`Makefile` reads it)
+
 - **src/config.py**: Configuration management
   - Environment-based settings
   - Redis/MQ connection parameters

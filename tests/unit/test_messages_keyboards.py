@@ -11,6 +11,13 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 class TestMessages:
     """Test Messages class"""
 
+    def test_start_message_shows_version(self):
+        """Start message shows the internal version from version.py"""
+        from telegramBot.messages import Messages
+        from version import VERSION
+
+        assert f"[rs-korailbot:{VERSION}]" in Messages.Info.START_MESSAGE
+
     def test_messages_info_constants(self):
         """Test that all Info messages are defined"""
         from telegramBot.messages import Messages
