@@ -1,5 +1,6 @@
 """예약 API"""
 
+import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, Query
@@ -31,7 +32,8 @@ def list_reservations(
 async def create_reservation(
     body: ReservationRequest, session: SessionDep, services: ServicesDep
 ):
-    korail_id, korail_pw = services.auth.credentials(session)
+    # DB 조회 + 복호화는 블로킹 작업이라 스레드에서 수행
+    korail_id, korail_pw = await asyncio.to_thread(services.auth.credentials, session)
     return await services.reservations.start(
         session.owner, body, korail_id, korail_pw, origin="web"
     )

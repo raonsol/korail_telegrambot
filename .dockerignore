@@ -8,6 +8,8 @@
 logs
 data
 *.db
+*.db-wal
+*.db-shm
 htmlcov
 coverage.xml
 .coverage*

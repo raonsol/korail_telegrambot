@@ -29,6 +29,10 @@ EXPECTED_MISSES = ("No trains available", "All trains sold out")
 
 MAX_ATTEMPTS_MESSAGE = "최대 시도 횟수를 초과하여 예약이 중단되었습니다."
 
+# 웹 서버가 이 예약을 받아들이지 않는 응답 (예약 없음 / 토큰 불일치)
+# 서버 재시작 등 일시적인 연결 실패와 달리 다시 보내도 결과가 같다
+REJECTED_STATUS_CODES = (403, 404)
+
 
 class CallbackReporter:
     """예약 상태를 웹 서버에 보고"""
@@ -38,6 +42,9 @@ class CallbackReporter:
         self.reservation_id = reservation_id
         self.token = token
         self.session = requests.Session()
+        # 웹 서버가 예약을 모르거나(404/403) 이미 종료된 예약(applied=false)이라고
+        # 응답하면 True. 워커는 이 값을 보고 예약 시도를 멈춘다
+        self.rejected = False
 
     def send(
         self,
@@ -64,7 +71,12 @@ class CallbackReporter:
                 response = self.session.post(
                     self.callback_url, json=payload, timeout=10
                 )
+                if response.status_code in REJECTED_STATUS_CODES:
+                    self._reject(status, f"HTTP {response.status_code}")
+                    return False
                 response.raise_for_status()
+                if _not_applied(response):
+                    self._reject(status, "reservation already finished")
                 return True
             except requests.RequestException as e:
                 if attempt == retries - 1:
@@ -72,6 +84,24 @@ class CallbackReporter:
                 else:
                     time.sleep(1)
         return False
+
+    def _reject(self, status: str, reason: str) -> None:
+        self.rejected = True
+        logger.warning(
+            f"Report '{status}' for {self.reservation_id} rejected by server ({reason})"
+        )
+
+
+def _not_applied(response) -> bool:
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("applied") is False
+
+
+def _rejected(reporter) -> bool:
+    return getattr(reporter, "rejected", False) is True
 
 
 def build_reporter(spec: dict) -> CallbackReporter:
@@ -87,7 +117,7 @@ def run_reservation(
     on_success: Callable[[], None] = lambda: None,
     max_attempts: int = 1000,
     interval: float = 2.0,
-    progress_every: int = 50,
+    progress_every: int = 20,
     relogin_after_errors: int = 10,
     sleep: Callable[[float], None] = time.sleep,
     handler_factory: Callable[[], ReserveHandler] = ReserveHandler,
@@ -101,7 +131,8 @@ def run_reservation(
         on_success: 성공 직후 호출 (Celery의 Redis 완료 표시용)
 
     Returns:
-        dict: {"status": "success"|"failed"|"error"|"stopped", ...}
+        dict: {"status": "success"|"failed"|"error"|"stopped"|"rejected", ...}
+            rejected: 웹 서버가 보고를 거부함 (취소·만료됐거나 모르는 예약) → 즉시 종료
     """
     handler = handler_factory()
     try:
@@ -152,6 +183,8 @@ def _run_attempts(
         return {"status": "error", "message": message}
 
     reporter.send("running", attempts=0)
+    if _rejected(reporter):
+        return {"status": "rejected", "attempts": 0}
 
     consecutive_errors = 0
     for attempt in range(1, max_attempts + 1):
@@ -207,6 +240,10 @@ def _run_attempts(
 
         if attempt % progress_every == 0:
             reporter.send("progress", attempts=attempt)
+            if _rejected(reporter):
+                # 취소·만료됐거나 웹 서버가 모르는 예약 (예: DB 초기화 후 남은 워커)
+                logger.warning(f"Stopping reservation after {attempt} attempts")
+                return {"status": "rejected", "attempts": attempt}
 
         sleep(interval)
 

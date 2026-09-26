@@ -121,6 +121,86 @@ class TestSubprocessLauncher:
         assert r.status.value == "cancelled"
 
 
+# 코레일 대신 매번 "열차 없음"을 돌려주는 워커 (빠른 간격으로 실제 run_reservation 실행)
+ORPHAN_WORKER = """
+import json, sys
+import telegramBot.korail_client as kc
+
+class NoTrains:
+    def login(self, *a):
+        return True
+    def reserve_single_attempt(self, **kw):
+        return {"success": False, "result": None, "error": "No trains available"}
+    def close(self):
+        pass
+
+kc.ReserveHandler = NoTrains
+from core.runner import build_reporter, run_reservation
+
+spec = json.loads(sys.stdin.read())
+result = run_reservation(spec, build_reporter(spec), interval=0.01, progress_every=5, max_attempts=100000)
+sys.exit(0 if result["status"] == "rejected" else 1)
+"""
+
+
+@pytest.mark.integration
+@pytest.mark.subprocess
+class TestOrphanWorker:
+    def test_worker_stops_when_server_forgets_reservation(self):
+        """웹 서버 DB가 초기화돼 예약을 모르면(404) 워커가 스스로 종료"""
+        import threading
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        calls = []
+
+        class Server(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                calls.append(json.loads(body)["status"])
+                # 처음 두 번(running, progress)만 받아들이고 이후엔 모르는 예약
+                code = 200 if len(calls) <= 2 else 404
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"applied": true}' if code == 200 else b"{}")
+
+            def log_message(self, *args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Server)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        exits = []
+        done = threading.Event()
+        launcher = SubprocessLauncher(
+            on_exit=lambda rid, code: (exits.append(code), done.set()),
+            command=[sys.executable, "-c", ORPHAN_WORKER],
+        )
+        try:
+            launcher.launch(
+                {
+                    "reservation_id": "orphan00",
+                    "callback_url": f"http://127.0.0.1:{server.server_port}/internal/events",
+                    "callback_token": "tok",
+                    "korail_id": "010",
+                    "korail_pw": "pw",
+                    "dep_date": "20990101",
+                    "src_station": "서울",
+                    "dst_station": "부산",
+                    "dep_time": "0900",
+                    "max_dep_time": "1200",
+                    "train_type": "KTX",
+                    "seat_type": "general",
+                }
+            )
+            assert done.wait(20), "worker did not stop after rejection"
+        finally:
+            server.shutdown()
+            server.server_close()
+
+        assert exits == [0]  # run_reservation이 "rejected"로 종료
+        assert calls == ["running", "progress", "progress"]
+
+
 @pytest.mark.integration
 @pytest.mark.subprocess
 class TestWorkerEntrypoint:

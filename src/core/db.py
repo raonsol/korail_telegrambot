@@ -54,11 +54,20 @@ class Database:
         self.engine = create_engine(self.url, **kwargs)
 
         if parsed.get_backend_name() == "sqlite":
+            is_file_db = parsed.database not in (None, "", ":memory:")
 
             @event.listens_for(self.engine, "connect")
             def _sqlite_pragmas(dbapi_connection, _):
                 cursor = dbapi_connection.cursor()
                 cursor.execute("PRAGMA foreign_keys=ON")
+                if is_file_db:
+                    # WAL: 쓰기 중에도 읽기가 막히지 않고, 커밋마다 디스크 동기화를 하지 않아
+                    # 동시 요청 시 쓰기 대기가 크게 줄어듦 (기본 DELETE 모드는 커밋당 ~20ms)
+                    # synchronous=NORMAL은 WAL에서 권장값: 전원 장애 시 마지막 몇 트랜잭션만
+                    # 유실될 수 있고 DB가 손상되지는 않음
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA synchronous=NORMAL")
+                    cursor.execute("PRAGMA busy_timeout=5000")
                 cursor.close()
 
         self._sessionmaker = sessionmaker(

@@ -169,6 +169,60 @@ class TestRunReservation:
         _run(handler, max_attempts=1)
         handler.close.assert_called_once()
 
+    def test_stops_when_running_report_is_rejected(self):
+        """웹 서버가 모르는 예약이면 코레일 조회 없이 종료"""
+        handler = _handler([MISS] * 5)
+        reporter = Mock(rejected=False)
+
+        def send(status, **kw):
+            reporter.rejected = True
+            return False
+
+        reporter.send.side_effect = send
+        result = run_reservation(
+            SPEC, reporter, handler_factory=lambda: handler, sleep=lambda _: None
+        )
+        assert result == {"status": "rejected", "attempts": 0}
+        handler.reserve_single_attempt.assert_not_called()
+        handler.close.assert_called_once()
+
+    def test_stops_when_progress_report_is_rejected(self):
+        """취소·만료된 예약은 다음 진행 보고에서 멈춤 (고아 워커 방지)"""
+        handler = _handler([MISS] * 100)
+        reporter = Mock(rejected=False)
+
+        def send(status, **kw):
+            if status == "progress":
+                reporter.rejected = True
+            return True
+
+        reporter.send.side_effect = send
+        result = run_reservation(
+            SPEC,
+            reporter,
+            handler_factory=lambda: handler,
+            sleep=lambda _: None,
+            progress_every=5,
+        )
+        assert result == {"status": "rejected", "attempts": 5}
+        assert handler.reserve_single_attempt.call_count == 5
+
+    def test_transient_report_failure_keeps_running(self):
+        """웹 서버 재시작 등 일시 오류로는 멈추지 않음"""
+        handler = _handler([MISS] * 10)
+        reporter = Mock(rejected=False)
+        reporter.send.return_value = False
+        result = run_reservation(
+            SPEC,
+            reporter,
+            handler_factory=lambda: handler,
+            sleep=lambda _: None,
+            max_attempts=10,
+            progress_every=2,
+        )
+        assert result["status"] == "failed"
+        assert handler.reserve_single_attempt.call_count == 10
+
 
 class TestCallbackReporter:
     def test_payload(self):
@@ -188,6 +242,43 @@ class TestCallbackReporter:
             "attempts": 3,
             "train_info": "KTX",
         }
+
+    @pytest.mark.parametrize("status_code", [403, 404])
+    def test_rejected_status_codes(self, status_code, monkeypatch):
+        monkeypatch.setattr("core.runner.time.sleep", lambda _: None)
+        reporter = CallbackReporter("http://cb", "r1", "tok")
+        reporter.session.post = Mock(return_value=Mock(status_code=status_code))
+
+        assert reporter.send("progress", attempts=20) is False
+        assert reporter.rejected is True
+        assert reporter.session.post.call_count == 1  # 재시도하지 않음
+
+    @pytest.mark.parametrize(
+        "body, rejected",
+        [({"applied": False}, True), ({"applied": True}, False), (ValueError(), False)],
+    )
+    def test_applied_false_is_rejection(self, body, rejected):
+        reporter = CallbackReporter("http://cb", "r1", "tok")
+        response = Mock(status_code=200)
+        if isinstance(body, Exception):
+            response.json.side_effect = body
+        else:
+            response.json.return_value = body
+        reporter.session.post = Mock(return_value=response)
+
+        assert reporter.send("progress", attempts=20) is True
+        assert reporter.rejected is rejected
+
+    def test_server_error_is_not_rejection(self, monkeypatch):
+        monkeypatch.setattr("core.runner.time.sleep", lambda _: None)
+        reporter = CallbackReporter("http://cb", "r1", "tok")
+        response = Mock(status_code=503)
+        response.raise_for_status.side_effect = requests.HTTPError("503")
+        reporter.session.post = Mock(return_value=response)
+
+        assert reporter.send("progress", attempts=20) is False
+        assert reporter.rejected is False
+        assert reporter.session.post.call_count == 3
 
     def test_retries(self, monkeypatch):
         monkeypatch.setattr("core.runner.time.sleep", lambda _: None)

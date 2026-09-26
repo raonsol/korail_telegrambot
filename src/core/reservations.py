@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+import threading
 import uuid
 from datetime import timedelta
 from typing import Optional
@@ -65,6 +66,7 @@ class ReservationService:
         self.max_active_per_user = max_active_per_user
         self.retention_days = retention_days
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._admission_lock = threading.Lock()
 
         if isinstance(launcher, SubprocessLauncher):
             launcher.on_exit = self._on_process_exit_threadsafe
@@ -154,46 +156,70 @@ class ReservationService:
         origin: str,
         chat_id: Optional[int] = None,
     ) -> ReservationOut:
-        if self.count_active() >= self.max_active_total:
-            raise LimitExceeded(
-                "현재 진행 중인 예약이 너무 많습니다. 잠시 후 다시 시도해주세요."
-            )
-        if (
-            not owner.is_admin
-            and self.count_active(owner.user_id) >= self.max_active_per_user
-        ):
-            raise LimitExceeded(
-                f"동시에 진행할 수 있는 예약은 최대 {self.max_active_per_user}개입니다."
-            )
-
         if self._loop is None:
             self.bind_loop()
 
+        # DB 기록과 프로세스 실행(Popen)/Celery 발행은 블로킹 작업이라 스레드에서 수행
+        # (이벤트 루프에서 직접 하면 동시 요청이 몰릴 때 다른 요청까지 멈춤)
+        out = await asyncio.to_thread(
+            self._start_blocking, owner, request, korail_id, korail_pw, origin, chat_id
+        )
+        await self.notifier.notify(
+            ReservationEvent(out, previous_status="", source=origin, chat_id=chat_id)
+        )
+        return out
+
+    def _start_blocking(
+        self,
+        owner: Owner,
+        request: ReservationRequest,
+        korail_id: str,
+        korail_pw: str,
+        origin: str,
+        chat_id: Optional[int],
+    ) -> ReservationOut:
         reservation_id = uuid.uuid4().hex
         token = new_token()
-        now = utcnow()
-        reservation = Reservation(
-            id=reservation_id,
-            owner_id=owner.user_id,
-            origin=origin,
-            chat_id=chat_id,
-            korail_id=korail_id,
-            dep_date=request.dep_date_compact,
-            src_station=request.src_station,
-            dst_station=request.dst_station,
-            dep_time=request.dep_time,
-            max_dep_time=request.max_dep_time,
-            train_type=request.train_type,
-            seat_type=request.seat_type,
-            status=ReservationStatus.QUEUED.value,
-            runner=self.launcher.name,
-            callback_token_hash=sha256_hex(token),
-            attempts=0,
-            created_at=now,
-            updated_at=now,
-        )
-        with self.db.session() as s:
-            s.add(reservation)
+
+        # 한도 확인과 기록 사이에 다른 요청이 끼어들지 않도록 묶음
+        # (웹 서버는 단일 프로세스로 실행되므로 프로세스 내 잠금으로 충분)
+        with self._admission_lock:
+            if self.count_active() >= self.max_active_total:
+                raise LimitExceeded(
+                    "현재 진행 중인 예약이 너무 많습니다. 잠시 후 다시 시도해주세요."
+                )
+            if (
+                not owner.is_admin
+                and self.count_active(owner.user_id) >= self.max_active_per_user
+            ):
+                raise LimitExceeded(
+                    f"동시에 진행할 수 있는 예약은 최대 {self.max_active_per_user}개입니다."
+                )
+
+            now = utcnow()
+            with self.db.session() as s:
+                s.add(
+                    Reservation(
+                        id=reservation_id,
+                        owner_id=owner.user_id,
+                        origin=origin,
+                        chat_id=chat_id,
+                        korail_id=korail_id,
+                        dep_date=request.dep_date_compact,
+                        src_station=request.src_station,
+                        dst_station=request.dst_station,
+                        dep_time=request.dep_time,
+                        max_dep_time=request.max_dep_time,
+                        train_type=request.train_type,
+                        seat_type=request.seat_type,
+                        status=ReservationStatus.QUEUED.value,
+                        runner=self.launcher.name,
+                        callback_token_hash=sha256_hex(token),
+                        attempts=0,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
 
         spec = {
             "reservation_id": reservation_id,
@@ -226,9 +252,6 @@ class ReservationService:
         logger.info(
             f"Started reservation {reservation_id} ({self.launcher.name}:{runner_ref}) "
             f"for {owner.user_id} via {origin}"
-        )
-        await self.notifier.notify(
-            ReservationEvent(out, previous_status="", source=origin, chat_id=chat_id)
         )
         return out
 

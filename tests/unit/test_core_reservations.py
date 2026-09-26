@@ -83,6 +83,63 @@ class TestStart:
         assert r.status.value == "error"
 
 
+class TestStartConcurrency:
+    @pytest.mark.asyncio
+    async def test_start_does_not_block_event_loop(
+        self, services, fake_launcher, valid_request
+    ):
+        """프로세스 실행(Popen)·DB 기록은 스레드에서 수행 → 다른 요청이 멈추지 않음"""
+        import asyncio
+        import time
+
+        original = fake_launcher.launch
+
+        def slow_launch(spec):
+            time.sleep(0.3)
+            return original(spec)
+
+        fake_launcher.launch = slow_launch
+        lags = []
+
+        async def ticker():
+            for _ in range(10):
+                t = time.perf_counter()
+                await asyncio.sleep(0.02)
+                lags.append(time.perf_counter() - t - 0.02)
+
+        # 틱 측정을 먼저 시작해야 예약 시작이 루프를 막는지 잡아낼 수 있음
+        ticking = asyncio.create_task(ticker())
+        await asyncio.sleep(0)
+        await _start(services, request=valid_request)
+        await ticking
+        assert max(lags) < 0.2
+
+    @pytest.mark.asyncio
+    async def test_concurrent_starts_respect_per_user_limit(
+        self, services, fake_launcher, valid_request
+    ):
+        """한도 확인과 기록이 원자적 → 동시 요청이 몰려도 한도를 넘지 않음"""
+        import asyncio
+        import time
+
+        original = fake_launcher.launch
+
+        def slow_launch(spec):
+            time.sleep(0.05)
+            return original(spec)
+
+        fake_launcher.launch = slow_launch
+        results = await asyncio.gather(
+            *[_start(services, request=valid_request) for _ in range(10)],
+            return_exceptions=True,
+        )
+        started = [r for r in results if not isinstance(r, Exception)]
+        rejected = [r for r in results if isinstance(r, LimitExceeded)]
+        assert len(started) == 3
+        assert len(rejected) == 7
+        assert services.reservations.count_active(USER.user_id) == 3
+
+
 class TestAccess:
     @pytest.mark.asyncio
     async def test_list_and_get_scoping(self, services, valid_request):
