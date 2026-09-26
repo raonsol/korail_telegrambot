@@ -436,7 +436,10 @@ class TelegramBot:
                 await self.send_message(chat_id, msg, reply_markup=create_calendar())
             else:
                 self._reset_user_state(chat_id)
-                msg = "관리자 계정으로 로그인에 문제가 발생하였습니다."
+                msg = f"""관리자 계정으로 로그인에 실패하였습니다.
+사유 : {reserve_handler.loginError}
+
+ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
                 await self.send_message(chat_id, msg)
             return None
 
@@ -496,7 +499,10 @@ class TelegramBot:
             await self.send_message(chat_id, msg, reply_markup=create_calendar())
         else:
             # 로그인 실패 시 비밀번호 재입력 또는 뒤로가기 선택지 제공
-            msg = f"""로그인에 실패하였습니다. 로그인에 사용한 정보는 다음과 같습니다.
+            msg = f"""로그인에 실패하였습니다.
+사유 : {reserve_handler.loginError}
+
+로그인에 사용한 정보는 다음과 같습니다.
 ==============
 아이디 : {username}
 ==============

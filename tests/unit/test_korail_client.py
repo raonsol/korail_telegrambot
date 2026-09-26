@@ -61,6 +61,39 @@ class TestReserveHandler:
             assert reserve_handler.korail_client is None
             mock_client.close.assert_called_once()
 
+    def test_login_failure_reason_uses_korail_message(self, reserve_handler):
+        """The Korail message is kept as the failure reason, without '(None)'"""
+        mock_client = Mock()
+        mock_client.login = Mock(
+            side_effect=LoginFailedError("아이디 또는 비밀번호가 올바르지 않습니다")
+        )
+
+        with patch("telegramBot.korail_client.Korail", return_value=mock_client):
+            assert reserve_handler.login("test_user", "wrong_password") is False
+
+        assert reserve_handler.loginError == "아이디 또는 비밀번호가 올바르지 않습니다"
+
+    def test_login_failure_reason_for_network_error(self, reserve_handler):
+        """Non-Korail errors get a generic reason instead of raw exception text"""
+        mock_client = Mock()
+        mock_client.login = Mock(side_effect=ConnectionError("proxy refused"))
+
+        with patch("telegramBot.korail_client.Korail", return_value=mock_client):
+            assert reserve_handler.login("test_user", "test_password") is False
+
+        assert "코레일 서버에 연결하지 못했습니다" in reserve_handler.loginError
+
+    def test_login_success_clears_failure_reason(
+        self, reserve_handler, mock_korail_client
+    ):
+        """A successful login clears the previous failure reason"""
+        reserve_handler.loginError = "이전 실패"
+
+        with patch("telegramBot.korail_client.Korail", return_value=mock_korail_client):
+            assert reserve_handler.login("test_user", "test_password") is True
+
+        assert reserve_handler.loginError == ""
+
     def test_relogin_failure_keeps_previous_client(self, reserve_handler):
         """A failed re-login keeps the existing session instead of dropping it"""
         previous_client = Mock()

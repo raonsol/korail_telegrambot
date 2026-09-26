@@ -5,6 +5,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pykorail import Korail
 from pykorail import (
+    KorailError,
     ReserveOption,
     TrainType,
     SoldOutError,
@@ -98,6 +99,7 @@ class ReserveHandler:
         }
         self.interval = 1  # sec 분당 100회 이상이면 이상탐지에 걸림
         self.loginSuc = False
+        self.loginError = ""  # 사용자에게 보여줄 마지막 로그인 실패 사유
         self.txtGoHour = "000000"
         self.specialVal = ""
         self.chatId = ""  # Telegram Chat bot에서 callback 받을때 전달 받아야 함
@@ -127,6 +129,7 @@ class ReserveHandler:
             if client is not None:
                 client.close()
             self.loginSuc = False
+            self.loginError = self._login_error_message(e)
             return False
 
         # 재로그인 성공 시에만 기존 세션을 교체
@@ -135,7 +138,18 @@ class ReserveHandler:
         self.username = username
         self.password = password
         self.loginSuc = True
+        self.loginError = ""
         return True
+
+    @staticmethod
+    def _login_error_message(error):
+        """로그인 실패 사유 (코레일이 준 안내 메시지, 없으면 일반 안내)
+
+        str(KorailError) 는 "메시지 (코드)" 형식이라 코드가 없으면 "(None)" 이 붙으므로 msg 만 사용
+        """
+        if isinstance(error, KorailError) and error.msg:
+            return error.msg
+        return "코레일 서버에 연결하지 못했습니다. 잠시 후 다시 시도해주세요."
 
     def close(self):
         """코레일 HTTP 세션 정리"""
