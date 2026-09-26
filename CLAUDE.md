@@ -335,8 +335,11 @@ make docker-push               # Publish Docker image
 make docker-compose-up         # Start subprocess mode
 make docker-compose-up-mq  # Start Celery mode (MQ pattern) (RECOMMENDED for production)
 make docker-compose-down       # Stop all services
-# docker-compose-up(-mq) always runs docker-compose-down first (avoids port clashes when switching
-# subprocess <-> celery or USE_WARP), then fails fast if host port 8391/5555 is still taken by a local server
+# docker-compose-up(-mq) recreates only changed containers (up -d --build). It first removes only the services
+# the target mode does not use (other mode's services, warp when USE_WARP=false) to avoid port clashes, and
+# fails fast if host port 8391/5555 is taken by something outside this compose project (e.g. a local server)
+# They set BUILDX_NO_DEFAULT_ATTESTATIONS=1: default provenance attestations make every build a new image ID,
+# which would recreate all app containers even without code changes (build.provenance in compose is ignored by compose v5)
 make docker-compose-logs       # Show logs from running services
 
 # Code Changes - IMPORTANT: Always use --build when code changes

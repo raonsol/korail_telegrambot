@@ -205,15 +205,40 @@ coverage-html:	## Generate HTML coverage report and open in browser
 docker-push:  	## Publish Docker Image
 	docker push ${IMAGE_NAME}
 
+# Docker Compose 실행: 바뀐 컨테이너만 다시 만든다 (up -d --build 의 기본 동작)
+# 1. 이번 모드에서 쓰지 않는 서비스(반대 모드 전용, USE_WARP=false 일 때 warp)만 내림
+#    -> subprocess <-> celery 전환 시 8391 등 포트 충돌 방지
+# 2. 포트 확인: 이번 모드의 컨테이너가 쓰고 있는 포트는 통과, 다른 프로세스(로컬 서버 등)가 쓰면 중단
+# $(1): 띄울 프로필, $(2): 반대 프로필, $(3): 확인할 "서비스:포트" 목록
+define COMPOSE_UP
+	@unused=$$(docker compose --profile $(2) config --services | grep -vxF "$$(docker compose --profile $(1) config --services)"); \
+	if [ "$(WARP_ENABLED)" = "false" ]; then unused="$$unused warp"; fi; \
+	if [ -n "$$unused" ] && [ -n "$$(docker compose --profile $(1) --profile $(2) ps -q $$unused)" ]; then \
+		echo "🛑 Removing services not used in $(1) mode:" $$unused; \
+		docker compose --profile $(1) --profile $(2) rm -sf $$unused; \
+	fi
+	@for pair in $(3); do \
+		svc=$${pair%%:*}; port=$${pair##*:}; \
+		if [ -z "$$(docker compose --profile $(1) ps -q --status running $$svc)" ] && $(call PORT_IN_USE,$$port); then \
+			echo "❌ 포트 $$port 을(를) Docker Compose 밖의 프로세스가 사용 중입니다. 로컬 서버(make run 등)를 먼저 종료하세요."; \
+			exit 1; \
+		fi; \
+	done
+	docker compose $(COMPOSE_FILES) --profile $(1) up -d --build --remove-orphans
+endef
+
+# BuildKit 이 기본으로 붙이는 provenance 증명에는 빌드마다 다른 값이 들어가, 코드가 같아도 이미지 ID 가
+# 바뀌어 compose 가 앱 컨테이너를 매번 다시 만든다. 끄면 이미지가 같을 때 컨테이너를 그대로 둔다.
+# (docker-compose.yml 의 build.provenance: false 는 compose v5 에서 적용되지 않아 환경변수로 지정)
+docker-compose-up docker-compose-up-mq: export BUILDX_NO_DEFAULT_ATTESTATIONS := 1
+
 .PHONY: docker-compose-up
-# 모드 전환(subprocess <-> celery)이나 USE_WARP 변경 시 이전 컨테이너와 포트가 겹치지 않도록
-# 기존 스택을 모두 내린 뒤 띄움. 그래도 포트가 사용 중이면 로컬 서버가 떠 있는 것이므로 중단
-docker-compose-up: docker-compose-down port-free-8391	## Start all services with Docker Compose (subprocess mode, WARP unless USE_WARP=false)
-	docker compose $(COMPOSE_FILES) --profile subprocess up -d --build
+docker-compose-up:	## Start/update Docker Compose in subprocess mode (recreates only changed containers, WARP unless USE_WARP=false)
+	$(call COMPOSE_UP,subprocess,celery,web:8391)
 
 .PHONY: docker-compose-up-mq
-docker-compose-up-mq: docker-compose-down port-free-8391 port-free-5555	## Start all services with Docker Compose (Celery/MQ mode - RECOMMENDED for production, WARP unless USE_WARP=false)
-	docker compose $(COMPOSE_FILES) --profile celery up -d --build
+docker-compose-up-mq:	## Start/update Docker Compose in Celery/MQ mode - RECOMMENDED for production (recreates only changed containers, WARP unless USE_WARP=false)
+	$(call COMPOSE_UP,celery,subprocess,web_celery:8391 flower:5555)
 
 .PHONY: docker-compose-down
 docker-compose-down:	## Stop all Docker Compose services
