@@ -12,7 +12,15 @@ services:
     depends_on: !reset {}
 
   web_celery:
-    depends_on: !override [redis, postgres]
+    depends_on: !override
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_started
 
   worker:
-    depends_on: !override [redis, postgres]
+    depends_on: !override
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_started

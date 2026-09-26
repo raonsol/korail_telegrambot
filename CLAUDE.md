@@ -118,8 +118,8 @@ web: FastAPI application (subprocess mode)
 
 # MQ Mode Services
 web_celery: FastAPI application (Celery mode (MQ pattern))
-redis: Message broker and state storage (REQUIRED for MQ)
-postgres: Persistent database (CURRENTLY UNUSED - reserved for future use)
+redis: Message broker and state storage (REQUIRED for MQ) - internal only (no host port), healthcheck gates web_celery/worker
+postgres: Persistent database (CURRENTLY UNUSED - reserved for future use) - internal only (no host port)
 worker: Celery worker processes (REQUIRED for MQ)
 beat: MQ scheduler (NOT NEEDED - no periodic tasks defined)
 flower: Web-based monitoring (OPTIONAL - for debugging)
@@ -335,6 +335,8 @@ make docker-push               # Publish Docker image
 make docker-compose-up         # Start subprocess mode
 make docker-compose-up-mq  # Start Celery mode (MQ pattern) (RECOMMENDED for production)
 make docker-compose-down       # Stop all services
+# docker-compose-up(-mq) always runs docker-compose-down first (avoids port clashes when switching
+# subprocess <-> celery or USE_WARP), then fails fast if host port 8391/5555 is still taken by a local server
 make docker-compose-logs       # Show logs from running services
 
 # Code Changes - IMPORTANT: Always use --build when code changes
@@ -381,6 +383,9 @@ brew install redis
 ```
 
 **Redis Management:**
+- Docker Compose Redis is not published to the host, so local Redis (localhost:6379) and Docker can run side by side
+- `make redis-start` / `redis-stop` detect local Redis with `redis-cli ping` (not `pgrep`, which also matches Redis inside containers)
+- Local `make dev/run(-mq)` check that their web port (8390/8391) is free first; local Flower is skipped if 5555 is taken
 - Use `make redis-start` to start Redis (runs as daemon process)
 - Use `make redis-stop` to stop Redis when needed
 - Redis will automatically start when running `make dev-mq` or `make run-mq`

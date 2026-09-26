@@ -17,6 +17,17 @@ endif
 WORKER_PID_FILE := .celery-worker.pid
 FLOWER_PID_FILE := .celery-flower.pid
 
+# 호스트 포트가 사용 중인지 확인 (사용 중이면 0)
+PORT_IN_USE = python3 -c "import socket,sys; s=socket.socket(); s.settimeout(0.5); sys.exit(0 if s.connect_ex(('127.0.0.1', $(1))) == 0 else 1)"
+
+# 포트가 비어 있어야 하는 대상의 선행 조건 (예: port-free-8391)
+port-free-%:
+	@if $(call PORT_IN_USE,$*); then \
+		echo "❌ 포트 $* 이(가) 이미 사용 중입니다."; \
+		echo "   Docker Compose 가 떠 있다면 'make docker-compose-down', 로컬 서버(make run 등)라면 해당 프로세스를 먼저 종료하세요."; \
+		exit 1; \
+	fi
+
 .PHONY: help
 help:           ## Show this help.
 	@fgrep -h "##" $(MAKEFILE_LIST) | fgrep -v fgrep | sed -e 's/\\$$//' | sed -e 's/##//'
@@ -30,11 +41,11 @@ install:	## Install dependencies and create virtual environment
 	pipenv install --dev
 
 .PHONY: dev
-dev:  ## Run local development server in subprocess mode (port: 8390, IS_DEV=true)
+dev: port-free-8390  ## Run local development server in subprocess mode (port: 8390, IS_DEV=true)
 	PIPENV_DONT_LOAD_ENV=1 IS_DEV=true USE_CELERY=false pipenv run python -m fastapi dev src/app.py --port 8390
 
 .PHONY: dev-mq
-dev-mq: redis-start celery-worker-start celery-flower-start  ## Run local development with Celery (MQ) - starts Redis + Worker + Flower + Web (port: 8390, IS_DEV=true)
+dev-mq: port-free-8390 redis-start celery-worker-start celery-flower-start  ## Run local development with Celery (MQ) - starts Redis + Worker + Flower + Web (port: 8390, IS_DEV=true)
 	@echo "✅ Redis running on localhost:6379"
 	@echo "✅ Celery worker running in background"
 	@echo "✅ Flower monitoring UI running at http://localhost:5555"
@@ -48,11 +59,11 @@ dev-mq-stop: celery-flower-stop celery-worker-stop  ## Stop Celery (MQ) developm
 	@echo "INFO: Redis still running, use 'make redis-stop' to stop it"
 
 .PHONY: run
-run:  ## Run local production server in subprocess mode (port: 8391, IS_DEV=false)
+run: port-free-8391  ## Run local production server in subprocess mode (port: 8391, IS_DEV=false)
 	PIPENV_DONT_LOAD_ENV=1 USE_CELERY=false pipenv run python -m fastapi run src/app.py --host 0.0.0.0 --port 8391
 
 .PHONY: run-mq
-run-mq: redis-start celery-worker-start celery-flower-start  ## Run local production with Celery (MQ) - starts Redis + Worker + Flower + Web (port: 8391, IS_DEV=false)
+run-mq: port-free-8391 redis-start celery-worker-start celery-flower-start  ## Run local production with Celery (MQ) - starts Redis + Worker + Flower + Web (port: 8391, IS_DEV=false)
 	@echo "✅ Redis running on localhost:6379"
 	@echo "✅ Celery worker running in background"
 	@echo "✅ Flower monitoring UI running at http://localhost:5555"
@@ -67,7 +78,7 @@ run-mq-stop: celery-flower-stop celery-worker-stop  ## Stop Celery (MQ) producti
 
 .PHONY: redis-start
 redis-start:  ## Start local Redis server
-	@if pgrep -x redis-server > /dev/null; then \
+	@if redis-cli -h 127.0.0.1 -p 6379 ping > /dev/null 2>&1; then \
 		echo "✅ Redis already running"; \
 	else \
 		echo "🚀 Starting local Redis server..."; \
@@ -77,9 +88,9 @@ redis-start:  ## Start local Redis server
 
 .PHONY: redis-stop
 redis-stop:  ## Stop local Redis server
-	@if pgrep -x redis-server > /dev/null; then \
+	@if redis-cli -h 127.0.0.1 -p 6379 ping > /dev/null 2>&1; then \
 		echo "🛑 Stopping Redis server..."; \
-		redis-cli shutdown; \
+		redis-cli -h 127.0.0.1 -p 6379 shutdown; \
 	else \
 		echo "ℹ️  Redis not running"; \
 	fi
@@ -108,6 +119,8 @@ celery-worker-stop:  ## Stop Celery worker
 celery-flower-start:  ## Start Flower monitoring UI in background
 	@if [ -f ${FLOWER_PID_FILE} ] && kill -0 $$(cat ${FLOWER_PID_FILE}) 2>/dev/null; then \
 		echo "✅ Flower already running (PID: $$(cat ${FLOWER_PID_FILE}))"; \
+	elif $(call PORT_IN_USE,5555); then \
+		echo "⚠️  Port 5555 is already in use (Docker Compose flower?) - skipping local Flower"; \
 	else \
 		echo "🌸 Starting Flower monitoring UI in background on http://localhost:5555..."; \
 		nohup bash -c "cd src && PYTHONPATH=. pipenv run celery -A telegramBot.tasks flower" > /dev/null 2>&1 & \
@@ -193,16 +206,18 @@ docker-push:  	## Publish Docker Image
 	docker push ${IMAGE_NAME}
 
 .PHONY: docker-compose-up
-docker-compose-up:	## Start all services with Docker Compose (subprocess mode, WARP unless USE_WARP=false)
+# 모드 전환(subprocess <-> celery)이나 USE_WARP 변경 시 이전 컨테이너와 포트가 겹치지 않도록
+# 기존 스택을 모두 내린 뒤 띄움. 그래도 포트가 사용 중이면 로컬 서버가 떠 있는 것이므로 중단
+docker-compose-up: docker-compose-down port-free-8391	## Start all services with Docker Compose (subprocess mode, WARP unless USE_WARP=false)
 	docker compose $(COMPOSE_FILES) --profile subprocess up -d --build
 
 .PHONY: docker-compose-up-mq
-docker-compose-up-mq:	## Start all services with Docker Compose (Celery/MQ mode - RECOMMENDED for production, WARP unless USE_WARP=false)
+docker-compose-up-mq: docker-compose-down port-free-8391 port-free-5555	## Start all services with Docker Compose (Celery/MQ mode - RECOMMENDED for production, WARP unless USE_WARP=false)
 	docker compose $(COMPOSE_FILES) --profile celery up -d --build
 
 .PHONY: docker-compose-down
 docker-compose-down:	## Stop all Docker Compose services
-	docker compose --profile subprocess --profile celery down
+	docker compose --profile subprocess --profile celery down --remove-orphans
 
 .PHONY: docker-compose-logs
 docker-compose-logs:	## Show logs from all running Docker Compose services
