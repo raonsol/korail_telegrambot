@@ -377,6 +377,8 @@ location /telebot_dev {
 }
 ```
 
+웹 서버는 로그인 시도 제한을 접속 IP 기준으로 세므로, `X-Forwarded-For`는 신뢰하는 프록시가 보낸 것만 사용합니다(`FORWARDED_ALLOW_IPS`, 기본 `127.0.0.1`). 위처럼 같은 서버의 nginx가 `localhost`로 전달하면 설정할 것이 없고, Docker Compose는 컨테이너가 보는 게이트웨이 대역(`172.16.0.0/12`)을 기본으로 지정합니다. 다른 서버의 프록시를 쓴다면 그 주소를 `FORWARDED_ALLOW_IPS`에 넣으세요.
+
 ### 시스템 서비스 등록
 
 ```ini

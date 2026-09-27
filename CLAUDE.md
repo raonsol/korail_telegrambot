@@ -56,6 +56,8 @@ Browser (PWA) ────▶ /api/*   ─▶ web/routes_*.py (session cookie + 
 
 Both modes share the same retry loop (`core/runner.py::run_reservation`) and report to `/internal/events`.
 
+**Unreported success** (the ticket is reserved even if the report is lost): `run_reservation` calls `on_success(train_info=, attempts=)` *before* reporting (subprocess: `logs/result_{id}.json`, Celery: `train_info`/`attempts` in `reservation_task:{id}`), then retries the success report with backoff for up to 10 min. Every web-side path that closes a silent reservation (`handle_process_exit`, `abort_interrupted`, `detect_lost_workers`, `expire_stale`) goes through `ReservationService._close_unreported`, which recovers that result (`launcher.recover_success`) as `success` before falling back to `error`. A late `success` report is also accepted over a system-set `error` (not over `cancelled`).
+
 ### Channels
 
 - `ENABLE_TELEGRAM` (default true): Telegram bot + `/message` webhook. Requires bot token + webhook URL.
@@ -99,12 +101,12 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 
 #### Web API (`src/web/`)
 - `routes_auth.py` (`/api/auth/*`), `routes_reservations.py`, `routes_stations.py` (cached 공공데이터 search), `routes_events.py` (SSE), `routes_push.py`, `routes_admin.py` (user management), `routes_internal.py` (`/internal/events`), `static.py` (`/app/*` SPA fallback + cache headers)
-- `deps.py`: `korail_session` cookie (HttpOnly, SameSite=Lax), `X-CSRF-Token` required on non-GET
+- `deps.py`: `korail_session` cookie (HttpOnly, SameSite=Lax), `X-CSRF-Token` required on non-GET; `client_ip()` (login throttling) uses the peer address only - never read `X-Forwarded-For` directly. uvicorn (`fastapi run/dev`, proxy headers on by default) rewrites it only for `FORWARDED_ALLOW_IPS` (default 127.0.0.1; compose sets `172.16.0.0/12` for the Docker gateway)
 - Errors are returned as `{"code": ..., "message": ...}` (`core/errors.py` → HTTP status)
 
 #### Telegram Bot (`src/telegramBot/`)
 - **bot.py**: Conversation state machine only (`userDict`); calls `ReservationService`; `deliver()` sends results
-  - Admin-only commands (after ADMINPW login in that chat): `/users`, `/adduser`, `/deluser`
+  - Admin-only commands (after ADMINPW login in that chat): `/users`, `/adduser`, `/deluser`, `/cancelall`, `/allusers`; `/status` shows all users only to admins (others see their own count)
 - **tasks.py**: `reservation_task(spec)`; Redis `reservation_task:{task_id}` guard against duplicate execution; `Heartbeat` thread + `worker_shutting_down` handler (restart detection)
 - **worker.py**: Subprocess entry point `run_process(spec, log_path)` (stdout/stderr → `logs/worker_{id8}.log`); `python -m telegramBot.worker` still reads a spec from stdin for manual runs
 - **korail_client.py** (pykorail): `ReserveHandler.login` (bool + `loginError` reason) / `reserve_single_attempt` / `close`
@@ -400,6 +402,7 @@ DATABASE_URL          # default sqlite:///./korail_bot.db (postgresql://... is m
 WEBAPP_ENC_KEY        # Korail password encryption secret (REQUIRED in production; same value for workers)
 SESSION_TTL_HOURS     # "로그인 유지" session lifetime, default 168
 COOKIE_SECURE         # override Secure cookie flag (default: not IS_DEV)
+FORWARDED_ALLOW_IPS   # proxies whose X-Forwarded-For is trusted (uvicorn; default 127.0.0.1, compose 172.16.0.0/12)
 WEBAPP_ORIGIN         # only if the PWA is served from another origin (enables CORS for it)
 INTERNAL_CALLBACK_URL # worker -> web callback (default http://127.0.0.1:{8390|8391}/internal/events)
 VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT   # Web Push (make vapid-keys)

@@ -415,3 +415,103 @@ class TestLostWorkerLoop:
         # 정리 작업은 시작 직후 + 0.5초 뒤, 워커 확인은 0.05초마다
         assert calls["housekeeping"] in (1, 2)
         assert calls["lost"] >= 5 * calls["housekeeping"]
+
+
+class TestUnreportedSuccess:
+    """표는 잡혔는데 성공 보고가 전달되지 않은 경우 (웹 서버 재시작·일시 장애)"""
+
+    @pytest.fixture
+    def recovered(self, fake_launcher):
+        results = {}
+        fake_launcher.recover_success = lambda reservation_id: results.pop(
+            reservation_id, None
+        )
+        return results
+
+    @pytest.mark.asyncio
+    async def test_process_exit_recovers_success(
+        self, services, valid_request, recovered, events
+    ):
+        r = await _start(services, request=valid_request)
+        recovered[r.id] = {"train_info": "KTX 101", "attempts": 7}
+        events.reset_mock()
+
+        await services.reservations.handle_process_exit(r.id, 0)
+
+        out = services.reservations.get(r.id, USER)
+        assert out.status.value == "success"
+        assert out.result_text == "KTX 101"
+        assert out.attempts == 7
+        assert out.error is None
+        events.assert_awaited_once()  # 사용자에게 성공 알림
+
+    @pytest.mark.asyncio
+    async def test_process_exit_without_result_is_error(
+        self, services, valid_request, recovered
+    ):
+        r = await _start(services, request=valid_request)
+        await services.reservations.handle_process_exit(r.id, 3)
+        assert services.reservations.get(r.id, USER).status.value == "error"
+
+    @pytest.mark.asyncio
+    async def test_restart_and_stale_paths_recover_success(
+        self, services, valid_request, recovered
+    ):
+        interrupted = await _start(services, request=valid_request)
+        stale = await _start(services, request=valid_request)
+        recovered[interrupted.id] = {"train_info": "KTX 1", "attempts": 1}
+        recovered[stale.id] = {"train_info": "KTX 2", "attempts": 2}
+
+        # 시작 시 정리 (subprocess 재시작)
+        assert await services.reservations.abort_interrupted() == 2
+        assert services.reservations.get(interrupted.id, USER).result_text == "KTX 1"
+
+        # 30분 무응답 정리
+        other = await _start(services, OTHER, request=valid_request)
+        recovered[other.id] = {"train_info": "KTX 3", "attempts": 3}
+        with services.db.session() as s:
+            row = s.get(Reservation, other.id)
+            row.status = "running"
+            row.updated_at = utcnow() - timedelta(hours=1)
+        assert await services.reservations.expire_stale() == 1
+        assert services.reservations.get(other.id, OTHER).status.value == "success"
+
+    @pytest.mark.asyncio
+    async def test_late_success_report_overrides_system_error(
+        self, services, fake_launcher, valid_request
+    ):
+        """서버가 먼저 오류 처리했어도 워커의 성공 보고는 반영 (표가 실제로 잡힘)"""
+        r = await _start(services, request=valid_request)
+        token = _token(fake_launcher)
+        await services.reservations.abort_interrupted()
+        assert services.reservations.get(r.id, USER).status.value == "error"
+
+        applied = await services.reservations.handle_worker_event(
+            WorkerEvent(
+                reservation_id=r.id,
+                token=token,
+                status="success",
+                attempts=5,
+                train_info="KTX 101",
+            )
+        )
+
+        assert applied is True
+        out = services.reservations.get(r.id, USER)
+        assert out.status.value == "success"
+        assert out.error is None
+
+    @pytest.mark.asyncio
+    async def test_late_reports_do_not_override_cancel(
+        self, services, fake_launcher, valid_request
+    ):
+        r = await _start(services, request=valid_request)
+        token = _token(fake_launcher)
+        await services.reservations.cancel(r.id, owner=USER, source="web")
+
+        for status in ("success", "error"):
+            applied = await services.reservations.handle_worker_event(
+                WorkerEvent(reservation_id=r.id, token=token, status=status)
+            )
+            assert applied is False
+        assert services.reservations.get(r.id, USER).status.value == "cancelled"

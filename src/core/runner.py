@@ -5,7 +5,9 @@ subprocess 워커(``telegramBot.worker``)와 Celery 태스크(``telegramBot.task
 이 모듈은 DB/웹 계층을 import하지 않습니다(워커 프로세스는 가볍게 유지).
 """
 
+import json
 import logging
+import os
 import time
 from typing import Callable, Optional
 
@@ -29,6 +31,11 @@ EXPECTED_MISSES = ("No trains available", "All trains sold out")
 
 MAX_ATTEMPTS_MESSAGE = "최대 시도 횟수를 초과하여 예약이 중단되었습니다."
 MAX_DURATION_MESSAGE = "최대 실행 시간을 초과하여 예약이 중단되었습니다."
+
+# 예약 성공 보고는 웹 서버가 잠시 응답하지 않아도(재시작 등) 이 시간 동안 다시 보냄.
+# 표는 이미 잡혔으므로 사용자가 결제 기한 안에 알아야 함
+SUCCESS_REPORT_WINDOW_SECONDS = 600
+SUCCESS_REPORT_MAX_BACKOFF_SECONDS = 30
 
 # 웹 서버가 이 예약을 받아들이지 않는 응답 (예약 없음 / 토큰 불일치)
 # 서버 재시작 등 일시적인 연결 실패와 달리 다시 보내도 결과가 같다
@@ -105,6 +112,27 @@ def _rejected(reporter) -> bool:
     return getattr(reporter, "rejected", False) is True
 
 
+def result_file(directory: str, reservation_id: str) -> str:
+    """subprocess 워커가 예약 성공 결과를 남기는 파일 (웹 서버가 보고를 못 받았을 때 복구용)"""
+    return os.path.join(directory, f"result_{reservation_id}.json")
+
+
+def write_result_file(path: str, train_info: str, attempts: int) -> None:
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as f:
+        json.dump({"train_info": train_info, "attempts": attempts}, f)
+    os.replace(tmp, path)  # 웹 서버가 쓰다 만 파일을 읽지 않도록
+
+
+def read_result_file(path: str) -> Optional[dict]:
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and data.get("train_info") else None
+
+
 def build_reporter(spec: dict) -> CallbackReporter:
     return CallbackReporter(
         spec["callback_url"], spec["reservation_id"], spec["callback_token"]
@@ -115,7 +143,7 @@ def run_reservation(
     spec: dict,
     reporter: CallbackReporter,
     should_stop: Callable[[], bool] = lambda: False,
-    on_success: Callable[[], None] = lambda: None,
+    on_success: Callable[..., None] = lambda **_: None,
     max_attempts: int = 1000,
     interval: float = 2.0,
     progress_every: int = 20,
@@ -130,12 +158,15 @@ def run_reservation(
         spec: 예약 명세 (ReservationService._build_spec 참고)
         reporter: 상태 보고 객체
         should_stop: True를 반환하면 즉시 종료 (Celery 중복 실행 방지용)
-        on_success: 성공 직후 호출 (Celery의 Redis 완료 표시용)
+        on_success: 성공 직후, 보고 전에 ``on_success(train_info=..., attempts=...)`` 호출.
+            보고가 끝내 전달되지 않아도 웹 서버가 결과를 복구할 수 있도록 기록하는 용도
+            (subprocess: 결과 파일, Celery: Redis 상태)
         clock: 경과 시간 측정용. ``spec["max_duration"]``(초)을 넘기면 ``failed``로 끝냄
             (Celery threads 풀은 태스크 시간 제한을 적용하지 않으므로 루프에서 직접 확인)
 
     Returns:
         dict: {"status": "success"|"failed"|"error"|"stopped"|"rejected", ...}
+            success에는 성공 보고가 전달됐는지 ``reported``가 함께 들어감
             rejected: 웹 서버가 보고를 거부함 (취소·만료됐거나 모르는 예약) → 즉시 종료
     """
     handler = handler_factory()
@@ -152,6 +183,7 @@ def run_reservation(
             relogin_after_errors,
             sleep,
             _deadline(spec, clock),
+            clock,
         )
     finally:
         # 코레일 HTTP 세션 정리 (pykorail)
@@ -167,6 +199,20 @@ def _deadline(spec: dict, clock: Callable[[], float]) -> Callable[[], bool]:
         return lambda: False
     started = clock()
     return lambda: clock() - started >= max_duration
+
+
+def _report_success(reporter, attempts, train_info, sleep, clock) -> bool:
+    """성공 보고가 전달되거나 거부될 때까지 간격을 늘려 가며 다시 보냄"""
+    deadline = clock() + SUCCESS_REPORT_WINDOW_SECONDS
+    backoff = 2.0
+    while True:
+        if reporter.send("success", attempts=attempts, train_info=train_info):
+            return True
+        if _rejected(reporter) or clock() >= deadline:
+            logger.error("Success report was not delivered; left for server recovery")
+            return False
+        sleep(backoff)
+        backoff = min(backoff * 2, SUCCESS_REPORT_MAX_BACKOFF_SECONDS)
 
 
 def _login_failure_message(handler) -> str:
@@ -186,6 +232,7 @@ def _run_attempts(
     relogin_after_errors,
     sleep,
     expired,
+    clock,
 ) -> dict:
     korail_id = spec["korail_id"]
     korail_pw = spec["korail_pw"]
@@ -227,9 +274,14 @@ def _run_attempts(
                 train_info = "이미 동일한 예약이 존재합니다. 장바구니를 확인해주세요."
             else:
                 train_info = str(result["result"])
-            on_success()
-            reporter.send("success", attempts=attempt, train_info=train_info)
-            return {"status": "success", "attempts": attempt, "train_info": train_info}
+            on_success(train_info=train_info, attempts=attempt)
+            reported = _report_success(reporter, attempt, train_info, sleep, clock)
+            return {
+                "status": "success",
+                "attempts": attempt,
+                "train_info": train_info,
+                "reported": reported,
+            }
 
         error = result.get("error") or ""
         if result.get("fatal"):

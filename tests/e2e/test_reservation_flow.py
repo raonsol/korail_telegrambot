@@ -388,8 +388,14 @@ class TestUserExperience:
         update.message = Mock()
         update.message.chat_id = 123456
 
+        # 일반 사용자: 본인 예약 수만 (다른 사용자의 전화번호는 보이지 않음)
         await bot.get_status_info(update, None)
+        text = bot.send_message.call_args[0][1]
+        assert "내 예약은 0개" in text
+        assert "010-1111-1111" not in text
 
-        bot.send_message.assert_called_once()
+        # 관리자: 전체 예약과 사용자
+        bot.userDict[123456]["userInfo"]["isAdmin"] = True
+        await bot.get_status_info(update, None)
         call_args = bot.send_message.call_args[0]
         assert "2개의 예약이 실행중입니다" in call_args[1]

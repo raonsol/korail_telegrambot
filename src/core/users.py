@@ -9,12 +9,12 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from .db import Database, utcnow
 from .errors import Conflict, NotFound, ValidationFailed
-from .models import User
+from .models import PushSubscription, User
 from .schemas import is_valid_phone, normalize_phone
 
 logger = logging.getLogger(__name__)
@@ -92,6 +92,11 @@ class UserService:
             user = s.get(User, normalize_phone(phone))
             if not user:
                 raise NotFound("사용자를 찾을 수 없습니다.")
+            # 푸시 구독은 외래키가 없어 직접 삭제 (남으면 같은 번호로 다시 등록된 사용자의
+            # 알림이 이전 사용자의 브라우저로 전송됨)
+            s.execute(
+                delete(PushSubscription).where(PushSubscription.user_id == user.id)
+            )
             s.delete(user)
 
     def link_telegram(self, phone: str, chat_id: int) -> None:

@@ -53,10 +53,16 @@ class TestRunReservation:
 
         result, reporter, statuses = _run(handler, on_success=on_success)
 
-        assert result == {"status": "success", "attempts": 3, "train_info": "KTX 101"}
+        assert result == {
+            "status": "success",
+            "attempts": 3,
+            "train_info": "KTX 101",
+            "reported": True,
+        }
         assert statuses == ["running", "success"]
         assert reporter.send.call_args.kwargs["train_info"] == "KTX 101"
-        on_success.assert_called_once()
+        # 보고 전에 결과를 남길 수 있도록 결과와 함께 호출
+        on_success.assert_called_once_with(train_info="KTX 101", attempts=3)
         kwargs = handler.reserve_single_attempt.call_args.kwargs
         assert kwargs["depTime"] == "090000"
         assert kwargs["maxDepTime"] == "1200"
@@ -120,6 +126,69 @@ class TestRunReservation:
         result, _, statuses = _run(handler, should_stop=lambda: next(calls))
         assert result == {"status": "stopped", "attempts": 2}
         assert statuses == ["running"]
+
+    def test_success_report_retried_until_delivered(self):
+        """표는 이미 잡혔으므로 웹 서버가 잠시 응답하지 않아도 성공 보고를 다시 보냄"""
+        handler = _handler([{"success": True, "result": "KTX 101", "error": None}])
+        reporter = Mock(rejected=False)
+        reporter.send.side_effect = lambda status, **kw: status != "success" or (
+            reporter.send.call_count >= 4
+        )
+        slept = []
+
+        result = run_reservation(
+            SPEC, reporter, handler_factory=lambda: handler, sleep=slept.append
+        )
+
+        assert result["status"] == "success"
+        assert result["reported"] is True
+        statuses = [c.args[0] for c in reporter.send.call_args_list]
+        assert statuses == ["running", "success", "success", "success"]
+        assert slept == [2.0, 4.0]  # 간격을 늘려 가며
+
+    def test_success_report_gives_up_after_window(self):
+        from core.runner import SUCCESS_REPORT_WINDOW_SECONDS
+
+        handler = _handler([{"success": True, "result": "KTX 101", "error": None}])
+        reporter = Mock(rejected=False)
+        reporter.send.side_effect = lambda status, **kw: status != "success"
+        now = [0.0]
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        result = run_reservation(
+            SPEC,
+            reporter,
+            handler_factory=lambda: handler,
+            sleep=sleep,
+            clock=lambda: now[0],
+        )
+
+        assert result["reported"] is False  # 결과는 on_success로 남겨 둔 값으로 복구
+        assert (
+            SUCCESS_REPORT_WINDOW_SECONDS <= now[0] < SUCCESS_REPORT_WINDOW_SECONDS + 60
+        )
+
+    def test_success_report_stops_when_rejected(self):
+        handler = _handler([{"success": True, "result": "KTX 101", "error": None}])
+        reporter = Mock(rejected=False)
+
+        def send(status, **kw):
+            if status == "success":
+                reporter.rejected = True  # 404: 웹 서버가 모르는 예약
+                return False
+            return True
+
+        reporter.send.side_effect = send
+        result = run_reservation(
+            SPEC, reporter, handler_factory=lambda: handler, sleep=Mock()
+        )
+        assert result["reported"] is False
+        assert [c.args[0] for c in reporter.send.call_args_list] == [
+            "running",
+            "success",
+        ]
 
     def test_max_duration_reports_failed(self):
         """최대 실행 시간을 넘기면 failed (Celery threads 풀은 시간 제한이 없음)"""

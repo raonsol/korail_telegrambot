@@ -334,7 +334,11 @@ class ReservationService:
                 raise NotFound("예약을 찾을 수 없습니다.")
             if not hmac.compare_digest(r.callback_token_hash, sha256_hex(event.token)):
                 raise NotAllowed("잘못된 콜백 토큰입니다.")
-            if r.status in TERMINAL_STATUSES:
+            if r.status in TERMINAL_STATUSES and not (
+                # 서버가 먼저 포기(재시작·워커 종료·무응답)했지만 워커가 실제로 표를 잡은 경우
+                new_status == ReservationStatus.SUCCESS
+                and r.status == ReservationStatus.ERROR.value
+            ):
                 return False
 
             previous = r.status
@@ -344,6 +348,7 @@ class ReservationService:
                 r.attempts = max(r.attempts or 0, event.attempts)
             if new_status == ReservationStatus.SUCCESS:
                 r.result_text = event.train_info or event.message
+                r.error = None
                 r.finished_at = r.updated_at
             elif new_status in (ReservationStatus.FAILED, ReservationStatus.ERROR):
                 r.error = event.message
@@ -357,8 +362,8 @@ class ReservationService:
         return True
 
     async def handle_process_exit(self, reservation_id: str, returncode: int) -> None:
-        """subprocess가 결과 보고 없이 종료된 경우 오류로 기록"""
-        await self._fail_if_active(
+        """subprocess가 결과 보고 없이 종료된 경우 (남긴 성공 결과가 있으면 성공으로)"""
+        await self._close_unreported(
             reservation_id,
             f"예약 프로세스가 비정상 종료되었습니다. (code {returncode})",
         )
@@ -369,6 +374,50 @@ class ReservationService:
         asyncio.run_coroutine_threadsafe(
             self.handle_process_exit(reservation_id, returncode), self._loop
         )
+
+    async def _close_unreported(self, reservation_id: str, message: str) -> bool:
+        """보고 없이 멈춘 예약 정리: 워커가 남긴 성공 결과가 있으면 성공, 없으면 오류
+
+        워커는 성공 보고 전에 결과를 기록한다(subprocess: 결과 파일, Celery: Redis).
+        보고가 전달되지 않았어도 표는 잡혔으므로 오류로 알리면 안 된다.
+        """
+        recover = getattr(self.launcher, "recover_success", None)
+        if recover is not None:
+            try:
+                result = await asyncio.to_thread(recover, reservation_id)
+            except Exception as e:
+                logger.warning(f"Failed to recover result of {reservation_id}: {e}")
+                result = None
+            if result:
+                return await self._record_success(
+                    reservation_id, result["train_info"], result.get("attempts")
+                )
+        return await self._fail_if_active(reservation_id, message)
+
+    async def _record_success(
+        self, reservation_id: str, train_info: str, attempts: Optional[int]
+    ) -> bool:
+        with self.db.session() as s:
+            r = s.get(Reservation, reservation_id)
+            if not r or r.status not in (
+                *ACTIVE_STATUSES,
+                ReservationStatus.ERROR.value,
+            ):
+                return False
+            previous = r.status
+            r.status = ReservationStatus.SUCCESS.value
+            r.result_text = train_info
+            r.error = None
+            if attempts is not None:
+                r.attempts = max(r.attempts or 0, attempts)
+            r.updated_at = r.finished_at = utcnow()
+            out = ReservationOut.from_model(r)
+            chat_id = r.chat_id
+        logger.warning(f"Recovered unreported success of {reservation_id}")
+        await self.notifier.notify(
+            ReservationEvent(out, previous, source="system", chat_id=chat_id)
+        )
+        return True
 
     async def _fail_if_active(self, reservation_id: str, message: str) -> bool:
         with self.db.session() as s:
@@ -422,15 +471,16 @@ class ReservationService:
             )
         count = 0
         for r in stale:
+            # 결과 복구가 먼저 (Celery 취소 표시가 완료 상태를 덮어쓰기 전에)
+            if await self._close_unreported(
+                r.id, "워커 응답이 없어 예약이 중단되었습니다."
+            ):
+                count += 1
             if r.runner == self.launcher.name and r.runner_ref:
                 try:
                     self.launcher.cancel(r.runner_ref)
                 except Exception:
                     pass
-            if await self._fail_if_active(
-                r.id, "워커 응답이 없어 예약이 중단되었습니다."
-            ):
-                count += 1
         return count
 
     async def abort_interrupted(self) -> int:
@@ -451,7 +501,7 @@ class ReservationService:
             )
         count = 0
         for reservation_id in ids:
-            if await self._fail_if_active(reservation_id, INTERRUPTED_MESSAGE):
+            if await self._close_unreported(reservation_id, INTERRUPTED_MESSAGE):
                 count += 1
         if count:
             logger.warning(f"Marked {count} reservations interrupted by restart")
@@ -481,13 +531,14 @@ class ReservationService:
         lost = await asyncio.to_thread(find_lost, list(by_ref))
         count = 0
         for ref in lost:
+            # 성공했지만 보고가 전달되지 않은 태스크는 결과를 복구 (취소 표시보다 먼저)
+            if await self._close_unreported(by_ref[ref], WORKER_LOST_MESSAGE):
+                count += 1
             try:
                 # 브로커가 태스크를 다시 전달해도 시작하지 않도록 취소 표시
                 await asyncio.to_thread(self.launcher.cancel, ref)
             except Exception as e:
                 logger.warning(f"Failed to mark lost task {ref} cancelled: {e}")
-            if await self._fail_if_active(by_ref[ref], WORKER_LOST_MESSAGE):
-                count += 1
         if count:
             logger.warning(f"Marked {count} reservations whose worker stopped")
         return count

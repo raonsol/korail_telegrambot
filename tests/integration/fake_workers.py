@@ -59,3 +59,19 @@ def run_with_no_trains(spec, log_path):
 
     worker.run_reservation = fast
     worker.run_process(spec, log_path)
+
+
+def succeed_without_report(spec, log_path):
+    """표는 잡았지만 성공 보고가 웹 서버에 전달되지 않은 워커 (실제 진입점의 결과 파일 경로 사용)"""
+    import os
+
+    from core.runner import result_file
+    from telegramBot import worker
+
+    def reserved_but_unreported(spec, reporter, on_success, **kwargs):
+        on_success(train_info="KTX 101 서울→부산", attempts=4)
+        return {"status": "success", "attempts": 4, "reported": False}
+
+    worker.run_reservation = reserved_but_unreported
+    results_dir = os.path.dirname(os.path.abspath(log_path))
+    sys.exit(worker._run(spec, result_file(results_dir, spec["reservation_id"])))

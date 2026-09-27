@@ -46,6 +46,28 @@ class TestUserService:
         with pytest.raises(NotFound):
             services.users.delete("01012345678")
 
+    def test_delete_removes_push_subscriptions(self, services):
+        """삭제한 사용자의 브라우저로 알림이 가지 않아야 함 (같은 번호를 다시 등록해도)"""
+        from core.models import PushSubscription
+
+        with services.db.session() as s:
+            for user_id, endpoint in (
+                ("01012345678", "https://mine-1"),
+                ("01012345678", "https://mine-2"),
+                ("01087654321", "https://other"),
+            ):
+                s.add(
+                    PushSubscription(
+                        user_id=user_id, endpoint=endpoint, p256dh="k", auth="a"
+                    )
+                )
+
+        services.users.delete("010-1234-5678")
+
+        with services.db.session() as s:
+            left = [p.endpoint for p in s.query(PushSubscription).all()]
+        assert left == ["https://other"]
+
     def test_update_missing(self, services):
         with pytest.raises(NotFound):
             services.users.update("01099999999", name="x")

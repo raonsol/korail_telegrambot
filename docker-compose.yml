@@ -49,6 +49,9 @@ services:
     environment:
       - TZ=Asia/Seoul
       - USE_CELERY=false
+      # 리버스 프록시(호스트 nginx 등)는 Docker 게이트웨이(172.16.0.0/12)에서 접속하므로
+      # 이 대역이 보낸 X-Forwarded-For만 실제 클라이언트 IP로 인정 (로그인 제한 기준)
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-172.16.0.0/12}
       # 사용자/세션/예약 이력 (SQLite)
       - DATABASE_URL=sqlite:////app/data/korail_bot.db
     volumes:
@@ -73,6 +76,9 @@ services:
       - CELERY_BROKER=redis://redis:6379
       - CELERY_RESULT_BACKEND=redis://redis:6379
       - CELERY_POOL=${CELERY_POOL:-threads}
+      # 리버스 프록시(호스트 nginx 등)는 Docker 게이트웨이(172.16.0.0/12)에서 접속하므로
+      # 이 대역이 보낸 X-Forwarded-For만 실제 클라이언트 IP로 인정 (로그인 제한 기준)
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-172.16.0.0/12}
       - DATABASE_URL=postgresql://korail:password@postgres:5432/korail_bot
       # 워커 컨테이너가 예약 상태를 보고할 주소
       - INTERNAL_CALLBACK_URL=http://web_celery:8391/internal/events

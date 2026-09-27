@@ -95,6 +95,25 @@ class TestAuthApi:
         assert "남은 시도 2회" in wrong.json()["message"]
 
     @pytest.mark.asyncio
+    async def test_forwarded_header_cannot_bypass_admin_throttle(self, client):
+        """X-Forwarded-For를 매번 바꿔도 같은 접속지로 세어 관리자 비밀번호 대입을 막음"""
+        for i in range(3):
+            wrong = await client.post(
+                "/api/auth/admin-login",
+                json={"password": "guess"},
+                headers={"X-Forwarded-For": f"203.0.113.{i}"},
+            )
+            assert wrong.status_code == 401
+
+        blocked = await client.post(
+            "/api/auth/admin-login",
+            json={"password": "guess"},
+            headers={"X-Forwarded-For": "203.0.113.99"},
+        )
+        assert blocked.status_code == 429
+        assert blocked.json()["code"] == "RATE_LIMITED"
+
+    @pytest.mark.asyncio
     async def test_me_requires_session(self, client):
         response = await client.get("/api/auth/me")
         assert response.status_code == 401

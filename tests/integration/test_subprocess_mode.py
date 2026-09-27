@@ -129,6 +129,32 @@ class TestSubprocessLauncher:
         r = services.reservations.get(reservation.id, owner)
         assert r.status.value == "cancelled"
 
+    @pytest.mark.asyncio
+    async def test_unreported_success_is_recovered_from_result_file(
+        self, make_services, valid_request
+    ):
+        """성공 보고가 전달되지 않고 워커가 끝나도 결과 파일로 성공 처리 (오류로 알리지 않음)"""
+        from core.runner import result_file
+
+        launcher = SubprocessLauncher(target=fake_workers.succeed_without_report)
+        services = make_services(launcher)
+        owner = Owner(user_id="01012345678")
+
+        reservation = await services.reservations.start(
+            owner, valid_request, "010", "pw", origin="web"
+        )
+
+        def finished():
+            return not services.reservations.get(reservation.id, owner).is_active
+
+        assert await _wait_until(finished)
+        r = services.reservations.get(reservation.id, owner)
+        assert r.status.value == "success"
+        assert r.result_text == "KTX 101 서울→부산"
+        assert r.attempts == 4
+        # 복구한 결과 파일은 삭제
+        assert not os.path.exists(result_file(LOGS_DIR, reservation.id))
+
     def test_cancel_only_terminates_that_worker(self):
         """워커는 웹 서버와 같은 프로세스 그룹이므로 그룹이 아닌 해당 프로세스만 종료"""
         launcher = SubprocessLauncher(target=fake_workers.sleep_forever)
@@ -321,6 +347,30 @@ class TestWorkerEntrypoint:
         run.assert_called_once()
         assert run.call_args[0][0] == spec
         build_reporter.assert_called_once_with(spec)
+
+    @pytest.mark.parametrize("reported, kept", [(True, False), (False, True)])
+    def test_result_file_kept_until_success_is_delivered(
+        self, tmp_path, reported, kept
+    ):
+        from telegramBot import worker
+
+        spec = {field: "x" for field in worker.REQUIRED_FIELDS}
+        path = tmp_path / "result_x.json"
+
+        def fake_run(spec, reporter, on_success):
+            on_success(train_info="KTX 101", attempts=2)
+            assert json.loads(path.read_text()) == {
+                "train_info": "KTX 101",
+                "attempts": 2,
+            }
+            return {"status": "success", "reported": reported}
+
+        with patch.object(
+            worker, "run_reservation", side_effect=fake_run
+        ), patch.object(worker, "build_reporter"):
+            assert worker._run(spec, str(path)) == 0
+
+        assert path.exists() is kept
 
     def test_worker_rejects_incomplete_spec(self):
         from telegramBot import worker

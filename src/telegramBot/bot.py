@@ -902,6 +902,13 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
     async def get_status_info(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.message.chat_id
         self.ensure_user_exists(chat_id)
+        if not self._is_admin_chat(chat_id):
+            # 일반 사용자는 본인 예약만 (다른 사용자의 전화번호를 보여주지 않음)
+            mine = self._active_reservations(chat_id)
+            await self.send_message(
+                chat_id, f"진행 중인 내 예약은 {len(mine)}개입니다."
+            )
+            return
         active = self.reservations.list(
             Owner(user_id=ADMIN_USER_ID, is_admin=True), active=True, scope_all=True
         )
@@ -912,6 +919,9 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
     async def cancel_all(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.message.chat_id
         self.ensure_user_exists(chat_id)
+        # 텔레그램·웹의 모든 사용자 예약을 취소하므로 관리자만
+        if not await self._require_admin(chat_id):
+            return
         admin = Owner(user_id=ADMIN_USER_ID, is_admin=True)
         active = self.reservations.list(admin, active=True, scope_all=True)
         usersKorailIds = sorted({format_phone(r.owner_id) for r in active})
@@ -927,6 +937,8 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
     async def get_all_users(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = update.message.chat_id
         self.ensure_user_exists(chat_id)
+        if not await self._require_admin(chat_id):
+            return
         allUsers = [user["userInfo"]["korailId"] for user in dict.values(self.userDict)]
         data = f"총 {len(allUsers)}명의 유저가 있습니다 : {allUsers}"
         await self.send_message(chat_id, data)

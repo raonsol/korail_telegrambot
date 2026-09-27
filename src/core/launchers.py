@@ -15,6 +15,7 @@ from .crypto import CredentialVault
 from .task_state import (
     CANCEL_TTL_SECONDS,
     STATUS_CANCELLED,
+    STATUS_COMPLETED,
     STATUS_RUNNING,
     heartbeat_key,
     state_key,
@@ -36,6 +37,9 @@ class Launcher(Protocol):
         ...
 
     def cancel(self, runner_ref: str) -> None: ...
+
+    # 선택: 워커가 남긴 성공 결과 (보고가 전달되지 않은 경우 복구용)
+    # def recover_success(self, reservation_id: str) -> Optional[dict]: ...
 
 
 WorkerTarget = Callable[[dict, str], None]
@@ -125,6 +129,19 @@ class SubprocessLauncher:
         with self._lock:
             return len(self._processes)
 
+    def recover_success(self, reservation_id: str) -> Optional[dict]:
+        """워커가 남긴 성공 결과 파일 ({"train_info", "attempts"}). 읽으면 삭제"""
+        from .runner import read_result_file, result_file
+
+        path = result_file(LOGS_DIR, reservation_id)
+        result = read_result_file(path)
+        if result is not None:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        return result
+
 
 class CeleryLauncher:
     name = "celery"
@@ -175,8 +192,10 @@ class CeleryLauncher:
         self.celery_app.control.revoke(runner_ref, terminate=self.terminate)
 
     def find_lost(self, runner_refs: list[str]) -> list[str]:
-        """워커가 종료돼 더 이상 실행되지 않는 태스크 (시작됐는데 heartbeat가 없음)
+        """워커가 더 이상 실행하지 않는 태스크 (시작됐는데 heartbeat가 없음)
 
+        - running: 워커가 종료됨 (재시작·크래시)
+        - completed: 예약은 성공했지만 성공 보고가 전달되지 않음 → recover_success로 복구
         대기열에 있어 아직 시작하지 않은 태스크(상태 키 없음)나 Redis 없이 실행된
         태스크는 판단할 수 없으므로 제외한다 (30분 무응답 정리가 처리).
         """
@@ -190,8 +209,20 @@ class CeleryLauncher:
         return [
             ref
             for ref, status, alive in zip(runner_refs, values[0::2], values[1::2])
-            if status == STATUS_RUNNING and not alive
+            if status in (STATUS_RUNNING, STATUS_COMPLETED) and not alive
         ]
+
+    def recover_success(self, reservation_id: str) -> Optional[dict]:
+        """태스크가 Redis에 남긴 성공 결과 ({"train_info", "attempts"})"""
+        if not self.redis_client:
+            return None
+        state = self.redis_client.hgetall(state_key(reservation_id))
+        if state.get("status") != STATUS_COMPLETED or not state.get("train_info"):
+            return None
+        return {
+            "train_info": state["train_info"],
+            "attempts": int(state.get("attempts") or 0),
+        }
 
 
 def create_launcher(

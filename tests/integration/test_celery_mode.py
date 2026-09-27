@@ -408,7 +408,9 @@ class TestWorkerLossDetection:
         launcher = CeleryLauncher(Mock(), r)
         refs = ["alive", "dead", "done", "gone", "queued"]
 
-        assert launcher.find_lost(refs) == ["dead"]
+        # done: 성공했지만 보고가 전달되지 않았을 수 있음 → 웹 서버가 결과를 복구
+        # (웹 서버는 DB에서 진행 중인 예약만 넘기므로 이미 보고된 예약은 대상이 아님)
+        assert launcher.find_lost(refs) == ["dead", "done"]
         assert launcher.find_lost([]) == []
         assert CeleryLauncher(Mock()).find_lost(refs) == []  # Redis 없으면 판단 안 함
 
@@ -553,4 +555,65 @@ class TestWorkerLossDetection:
         assert mock_redis_client.hget(state_key(lost.id), "status") == "cancelled"
         # 이미 처리한 예약은 다시 세지 않음
         assert await services.reservations.detect_lost_workers() == 0
+        services.db.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.celery
+class TestUnreportedSuccessCelery:
+    def test_task_stores_result_before_reporting(self, mock_redis_client):
+        from telegramBot.tasks import reservation_task
+
+        def fake_run(spec, reporter, should_stop, on_success):
+            on_success(train_info="KTX 101", attempts=9)
+            return {"status": "success", "reported": False}
+
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ), patch("telegramBot.tasks.run_reservation", side_effect=fake_run), patch(
+            "telegramBot.tasks.build_reporter"
+        ):
+            reservation_task.apply(kwargs={"spec": _spec()}, task_id="task-res")
+
+        launcher = CeleryLauncher(Mock(), mock_redis_client)
+        assert launcher.recover_success("task-res") == {
+            "train_info": "KTX 101",
+            "attempts": 9,
+        }
+        mock_redis_client.hset("reservation_task:other", "status", "running")
+        assert launcher.recover_success("other") is None
+        assert launcher.recover_success("missing") is None
+
+    @pytest.mark.asyncio
+    async def test_lost_worker_check_recovers_success(
+        self, test_settings, valid_request, mock_redis_client
+    ):
+        """성공 후 보고가 전달되지 않은 태스크는 오류가 아니라 성공으로 처리"""
+        from core.task_state import state_key
+
+        launcher = CeleryLauncher(
+            Mock(), mock_redis_client, vault=CredentialVault("secret")
+        )
+        services = build_services(
+            test_settings, db=Database("sqlite://"), launcher=launcher
+        )
+        services.init_storage()
+        owner = Owner(user_id="01012345678")
+        with patch("telegramBot.tasks.reservation_task.apply_async"):
+            r = await services.reservations.start(
+                owner, valid_request, "010", "pw", origin="web"
+            )
+        # 태스크가 끝나 heartbeat는 없고, Redis에 성공 결과만 남음
+        mock_redis_client.hset(
+            state_key(r.id),
+            mapping={"status": "completed", "train_info": "KTX 101", "attempts": 3},
+        )
+
+        assert await services.reservations.detect_lost_workers() == 1
+
+        out = services.reservations.get(r.id, owner)
+        assert out.status.value == "success"
+        assert out.result_text == "KTX 101"
+        # 이후에는 다시 실행되지 않도록 취소 표시
+        assert mock_redis_client.hget(state_key(r.id), "status") == "cancelled"
         services.db.dispose()

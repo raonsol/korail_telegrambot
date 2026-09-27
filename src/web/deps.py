@@ -23,9 +23,12 @@ ServicesDep = Annotated[Services, Depends(get_services)]
 
 
 def client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    """로그인 제한에 쓰는 클라이언트 IP
+
+    X-Forwarded-For를 직접 읽지 않는다 (누구나 보낼 수 있어 매 요청 다른 값으로 제한을 우회함).
+    리버스 프록시 뒤라면 uvicorn(fastapi run/dev의 기본 proxy headers)이 신뢰하는 프록시
+    (``FORWARDED_ALLOW_IPS``, 기본 127.0.0.1)에서 온 요청에 한해 실제 클라이언트 주소로 바꿔 둔다.
+    """
     return request.client.host if request.client else ""
 
 

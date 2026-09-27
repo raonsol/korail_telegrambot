@@ -230,10 +230,17 @@ def _run_task(spec: dict, reporter, redis_client, key: str) -> dict:
         except Exception:
             return False
 
-    def mark_completed() -> None:
+    def mark_completed(train_info: str | None = None, attempts: int | None = None):
+        # 성공 보고 전에 결과를 남겨 둠: 보고가 전달되지 않아도 웹 서버가
+        # heartbeat가 사라진 뒤 이 값으로 성공을 복구함 (CeleryLauncher.recover_success)
         if redis_client:
+            fields = {"status": STATUS_COMPLETED}
+            if train_info is not None:
+                fields["train_info"] = train_info
+            if attempts is not None:
+                fields["attempts"] = attempts
             try:
-                redis_client.hset(key, "status", STATUS_COMPLETED)
+                redis_client.hset(key, mapping=fields)
             except Exception as e:
                 logger.warning(f"Failed to update Redis status: {e}")
 

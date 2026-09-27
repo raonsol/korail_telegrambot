@@ -485,6 +485,8 @@ class TestTelegramBot:
         """Test /status command handler"""
         chat_id = 123456
         mock_telegram_update.message.chat_id = chat_id
+        bot_instance._create_user(chat_id)
+        bot_instance.userDict[chat_id]["userInfo"]["isAdmin"] = True
         bot_instance.send_message = AsyncMock()
         await self._start(bot_instance, 789012, valid_request, owner_id="01011111111")
 
@@ -494,6 +496,48 @@ class TestTelegramBot:
         args = bot_instance.send_message.call_args[0]
         assert "1개의 예약이 실행중입니다" in args[1]
         assert "010-1111-1111" in args[1]
+
+    @pytest.mark.asyncio
+    async def test_get_status_info_non_admin_sees_only_own(
+        self, bot_instance, mock_telegram_update, valid_request
+    ):
+        """일반 사용자에게 다른 사용자의 전화번호를 보여주지 않음"""
+        chat_id = 123456
+        mock_telegram_update.message.chat_id = chat_id
+        await self._start(bot_instance, chat_id, valid_request, owner_id="01012345678")
+        await self._start(bot_instance, 789012, valid_request, owner_id="01011111111")
+        bot_instance.send_message = AsyncMock()
+
+        await bot_instance.get_status_info(mock_telegram_update, None)
+
+        text = bot_instance.send_message.call_args[0][1]
+        assert "내 예약은 1개" in text
+        assert "010-1111-1111" not in text
+
+    @pytest.mark.asyncio
+    async def test_cancel_all_command_requires_admin(
+        self, bot_instance, mock_telegram_update, valid_request, services
+    ):
+        """/cancelall은 텔레그램·웹의 모든 예약을 취소하므로 관리자만"""
+        from core.schemas import Owner
+
+        chat_id = 123456
+        mock_telegram_update.message.chat_id = chat_id
+        await self._start(bot_instance, 789012, valid_request, owner_id="01011111111")
+        bot_instance.send_message = AsyncMock()
+
+        await bot_instance.cancel_all(mock_telegram_update, None)
+        await bot_instance.get_all_users(mock_telegram_update, None)
+
+        admin = Owner(user_id="admin", is_admin=True)
+        assert len(services.reservations.list(admin, active=True, scope_all=True)) == 1
+        messages = [c.args[1] for c in bot_instance.send_message.call_args_list]
+        assert len(messages) == 2
+        assert all("관리자만" in m for m in messages)
+
+        bot_instance.userDict[chat_id]["userInfo"]["isAdmin"] = True
+        await bot_instance.cancel_all(mock_telegram_update, None)
+        assert services.reservations.list(admin, active=True, scope_all=True) == []
 
     @pytest.mark.asyncio
     async def test_deliver_success_notifies_chat_and_resets_state(
