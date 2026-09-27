@@ -33,6 +33,20 @@ def event_loop():
 
 
 @pytest.fixture(autouse=True)
+def reset_shared_task_redis():
+    """telegramBot.tasks.get_redis()가 캐시한 Redis 클라이언트를 테스트마다 초기화"""
+    import sys
+
+    tasks = sys.modules.get("telegramBot.tasks")
+    if tasks is not None:
+        tasks._redis_client = None
+    yield
+    tasks = sys.modules.get("telegramBot.tasks")
+    if tasks is not None:
+        tasks._redis_client = None
+
+
+@pytest.fixture(autouse=True)
 def reset_telegram_bot_class_state():
     """Reset class-level state shared by TelegramBot across tests."""
     try:

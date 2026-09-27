@@ -44,6 +44,9 @@ Browser (PWA) ────▶ /api/*   ─▶ web/routes_*.py (session cookie + 
 - **Purpose**: Multi-user deployments, production environments
 - **Storage**: PostgreSQL (Docker) for users/sessions/reservations; Redis as broker/result backend
 - **Background Tasks**: `reservation_task(spec)` published with `task_id=reservation_id`
+- **Worker pool**: `CELERY_POOL` (default `threads`; `prefork` optional). The CLI `--pool` default (prefork) overrides `app.conf.worker_pool`, so compose / Makefile pass `--pool=${CELERY_POOL:-threads}`. Concurrency = `CELERY_CONCURRENCY` or `MAX_CONCURRENT_RESERVATIONS`
+- **Cancel**: `CeleryLauncher.cancel` writes `status=cancelled` to `reservation_task:{id}` (checked by `should_stop` before every attempt) and revokes; `terminate=True` only with prefork (threads cannot kill)
+- **Time limit**: the shared loop enforces `spec["max_duration"]` (`RESERVATION_TIMEOUT`, default 3600s) because the threads pool ignores Celery time limits; `visibility_timeout` = 2 × timeout so running tasks are not redelivered
 - **Dependencies**: Redis, PostgreSQL, Celery workers
 - **Scaling**: Horizontal scaling of workers
 
@@ -132,7 +135,7 @@ web: FastAPI application (subprocess mode, SQLite volume ./data)
 web_celery: FastAPI application (Celery mode), INTERNAL_CALLBACK_URL=http://web_celery:8391/internal/events
 redis: Message broker and result backend (REQUIRED for MQ) - internal only (no host port), healthcheck gates web_celery/worker
 postgres: Users / sessions / reservation history (REQUIRED for MQ web_celery) - internal only (no host port), healthcheck gates web_celery
-worker: Celery worker processes (REQUIRED for MQ)
+worker: Celery worker (threads pool by default, --pool=${CELERY_POOL:-threads}) (REQUIRED for MQ)
 beat: MQ scheduler (NOT NEEDED - no periodic tasks defined)
 flower: Web-based monitoring (OPTIONAL - for debugging)
 ```
@@ -166,7 +169,7 @@ The DB schema is created with `create_all` (no migrations yet). Add Alembic befo
 **Design Philosophy**: Each reservation is completely independent, identified by the `reservation_id` issued by `ReservationService`.
 
 - `runner_ref` holds the PID (subprocess) or Celery task id (== `reservation_id`); it is only used for cancellation.
-- Celery Redis guard key: `reservation_task:{task_id}` (task_id == reservation_id)
+- Celery Redis guard key: `reservation_task:{task_id}` (task_id == reservation_id), status `running` (HSETNX) / `completed` / `cancelled`, with TTL
 - Worker callbacks carry `reservation_id` + token → only that reservation is updated
 - Same user can run several reservations at once, from Telegram and the web (per-user limit applies)
 - Telegram cancel menu: callback data `cancel_{reservation_id}` or `cancel_all`
@@ -398,6 +401,7 @@ WEBAPP_ORIGIN         # only if the PWA is served from another origin (enables C
 INTERNAL_CALLBACK_URL # worker -> web callback (default http://127.0.0.1:{8390|8391}/internal/events)
 VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT   # Web Push (make vapid-keys)
 MAX_RESERVATIONS_PER_USER   # default 3 (admin exempt)
+RESERVATION_TIMEOUT         # max seconds one reservation keeps trying (both modes), default 3600
 RESERVATION_RETENTION_DAYS  # default 30
 LOGIN_MAX_FAILURES / LOGIN_LOCK_MINUTES   # default 3 per 10 min (Korail locks after 5)
 ```
@@ -414,6 +418,8 @@ USE_CELERY            # Enable Celery mode (MQ pattern) (true/false)
 REDIS_URL             # Redis connection URL
 CELERY_BROKER         # MQ broker URL
 CELERY_RESULT_BACKEND # MQ result backend URL
+CELERY_POOL           # threads (default) / prefork - web server and workers must agree (cancel method)
+CELERY_CONCURRENCY    # worker slots, default MAX_CONCURRENT_RESERVATIONS
 ```
 
 ### Station Search API
@@ -469,7 +475,7 @@ ADMIN_KORAIL_PW       # Default Korail password for admin quick-login
 
 ### Capacity (measured 2026-09-26, see `docs/capacity-review.md`)
 - Subprocess mode is memory-bound: ~22MB PSS per concurrent reservation; CPU ~0.035% of a core each; the web server is not a bottleneck
-- Celery prefork pre-allocates every slot (~35MB each); Celery threads is tiny but `revoke(terminate=True)` does not work (needs cooperative cancel)
+- Celery prefork pre-allocates every slot (~35MB each); Celery threads (default since 2026-09-27) is ~0.3MB per reservation and cancels cooperatively via Redis (stops within one attempt interval)
 - The practical ceiling for both modes is Korail's per-IP request limit, not server resources
 - Keep worker imports light: `telegramBot/__init__.py` must not import `bot.py`
 

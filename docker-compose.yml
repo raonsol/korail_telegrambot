@@ -72,6 +72,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - CELERY_BROKER=redis://redis:6379
       - CELERY_RESULT_BACKEND=redis://redis:6379
+      - CELERY_POOL=${CELERY_POOL:-threads}
       - DATABASE_URL=postgresql://korail:password@postgres:5432/korail_bot
       # 워커 컨테이너가 예약 상태를 보고할 주소
       - INTERNAL_CALLBACK_URL=http://web_celery:8391/internal/events
@@ -90,7 +91,8 @@ services:
   # Celery Worker - 예약 처리
   worker:
     build: .
-    command: celery -A telegramBot.tasks worker --loglevel=info
+    # CLI의 --pool 기본값(prefork)이 앱 설정보다 우선하므로 명시 (web_celery의 CELERY_POOL과 같아야 함)
+    command: celery -A telegramBot.tasks worker --loglevel=info --pool=${CELERY_POOL:-threads}
     env_file:
       - .env
     environment:
@@ -100,6 +102,7 @@ services:
       - CELERY_BROKER=redis://redis:6379
       - CELERY_RESULT_BACKEND=redis://redis:6379
       - USE_CELERY=true
+      - CELERY_POOL=${CELERY_POOL:-threads}
       - CELERY_WORKER_NAME=worker
     depends_on:
       redis:

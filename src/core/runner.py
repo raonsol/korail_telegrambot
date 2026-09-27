@@ -28,6 +28,7 @@ SEAT_TYPES = {
 EXPECTED_MISSES = ("No trains available", "All trains sold out")
 
 MAX_ATTEMPTS_MESSAGE = "최대 시도 횟수를 초과하여 예약이 중단되었습니다."
+MAX_DURATION_MESSAGE = "최대 실행 시간을 초과하여 예약이 중단되었습니다."
 
 # 웹 서버가 이 예약을 받아들이지 않는 응답 (예약 없음 / 토큰 불일치)
 # 서버 재시작 등 일시적인 연결 실패와 달리 다시 보내도 결과가 같다
@@ -121,6 +122,7 @@ def run_reservation(
     relogin_after_errors: int = 10,
     sleep: Callable[[float], None] = time.sleep,
     handler_factory: Callable[[], ReserveHandler] = ReserveHandler,
+    clock: Callable[[], float] = time.monotonic,
 ) -> dict:
     """예약이 성공하거나 최대 시도 횟수에 도달할 때까지 반복
 
@@ -129,6 +131,8 @@ def run_reservation(
         reporter: 상태 보고 객체
         should_stop: True를 반환하면 즉시 종료 (Celery 중복 실행 방지용)
         on_success: 성공 직후 호출 (Celery의 Redis 완료 표시용)
+        clock: 경과 시간 측정용. ``spec["max_duration"]``(초)을 넘기면 ``failed``로 끝냄
+            (Celery threads 풀은 태스크 시간 제한을 적용하지 않으므로 루프에서 직접 확인)
 
     Returns:
         dict: {"status": "success"|"failed"|"error"|"stopped"|"rejected", ...}
@@ -147,12 +151,22 @@ def run_reservation(
             progress_every,
             relogin_after_errors,
             sleep,
+            _deadline(spec, clock),
         )
     finally:
         # 코레일 HTTP 세션 정리 (pykorail)
         close = getattr(handler, "close", None)
         if callable(close):
             close()
+
+
+def _deadline(spec: dict, clock: Callable[[], float]) -> Callable[[], bool]:
+    """최대 실행 시간이 지났는지 알려주는 함수 (max_duration이 없으면 항상 False)"""
+    max_duration = spec.get("max_duration")
+    if not max_duration:
+        return lambda: False
+    started = clock()
+    return lambda: clock() - started >= max_duration
 
 
 def _login_failure_message(handler) -> str:
@@ -171,6 +185,7 @@ def _run_attempts(
     progress_every,
     relogin_after_errors,
     sleep,
+    expired,
 ) -> dict:
     korail_id = spec["korail_id"]
     korail_pw = spec["korail_pw"]
@@ -190,6 +205,9 @@ def _run_attempts(
     for attempt in range(1, max_attempts + 1):
         if should_stop():
             return {"status": "stopped", "attempts": attempt - 1}
+        if expired():
+            reporter.send("failed", message=MAX_DURATION_MESSAGE, attempts=attempt - 1)
+            return {"status": "failed", "attempts": attempt - 1, "timed_out": True}
 
         try:
             result = handler.reserve_single_attempt(

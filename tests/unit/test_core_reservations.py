@@ -46,6 +46,8 @@ class TestStart:
         assert spec["callback_url"] == "http://testserver/internal/events"
         assert spec["korail_pw"] == "pw"
         assert spec["dep_date"] == valid_request.dep_date_compact
+        # 워커 루프가 지키는 최대 실행 시간 (RESERVATION_TIMEOUT)
+        assert spec["max_duration"] == services.settings.reservation_timeout
         # 토큰 원문은 DB에 저장하지 않음
         with services.db.session() as s:
             stored = s.get(Reservation, r.id)

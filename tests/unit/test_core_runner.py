@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 
-from core.runner import CallbackReporter, run_reservation
+from core.runner import MAX_DURATION_MESSAGE, CallbackReporter, run_reservation
 
 SPEC = {
     "reservation_id": "r1",
@@ -120,6 +120,38 @@ class TestRunReservation:
         result, _, statuses = _run(handler, should_stop=lambda: next(calls))
         assert result == {"status": "stopped", "attempts": 2}
         assert statuses == ["running"]
+
+    def test_max_duration_reports_failed(self):
+        """최대 실행 시간을 넘기면 failed (Celery threads 풀은 시간 제한이 없음)"""
+        handler = _handler([MISS] * 100)
+        reporter = Mock()
+        now = [1000.0]
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        result = run_reservation(
+            {**SPEC, "max_duration": 10},
+            reporter,
+            handler_factory=lambda: handler,
+            sleep=sleep,
+            interval=2.0,
+            clock=lambda: now[0],
+        )
+
+        # 2초 간격으로 5번 시도하면 10초 경과
+        assert result == {"status": "failed", "attempts": 5, "timed_out": True}
+        assert handler.reserve_single_attempt.call_count == 5
+        last = reporter.send.call_args
+        assert last.args[0] == "failed"
+        assert last.kwargs == {"message": MAX_DURATION_MESSAGE, "attempts": 5}
+
+    def test_without_max_duration_runs_until_max_attempts(self):
+        handler = _handler([MISS] * 3)
+        clock = Mock(side_effect=AssertionError("clock must not be used"))
+        result, _, statuses = _run(handler, max_attempts=3, clock=clock)
+        assert result == {"status": "failed", "attempts": 3}
+        assert statuses[-1] == "failed"
 
     def test_fatal_error_stops_immediately(self):
         """역 이름 오류·지난 날짜 등은 재시도하지 않고 바로 failed"""

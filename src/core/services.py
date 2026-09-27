@@ -74,7 +74,11 @@ def build_services(
         notifier.add(push)
 
     launcher = launcher or create_launcher(
-        use_celery, settings.redis_url, settings.redis_db, vault
+        use_celery,
+        settings.redis_url,
+        settings.redis_db,
+        vault,
+        celery_pool=settings.celery_pool,
     )
     reservations = ReservationService(
         db,
@@ -84,6 +88,7 @@ def build_services(
         max_active_total=settings.max_concurrent_reservations,
         max_active_per_user=settings.max_reservations_per_user,
         retention_days=settings.reservation_retention_days,
+        max_duration=settings.reservation_timeout,
     )
     return Services(
         settings=settings,

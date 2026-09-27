@@ -187,7 +187,7 @@ class ReservationService:
 |---|---|---|
 | 실행 | `Popen([python, -m, telegramBot.worker])` | `reservation_task.apply_async(task_id=reservation_id)` |
 | 인자 전달 | **stdin으로 JSON** 전달 (argv 금지) | 비밀번호는 **암호화된 값**으로 전달, 워커가 복호화 |
-| 취소 | `os.killpg(SIGTERM)` | `control.revoke(terminate=True)` |
+| 취소 | `os.killpg(SIGTERM)` | Redis `reservation_task:{id}`에 `cancelled` 기록 + `control.revoke` (강제 종료는 prefork 풀만) |
 | 종료 감지 | `asyncio` 태스크로 `proc.wait()` 감시 (기존 스레드 busy loop 대체) | 워커 콜백 |
 
 Celery에서 `task_id=reservation_id`로 지정하면 `reservation_task:{task_id}` Redis 키 구조와 멱등성 체크를 그대로 쓸 수 있습니다.

@@ -4,7 +4,7 @@
 
 from pydantic_settings import BaseSettings
 from pydantic import Field, ConfigDict
-from typing import Optional
+from typing import Literal, Optional
 import os
 
 
@@ -19,6 +19,13 @@ class BaseAppSettings(BaseSettings):
     # Application settings
     debug: bool = False
     log_level: str = "INFO"
+
+    # Celery 워커 풀 (웹 서버의 취소 방식도 이 값을 따름)
+    # threads: 프로세스 1개 + 스레드 (예약당 약 0.3MB), 협력 취소
+    # prefork: 슬롯마다 프로세스 (슬롯당 약 35MB), 강제 종료로 취소
+    celery_pool: Literal["threads", "prefork"] = Field(
+        default="threads", alias="CELERY_POOL"
+    )
 
     model_config = ConfigDict(
         env_file=".env",
@@ -41,6 +48,12 @@ class CelerySettings(BaseAppSettings):
     # Worker settings
     max_concurrent_reservations: int = 10
     reservation_timeout: int = 3600  # 1시간
+    # 워커 동시 실행 수 (비우면 MAX_CONCURRENT_RESERVATIONS와 같게)
+    celery_concurrency: Optional[int] = Field(default=None, alias="CELERY_CONCURRENCY")
+
+    @property
+    def worker_concurrency(self) -> int:
+        return self.celery_concurrency or self.max_concurrent_reservations
 
 
 class WebSettings(BaseAppSettings):

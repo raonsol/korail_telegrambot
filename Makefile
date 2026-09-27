@@ -86,12 +86,12 @@ redis-stop:  ## Stop local Redis server
 	fi
 
 .PHONY: celery-worker-start
-celery-worker-start:  ## Start Celery worker in background
+celery-worker-start:  ## Start Celery worker in background (pool: CELERY_POOL, default threads)
 	@if [ -f ${WORKER_PID_FILE} ] && kill -0 $$(cat ${WORKER_PID_FILE}) 2>/dev/null; then \
 		echo "✅ Celery worker already running (PID: $$(cat ${WORKER_PID_FILE}))"; \
 	else \
 		echo "🚀 Starting Celery worker in background..."; \
-		cd src && PYTHONPATH=. pipenv run celery -A telegramBot.tasks worker --loglevel=info --pidfile=../${WORKER_PID_FILE} --detach; \
+		cd src && PYTHONPATH=. pipenv run sh -c 'celery -A telegramBot.tasks worker --loglevel=info --pool=$${CELERY_POOL:-threads} --pidfile=../${WORKER_PID_FILE} --detach'; \
 	fi
 
 .PHONY: celery-worker-stop

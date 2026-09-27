@@ -131,6 +131,38 @@ class TestCelerySettings:
         assert settings.reservation_timeout == 3600
         assert settings.max_concurrent_reservations == 10
 
+    def test_celery_pool_defaults_to_threads(self, monkeypatch):
+        monkeypatch.delenv("CELERY_POOL", raising=False)
+        monkeypatch.delenv("CELERY_CONCURRENCY", raising=False)
+        monkeypatch.setenv("MAX_CONCURRENT_RESERVATIONS", "25")
+        from config import CelerySettings, WebSettings
+
+        settings = CelerySettings(_env_file=None)
+
+        assert settings.celery_pool == "threads"
+        assert WebSettings(_env_file=None).celery_pool == "threads"
+        # 동시 실행 수는 전체 동시 예약 한도를 따라감
+        assert settings.worker_concurrency == 25
+
+    def test_celery_pool_and_concurrency_from_env(self, monkeypatch):
+        monkeypatch.setenv("CELERY_POOL", "prefork")
+        monkeypatch.setenv("CELERY_CONCURRENCY", "4")
+        from config import CelerySettings
+
+        settings = CelerySettings(_env_file=None)
+
+        assert settings.celery_pool == "prefork"
+        assert settings.worker_concurrency == 4
+
+    def test_celery_pool_rejects_unknown(self, monkeypatch):
+        from pydantic import ValidationError
+
+        monkeypatch.setenv("CELERY_POOL", "gevent")
+        from config import CelerySettings
+
+        with pytest.raises(ValidationError):
+            CelerySettings(_env_file=None)
+
 
 class TestBaseAppSettings:
     """Test BaseAppSettings configuration"""

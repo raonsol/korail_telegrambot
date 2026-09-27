@@ -57,6 +57,7 @@ class ReservationService:
         max_active_total: int = 10,
         max_active_per_user: int = 3,
         retention_days: int = 30,
+        max_duration: Optional[int] = None,
     ):
         self.db = db
         self.launcher = launcher
@@ -65,6 +66,8 @@ class ReservationService:
         self.max_active_total = max_active_total
         self.max_active_per_user = max_active_per_user
         self.retention_days = retention_days
+        # 워커가 예약을 시도하는 최대 시간(초). 워커 루프가 직접 확인 (core/runner.py)
+        self.max_duration = max_duration
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._admission_lock = threading.Lock()
 
@@ -235,6 +238,8 @@ class ReservationService:
             "train_type": request.train_type,
             "seat_type": request.seat_type,
         }
+        if self.max_duration:
+            spec["max_duration"] = self.max_duration
         try:
             runner_ref = self.launcher.launch(spec)
         except Exception as e:

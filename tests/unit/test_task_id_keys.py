@@ -65,6 +65,8 @@ def test_task_id_keys():
 
     assert redis_client.exists(expected_key), f"Missing Redis key: {expected_key}"
     assert redis_client.hget(expected_key, "status") == "running"
+    # 상태 키는 만료 시간이 있어 Redis에 계속 쌓이지 않음
+    assert redis_client.ttl(expected_key) > 0
 
     # Cleanup
     redis_client.delete(expected_key)

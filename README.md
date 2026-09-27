@@ -29,8 +29,8 @@
 - **사용 사례**: 다중 사용자 또는 대용량 배포
 - **저장소**: 상태 관리 및 작업 큐를 위한 Redis
 - **의존성**: Redis, PostgreSQL, Celery workers
-- **백그라운드 작업**: 분산 작업 처리
-- **리소스 사용량**: 높지만 수평 확장 가능
+- **백그라운드 작업**: 분산 작업 처리 (워커 풀 기본값 `threads`, `CELERY_POOL`로 변경)
+- **리소스 사용량**: threads 풀은 예약 1건당 약 0.3MB, 워커 서버를 늘려 수평 확장 가능
 
 ### 환경 구성
 
@@ -466,12 +466,13 @@ Bind for 0.0.0.0:8390 failed: port is already allocated
 
 #### Celery 워커 튜닝
 ```bash
-# 동시 처리 작업 수 조정
-celery -A src.telegramBot.tasks worker --concurrency=4
-
-# 메모리 제한 설정
-celery -A src.telegramBot.tasks worker --max-memory-per-child=200000
+# .env
+CELERY_POOL=threads        # 기본값. prefork는 슬롯마다 프로세스(약 35MB)를 미리 띄움
+CELERY_CONCURRENCY=20      # 비우면 MAX_CONCURRENT_RESERVATIONS와 같음
+RESERVATION_TIMEOUT=3600   # 예약 1건의 최대 실행 시간(초)
 ```
+- `CELERY_POOL`은 웹 서버와 워커가 같은 값을 읽어야 합니다. 취소 방식이 풀에 따라 다릅니다(threads: Redis 취소 표시로 다음 시도 전에 멈춤, prefork: 강제 종료).
+- `celery worker`를 직접 실행할 때는 `--pool`을 지정하세요. CLI 기본값(prefork)이 앱 설정보다 우선합니다.
 
 #### Docker 리소스 제한
 ```yaml
