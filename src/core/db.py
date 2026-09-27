@@ -6,8 +6,9 @@
 
 import logging
 import os
+import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from typing import Iterator
 
@@ -42,11 +43,16 @@ class Database:
         self.url = normalize_database_url(url)
         parsed = make_url(self.url)
         kwargs = {"pool_pre_ping": True}
+        # 메모리 SQLite(테스트)는 연결 하나를 모든 스레드가 공유하므로(StaticPool)
+        # 세션을 한 번에 하나씩만 쓰도록 잠금. 여러 스레드가 같은 sqlite3 연결을 동시에 쓰면
+        # "bad parameter or other API misuse" 등으로 실패함 (파일 DB·PostgreSQL은 연결이 스레드별)
+        self._shared_connection_lock = None
 
         if parsed.get_backend_name() == "sqlite":
             kwargs["connect_args"] = {"check_same_thread": False}
             if parsed.database in (None, "", ":memory:"):
                 kwargs["poolclass"] = StaticPool
+                self._shared_connection_lock = threading.RLock()
             else:
                 directory = os.path.dirname(os.path.abspath(parsed.database))
                 os.makedirs(directory, exist_ok=True)
@@ -95,12 +101,13 @@ class Database:
 
     @contextmanager
     def session(self) -> Iterator[Session]:
-        session = self._sessionmaker()
-        try:
-            yield session
-            session.commit()
-        except Exception:
-            session.rollback()
-            raise
-        finally:
-            session.close()
+        with self._shared_connection_lock or nullcontext():
+            session = self._sessionmaker()
+            try:
+                yield session
+                session.commit()
+            except Exception:
+                session.rollback()
+                raise
+            finally:
+                session.close()
