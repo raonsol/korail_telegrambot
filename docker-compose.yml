@@ -18,7 +18,7 @@ services:
     profiles:
       - celery  # Only start with Celery profile
 
-  # PostgreSQL - 영구 데이터 저장 (Celery 모드에서만 사용)
+  # PostgreSQL - 사용자/세션/예약 이력 저장 (Celery 모드)
   postgres:
     image: postgres:15-alpine
     environment:
@@ -29,6 +29,11 @@ services:
       PGTZ: Asia/Seoul
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U korail -d korail_bot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     networks:
       - korail_network
     profiles:
@@ -44,8 +49,14 @@ services:
     environment:
       - TZ=Asia/Seoul
       - USE_CELERY=false
+      # 리버스 프록시(호스트 nginx 등)는 Docker 게이트웨이(172.16.0.0/12)에서 접속하므로
+      # 이 대역이 보낸 X-Forwarded-For만 실제 클라이언트 IP로 인정 (로그인 제한 기준)
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-172.16.0.0/12}
+      # 사용자/세션/예약 이력 (SQLite)
+      - DATABASE_URL=sqlite:////app/data/korail_bot.db
     volumes:
       - ./logs:/app/logs
+      - ./data:/app/data
     networks:
       - korail_network
     profiles:
@@ -64,11 +75,18 @@ services:
       - REDIS_URL=redis://redis:6379
       - CELERY_BROKER=redis://redis:6379
       - CELERY_RESULT_BACKEND=redis://redis:6379
+      - CELERY_POOL=${CELERY_POOL:-threads}
+      # 리버스 프록시(호스트 nginx 등)는 Docker 게이트웨이(172.16.0.0/12)에서 접속하므로
+      # 이 대역이 보낸 X-Forwarded-For만 실제 클라이언트 IP로 인정 (로그인 제한 기준)
+      - FORWARDED_ALLOW_IPS=${FORWARDED_ALLOW_IPS:-172.16.0.0/12}
+      - DATABASE_URL=postgresql://korail:password@postgres:5432/korail_bot
+      # 워커 컨테이너가 예약 상태를 보고할 주소
+      - INTERNAL_CALLBACK_URL=http://web_celery:8391/internal/events
     depends_on:
       redis:
         condition: service_healthy
       postgres:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - ./logs:/app/logs
     networks:
@@ -79,7 +97,11 @@ services:
   # Celery Worker - 예약 처리
   worker:
     build: .
-    command: celery -A telegramBot.tasks worker --loglevel=info
+    # CLI의 --pool 기본값(prefork)이 앱 설정보다 우선하므로 명시 (web_celery의 CELERY_POOL과 같아야 함)
+    command: celery -A telegramBot.tasks worker --loglevel=info --pool=${CELERY_POOL:-threads}
+    # 종료 시 실행 중인 예약이 진행 중인 코레일 요청(최대 30초)을 마치고
+    # "워커 재시작" 보고를 보낼 시간. 넘기면 강제 종료되고 웹 서버가 heartbeat 만료로 감지
+    stop_grace_period: 40s
     env_file:
       - .env
     environment:
@@ -89,6 +111,7 @@ services:
       - CELERY_BROKER=redis://redis:6379
       - CELERY_RESULT_BACKEND=redis://redis:6379
       - USE_CELERY=true
+      - CELERY_POOL=${CELERY_POOL:-threads}
       - CELERY_WORKER_NAME=worker
     depends_on:
       redis:
@@ -97,28 +120,6 @@ services:
         condition: service_started
     volumes:
       - ./logs:/app/logs
-    networks:
-      - korail_network
-    profiles:
-      - celery  # Only start with Celery profile
-
-  # Celery Beat - 스케줄링 (필요시)
-  beat:
-    build: .
-    command: celery -A telegramBot.tasks beat --loglevel=info
-    env_file:
-      - .env
-    environment:
-      - TZ=Asia/Seoul
-      - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql://korail:password@postgres:5432/korail_bot
-      - CELERY_BROKER=redis://redis:6379
-      - CELERY_RESULT_BACKEND=redis://redis:6379
-      - USE_CELERY=true
-      - CELERY_WORKER_NAME=beat
-    depends_on:
-      - redis
-      - postgres
     networks:
       - korail_network
     profiles:

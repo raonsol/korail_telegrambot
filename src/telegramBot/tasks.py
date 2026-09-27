@@ -2,19 +2,38 @@
 Celery tasks for background reservation processing
 """
 
-import time
 import logging
-from datetime import datetime
+import os
+import threading
+import time
+
+import redis
 from celery import Celery
 from celery.exceptions import SoftTimeLimitExceeded
-import requests
-import redis
+from celery.signals import worker_shutting_down
 
-from .korail_client import ReserveHandler
 from config import celery_settings, web_settings
-from pykorail import ReserveOption, TrainType
+from core.crypto import CredentialVault
+from core.runner import MAX_DURATION_MESSAGE, build_reporter, run_reservation
+from core.task_state import (
+    HEARTBEAT_INTERVAL_SECONDS,
+    HEARTBEAT_TTL_SECONDS,
+    STATUS_COMPLETED,
+    STATUS_RUNNING,
+    STOP_STATUSES,
+    heartbeat_key,
+    state_key,
+)
 
 logger = logging.getLogger(__name__)
+
+RESERVATION_TIMEOUT = celery_settings.reservation_timeout
+# 예약 상태 키 보관 시간. 브로커 재전달(visibility_timeout)보다 길게 유지
+STATE_TTL_SECONDS = RESERVATION_TIMEOUT * 2
+
+WORKER_RESTART_MESSAGE = (
+    "예약 워커가 다시 시작되어 예약이 중단되었습니다. 예약을 다시 시작해 주세요."
+)
 
 # Initialize Celery app
 app = Celery("korail_reservations")
@@ -27,296 +46,231 @@ app.conf.update(
     timezone="Asia/Seoul",
     enable_utc=True,
     task_track_started=True,
-    task_time_limit=celery_settings.reservation_timeout,
-    task_soft_time_limit=celery_settings.reservation_timeout - 60,
+    # 기본 풀은 threads (예약 태스크는 대부분 대기 시간이라 스레드로 충분하고 메모리가 작음)
+    # CLI의 --pool 기본값(prefork)이 이 설정보다 우선하므로 실행 명령에도 --pool을 지정
+    worker_pool=celery_settings.celery_pool,
+    worker_concurrency=celery_settings.worker_concurrency,
+    # 최대 실행 시간은 공통 루프(spec["max_duration"])가 지킨다.
+    # 아래 시간 제한은 prefork 풀에서만 동작하는 안전장치 (threads 풀은 무시)
+    task_time_limit=RESERVATION_TIMEOUT + 120,
+    task_soft_time_limit=RESERVATION_TIMEOUT + 60,
     worker_prefetch_multiplier=1,
     task_acks_late=True,
-    worker_max_tasks_per_child=50,
+    # Redis 브로커는 ack되지 않은 태스크를 visibility_timeout(기본 1시간) 뒤 재전달한다.
+    # 실행 중인 예약이 중복 실행되지 않도록 최대 실행 시간보다 길게 설정
+    broker_transport_options={"visibility_timeout": STATE_TTL_SECONDS},
+    worker_max_tasks_per_child=50,  # prefork 전용 (threads 풀은 무시)
 )
 
+_redis_client = None
+_redis_lock = threading.Lock()
 
-@app.task(bind=True, max_retries=3)
-def reservation_task(self, chat_id: int, reservation_data: dict, callback_url: str):
+
+def get_redis() -> redis.Redis:
+    """워커 프로세스에서 공유하는 Redis 클라이언트 (연결 풀은 스레드 안전)"""
+    global _redis_client
+    with _redis_lock:
+        if _redis_client is None:
+            _redis_client = redis.Redis.from_url(
+                web_settings.redis_url,
+                db=web_settings.redis_db,
+                decode_responses=True,
+            )
+        return _redis_client
+
+
+def reservation_key(task_id: str) -> str:
+    return state_key(task_id)
+
+
+# 워커 종료(배포·docker stop)가 시작되면 실행 중인 예약을 다음 시도 전에 멈추고
+# 웹 서버에 바로 알린다. threads 풀은 태스크가 이 프로세스의 스레드라 플래그가 그대로 보인다
+# (prefork 자식 프로세스에는 전달되지 않음 → heartbeat 만료로 웹 서버가 감지)
+_shutting_down = threading.Event()
+
+
+@worker_shutting_down.connect
+def _on_worker_shutting_down(**_):
+    logger.info("Worker shutting down: stopping running reservations")
+    _shutting_down.set()
+
+
+class Heartbeat:
+    """이 워커 프로세스에서 실행 중인 예약의 heartbeat 키를 주기적으로 갱신
+
+    프로세스가 죽으면(크래시·OOM·SIGKILL) 갱신이 멈춰 키가 만료되고,
+    웹 서버(ReservationService.detect_lost_workers)가 이를 보고 예약을 오류 처리한다.
+    """
+
+    def __init__(self, interval: float = HEARTBEAT_INTERVAL_SECONDS):
+        self.interval = interval
+        self._ids: set[str] = set()
+        self._lock = threading.Lock()
+        self._client = None
+        self._thread_pid = None
+
+    def add(self, client, reservation_id: str) -> None:
+        with self._lock:
+            self._ids.add(reservation_id)
+            self._client = client
+            if self._thread_pid != os.getpid():  # prefork 자식은 각자 스레드
+                self._thread_pid = os.getpid()
+                threading.Thread(
+                    target=self._run, name="reservation-heartbeat", daemon=True
+                ).start()
+
+    def remove(self, client, reservation_id: str) -> None:
+        with self._lock:
+            self._ids.discard(reservation_id)
+        try:
+            client.delete(heartbeat_key(reservation_id))
+        except Exception as e:
+            logger.warning(f"Failed to remove heartbeat: {e}")
+
+    def beat(self) -> None:
+        with self._lock:
+            ids, client = list(self._ids), self._client
+        if not ids or client is None:
+            return
+        try:
+            pipe = client.pipeline(transaction=False)
+            for reservation_id in ids:
+                pipe.set(heartbeat_key(reservation_id), "1", ex=HEARTBEAT_TTL_SECONDS)
+            pipe.execute()
+        except Exception as e:
+            logger.warning(f"Failed to refresh heartbeats: {e}")
+
+    def _run(self) -> None:
+        while True:
+            time.sleep(self.interval)
+            self.beat()
+
+
+heartbeat = Heartbeat()
+
+
+def _resolve_password(spec: dict) -> str | None:
+    """브로커에는 암호화된 비밀번호(korail_pw_enc)가 실리고 워커에서 복호화"""
+    if spec.get("korail_pw"):
+        return spec["korail_pw"]
+    encrypted = spec.get("korail_pw_enc")
+    if encrypted:
+        return CredentialVault(web_settings.webapp_enc_key).decrypt(encrypted)
+    return None
+
+
+def _max_duration(spec: dict) -> int:
+    """웹 서버가 정한 최대 실행 시간. 워커 설정(visibility_timeout 기준)보다 길 수 없음"""
+    requested = spec.get("max_duration")
+    if not requested:
+        return RESERVATION_TIMEOUT
+    return min(int(requested), RESERVATION_TIMEOUT)
+
+
+@app.task(bind=True)
+def reservation_task(self, spec: dict):
     """
     Background task for KTX reservation
 
     Args:
-        chat_id: Telegram chat ID
-        reservation_data: Dictionary containing reservation details
-        callback_url: URL to send status updates
+        spec: 예약 명세 (task_id == reservation_id)
     """
-    # Initialize Redis client to check reservation status
-    redis_client = None
+    reporter = build_reporter(spec)
 
     # Use Celery task ID as unique key to prevent duplicate task execution
-    # This allows the same user to make multiple reservations simultaneously
-    # (e.g., different trains, or retry after failure)
-    reservation_key = f"reservation_task:{self.request.id}"
-
+    # (task_acks_late로 재전달되는 경우 이미 성공했거나 취소된 예약은 다시 시도하지 않음)
+    reservation_id = self.request.id
+    key = reservation_key(reservation_id)
+    redis_client = None
     try:
-        redis_client = redis.Redis.from_url(
-            web_settings.redis_url,
-            db=web_settings.redis_db,
-            decode_responses=True,
-        )
-
-        # Check if THIS SPECIFIC reservation is already completed
-        reservation_status = redis_client.hget(reservation_key, "status")
-        if reservation_status == "completed":
-            logger.info(
-                f"Reservation already completed for key: {reservation_key}, skipping task"
-            )
-            return {
-                "status": "already_completed",
-                "message": "Reservation already completed",
-            }
-
-        # Mark THIS SPECIFIC task as started
-        redis_client.hset(reservation_key, "status", "running")
-
+        redis_client = get_redis()
+        status = redis_client.hget(key, "status")
+        if status in STOP_STATUSES:
+            logger.info(f"Reservation already {status} for key: {key}, skipping")
+            return {"status": f"already_{status}"}
+        pipe = redis_client.pipeline()
+        # 그 사이 취소됐다면 cancelled를 덮어쓰지 않음 (should_stop이 바로 멈춤)
+        pipe.hsetnx(key, "status", STATUS_RUNNING)
+        pipe.expire(key, STATE_TTL_SECONDS)
+        # 시작 표시와 heartbeat를 함께 기록 (웹 서버가 "시작됐는데 heartbeat 없음"으로 오판하지 않도록)
+        pipe.set(heartbeat_key(reservation_id), "1", ex=HEARTBEAT_TTL_SECONDS)
+        pipe.execute()
+        heartbeat.add(redis_client, reservation_id)
     except Exception as redis_error:
         logger.warning(
-            f"Redis connection failed, continuing without state check: {redis_error}"
+            f"Redis unavailable, continuing without state check: {redis_error}"
         )
         redis_client = None
 
     try:
-        logger.info(f"Starting reservation task for chat_id: {chat_id}")
+        return _run_task(spec, reporter, redis_client, key)
+    finally:
+        if redis_client is not None:
+            # 정상 종료 후에는 heartbeat를 지움. 결과 보고가 실패해 웹 서버에 예약이
+            # 진행 중으로 남아 있으면(배포 중 웹 서버 재시작 등) 다음 확인 때 바로 정리됨
+            heartbeat.remove(redis_client, reservation_id)
 
-        # Send start notification with task_id
-        _send_callback(
-            callback_url,
-            chat_id,
-            "started",
-            "Reservation process started",
-            self.request.id,
-        )
 
-        # Initialize reservation handler
-        reserve_handler = ReserveHandler()
+def _run_task(spec: dict, reporter, redis_client, key: str) -> dict:
+    def should_stop() -> bool:
+        if _shutting_down.is_set():
+            return True
+        if not redis_client:
+            return False
+        try:
+            return redis_client.hget(key, "status") in STOP_STATUSES
+        except Exception:
+            return False
 
-        # Login to Korail
-        if not reserve_handler.login(
-            reservation_data["korail_id"], reservation_data["korail_pw"]
-        ):
-            error_msg = "Korail login failed"
-            logger.error(f"Login failed for chat_id: {chat_id}")
-            _send_callback(callback_url, chat_id, "failed", error_msg, self.request.id)
-            return {"status": "failed", "message": error_msg}
+    def is_completed() -> bool:
+        if not redis_client:
+            return False
+        try:
+            return redis_client.hget(key, "status") == STATUS_COMPLETED
+        except Exception:
+            return False
 
-        # Perform reservation attempts with Celery-specific retry logic
-        max_attempts = 1000  # Maximum number of attempts
-        attempt_count = 0
-
-        while attempt_count < max_attempts:
+    def mark_completed(train_info: str | None = None, attempts: int | None = None):
+        # 성공 보고 전에 결과를 남겨 둠: 보고가 전달되지 않아도 웹 서버가
+        # heartbeat가 사라진 뒤 이 값으로 성공을 복구함 (CeleryLauncher.recover_success)
+        if redis_client:
+            fields = {"status": STATUS_COMPLETED}
+            if train_info is not None:
+                fields["train_info"] = train_info
+            if attempts is not None:
+                fields["attempts"] = attempts
             try:
-                # Check if THIS SPECIFIC reservation is already completed before each attempt
-                if redis_client:
-                    try:
-                        reservation_status = redis_client.hget(
-                            reservation_key, "status"
-                        )
-                        if reservation_status == "completed":
-                            logger.info(
-                                f"Reservation already completed for key: {reservation_key}, stopping task"
-                            )
-                            return {
-                                "status": "already_completed",
-                                "message": "Reservation already completed by another task",
-                            }
-                    except Exception as e:
-                        logger.warning(f"Redis status check failed: {e}")
-
-                attempt_count += 1
-                logger.info(
-                    f"Celery reservation attempt {attempt_count} for chat_id: {chat_id}"
-                )
-
-                # Convert train type and seat preference
-                train_type_map = {"KTX": TrainType.KTX, "ALL": TrainType.ALL}
-                seat_type_map = {
-                    "general": ReserveOption.GENERAL_FIRST,
-                    "general_only": ReserveOption.GENERAL_ONLY,
-                    "special": ReserveOption.SPECIAL_FIRST,
-                    "special_only": ReserveOption.SPECIAL_ONLY,
-                }
-
-                train_type = train_type_map.get(
-                    reservation_data["train_type"], TrainType.KTX
-                )
-                seat_type = seat_type_map.get(
-                    reservation_data["prefer_seat_type"], ReserveOption.GENERAL_FIRST
-                )
-
-                # Single attempt reservation (Celery mode)
-                result = reserve_handler.reserve_single_attempt(
-                    depDate=reservation_data["dep_date"],
-                    srcLocate=reservation_data["dep_station"],
-                    dstLocate=reservation_data["arr_station"],
-                    depTime=reservation_data["dep_time"],
-                    trainType=train_type,
-                    special=seat_type,
-                    maxDepTime=reservation_data.get("arr_time", "2400"),
-                )
-
-                # Check if reservation was successful
-                if result["success"]:
-                    if result["result"] == "duplicate_reservation":
-                        success_msg = "Reservation already completed successfully!"
-                    else:
-                        success_msg = str(result["result"])
-
-                    logger.info(
-                        f"Reservation successful for chat_id: {chat_id} after {attempt_count} attempts"
-                    )
-
-                    # Mark THIS SPECIFIC reservation as completed in Redis to prevent retries
-                    if redis_client:
-                        try:
-                            redis_client.hset(reservation_key, "status", "completed")
-                        except Exception as e:
-                            logger.warning(f"Failed to update Redis status: {e}")
-
-                    _send_callback(
-                        callback_url, chat_id, "success", success_msg, self.request.id
-                    )
-                    return {
-                        "status": "success",
-                        "message": success_msg,
-                        "attempts": attempt_count,
-                    }
-
-                # Stop immediately on errors that retrying cannot fix
-                # (e.g. unknown station name, departure date already passed)
-                if result.get("fatal"):
-                    error_msg = result["error"]
-                    logger.warning(
-                        f"Reservation stopped for chat_id: {chat_id}: {error_msg}"
-                    )
-                    _send_callback(
-                        callback_url, chat_id, "failed", error_msg, self.request.id
-                    )
-                    return {"status": "failed", "message": error_msg}
-
-                # No success, wait before next attempt
-                time.sleep(2)
-
-                # Send periodic status updates
-                if attempt_count % 50 == 0:
-                    status_msg = (
-                        f"Attempt {attempt_count}/{max_attempts} - Still searching..."
-                    )
-                    _send_callback(
-                        callback_url, chat_id, "progress", status_msg, self.request.id
-                    )
-
+                redis_client.hset(key, mapping=fields)
             except Exception as e:
-                error_str = str(e)
-                if attempt_count % 10 == 0:
-                    logger.warning(
-                        f"Reservation attempt {attempt_count} failed: {error_str}"
-                    )
+                logger.warning(f"Failed to update Redis status: {e}")
 
-                # Re-login if session expired
-                if "login" in error_str.lower() or "session" in error_str.lower():
-                    logger.info(f"Re-logging in for chat_id: {chat_id}")
-                    if not reserve_handler.login(
-                        reservation_data["korail_id"], reservation_data["korail_pw"]
-                    ):
-                        error_msg = "Re-login failed"
-                        _send_callback(
-                            callback_url, chat_id, "failed", error_msg, self.request.id
-                        )
-                        return {"status": "failed", "message": error_msg}
+    password = _resolve_password(spec)
+    if not password:
+        reporter.send("error", message="예약 정보를 복호화할 수 없습니다.")
+        return {"status": "error", "message": "missing credentials"}
 
-                time.sleep(1)
-                continue
-
-        # If we reach here, max attempts exceeded
-        timeout_msg = f"Reservation timeout after {max_attempts} attempts"
-        logger.warning(f"Reservation timeout for chat_id: {chat_id}")
-        _send_callback(callback_url, chat_id, "failed", timeout_msg, self.request.id)
-        return {"status": "timeout", "message": timeout_msg, "attempts": attempt_count}
-
-    except SoftTimeLimitExceeded:
-        # Check if THIS SPECIFIC reservation was already completed before failing
-        if redis_client:
-            try:
-                status = redis_client.hget(reservation_key, "status")
-                if status == "completed":
-                    logger.info(
-                        f"Task exceeded time limit but reservation was already completed for key: {reservation_key}"
-                    )
-                    return {
-                        "status": "success",
-                        "message": "Reservation completed before timeout",
-                    }
-            except Exception:
-                pass
-
-        error_msg = "Reservation task soft time limit exceeded"
-        logger.warning(f"예약 시도 중 오류 발생: {error_msg}")
-        _send_callback(
-            callback_url,
-            chat_id,
-            "failed",
-            "최대 시도 횟수를 초과하여 예약이 중단되었습니다.",
-            self.request.id,
-        )
-        return {"status": "failed", "message": error_msg}
-
-    except Exception as e:
-        # Check if reservation was already completed before failing
-        if redis_client:
-            try:
-                status = redis_client.hget(f"reservation:{chat_id}", "status")
-                if status == "completed":
-                    logger.info(
-                        f"Task failed but reservation was already completed for chat_id: {chat_id}"
-                    )
-                    return {
-                        "status": "success",
-                        "message": "Reservation completed before error",
-                    }
-            except Exception:
-                pass
-
-        error_msg = f"Reservation task failed: {str(e)}"
-        logger.error(f"Reservation task error for chat_id: {chat_id}: {str(e)}")
-        _send_callback(callback_url, chat_id, "failed", error_msg, self.request.id)
-        return {"status": "failed", "message": error_msg}
-
-
-def _send_callback(
-    callback_url: str, chat_id: int, status: str, message: str, task_id: str = None
-):
-    """Send status update to callback URL"""
     try:
-        payload = {
-            "user_id": chat_id,
-            "status": status,
-            "timestamp": datetime.now().isoformat(),
-        }
-
-        # Include task_id if provided
-        if task_id:
-            payload["task_id"] = task_id
-
-        # Add status-specific fields
-        if status == "success":
-            payload["train_info"] = message
-        elif status == "failed":
-            payload["error"] = message
-        else:
-            payload["message"] = message
-
-        # Callback URL is already properly configured for the deployment mode
-
-        response = requests.post(callback_url, json=payload, timeout=10)
-        response.raise_for_status()
-        logger.info(f"Successfully sent callback: status={status}, chat_id={chat_id}")
+        result = run_reservation(
+            {**spec, "korail_pw": password, "max_duration": _max_duration(spec)},
+            reporter,
+            should_stop=should_stop,
+            on_success=mark_completed,
+        )
+    except SoftTimeLimitExceeded:
+        if is_completed():
+            return {"status": "success", "message": "completed before timeout"}
+        reporter.send("failed", message=MAX_DURATION_MESSAGE)
+        return {"status": "failed", "message": "soft time limit exceeded"}
     except Exception as e:
-        logger.error(f"Failed to send callback: {str(e)}")
+        logger.exception(f"Reservation task error: {spec.get('reservation_id')}")
+        reporter.send("error", message=f"예약 중 오류 발생: {e}")
+        return {"status": "error", "message": str(e)}
+
+    if result.get("status") == "stopped" and _shutting_down.is_set():
+        # 취소된 예약이었다면 웹 서버가 이 보고를 무시함 (applied: false)
+        reporter.send("error", message=WORKER_RESTART_MESSAGE)
+        return {**result, "status": "interrupted"}
+    return result
 
 
 if __name__ == "__main__":

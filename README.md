@@ -1,6 +1,7 @@
-# KTX 예약 텔레그램 봇
+# KTX 예약 텔레그램 봇 & 웹앱
 
-이중 실행 모드와 포괄적인 Docker 지원을 갖춘 한국철도(KTX) 자동 예약 텔레그램 봇입니다.
+이중 실행 모드와 포괄적인 Docker 지원을 갖춘 한국철도(KTX) 자동 예약 서비스입니다.
+텔레그램 봇과 설치형 웹앱(PWA) 두 가지 방법으로 이용할 수 있으며, 예약은 모두 백엔드에서 수행됩니다.
 
 ## 특징
 
@@ -10,6 +11,8 @@
 - 🐳 **Docker 지원**: 개발 및 운영 환경을 위한 완전한 컨테이너화
 - 🔐 **인증 시스템**: 전화번호 인증 및 안전한 사용자 관리
 - 📊 **실시간 업데이트**: 웹훅 기반 상태 알림
+- 🌐 **웹앱(PWA)**: 홈 화면 설치, 오프라인 셸, 푸시 알림, 로그인 화면, 관리자 화면
+- 🗂️ **사용자 DB 관리 / 30일 예약 이력**: SQLite(기본) 또는 PostgreSQL
 
 ## 아키텍처 개요
 
@@ -26,8 +29,8 @@
 - **사용 사례**: 다중 사용자 또는 대용량 배포
 - **저장소**: 상태 관리 및 작업 큐를 위한 Redis
 - **의존성**: Redis, PostgreSQL, Celery workers
-- **백그라운드 작업**: 분산 작업 처리
-- **리소스 사용량**: 높지만 수평 확장 가능
+- **백그라운드 작업**: 분산 작업 처리 (워커 풀 기본값 `threads`, `CELERY_POOL`로 변경)
+- **리소스 사용량**: threads 풀은 예약 1건당 약 0.3MB, 워커 서버를 늘려 수평 확장 가능
 
 ### 환경 구성
 
@@ -62,12 +65,18 @@ WEBHOOK_URL=https://your-domain.com/telebot
 WEBHOOK_URL_DEV=https://your-domain.com/telebot_dev
 
 # 코레일 계정 (관리자 모드용)
-USERID=코레일_사용자명
-USERPW=코레일_비밀번호
+ADMIN_KORAIL_ID=코레일_사용자명
+ADMIN_KORAIL_PW=코레일_비밀번호
 
-# 보안
+# 사용자 (최초 실행 시 DB에 등록, 이후에는 관리자 화면/봇 명령으로 관리)
 ALLOW_LIST=전화번호1,전화번호2,전화번호3
 ADMINPW=관리자_비밀번호
+
+# 웹앱 (선택사항)
+ENABLE_WEBAPP=true
+WEBAPP_ENC_KEY=임의의_긴_문자열     # 코레일 비밀번호 암호화 키 (openssl rand -base64 32)
+VAPID_PUBLIC_KEY=                  # make vapid-keys 로 생성 (푸시 알림)
+VAPID_PRIVATE_KEY=
 
 # Message Queue(MQ) 모드 (선택사항)
 REDIS_URL=redis://localhost:6379
@@ -167,8 +176,70 @@ make docker-compose-down
 | 명령어 | 설명 |
 |--------|------|
 | `make lint` | black으로 코드 포맷팅 |
+| `make webapp-build` | 웹앱(PWA) 빌드 |
+| `make webapp-dev` | 웹앱 개발 서버 (5173 포트) |
+| `make vapid-keys` | 푸시 알림용 VAPID 키 생성 |
+
+## 웹앱 (PWA)
+
+텔레그램 없이 브라우저/홈 화면 앱에서 예약할 수 있습니다. 예약 실행은 텔레그램과 같은 백엔드 워커가 담당합니다.
+
+### 화면
+- **로그인**: 코레일 계정(전화번호 + 비밀번호) 또는 관리자 비밀번호
+- **홈**: 진행 중인 예약(실시간 갱신) + 최근 30일 이력
+- **새 예약**: 날짜, 역 검색(자동완성), 출발 시각 범위, 열차/좌석 종류
+- **예약 상세**: 진행 상태·시도 횟수, 성공 시 결제 링크, 취소, 같은 조건으로 다시 예약
+- **설정**: 푸시 알림, 텔레그램 알림, 앱 설치 안내, 로그아웃
+- **관리**(관리자): 사용자 추가/비활성화/삭제, 전체 예약 조회·취소
+
+### 실행
+
+```bash
+# 1. 웹앱 빌드 (webapp/dist → FastAPI가 /app 에서 서빙)
+make webapp-build
+
+# 2. .env에 ENABLE_WEBAPP=true, WEBAPP_ENC_KEY 설정 후 서버 실행
+make dev          # http://localhost:8390/app/
+
+# 프론트엔드 개발 시 (핫 리로드, /api는 8390으로 프록시)
+make webapp-dev   # http://localhost:5173/app/
+
+# 푸시 알림용 VAPID 키 생성
+make vapid-keys
+```
+
+Docker 이미지는 멀티 스테이지 빌드로 웹앱을 함께 빌드하므로 별도 작업이 필요 없습니다.
+
+### 배포 시 주의사항
+- **HTTPS 필수**: 서비스 워커·푸시 알림·보안 쿠키가 HTTPS에서만 동작합니다. 기존 webhook 도메인을 그대로 사용하면 됩니다.
+- **`/internal` 경로 차단**: 워커 콜백 전용입니다(예약별 토큰으로 인증). 리버스 프록시에서 외부 노출을 막는 것을 권장합니다.
+- **SSE**: `/api/events`는 프록시 버퍼링을 끄고(`proxy_buffering off`) 읽기 타임아웃을 길게 설정하세요.
+- **iPhone**: 푸시 알림은 iOS 16.4 이상에서 **홈 화면에 추가한 경우에만** 동작합니다.
+- **WEBAPP_ENC_KEY**: 설정하지 않으면 재시작 시 웹 세션이 만료되고, Celery 브로커에 비밀번호가 평문으로 전달됩니다. 웹 서버와 Celery 워커에 같은 값을 설정하세요.
+
+### 보안 설계
+- 세션: 서버 저장 세션 + HttpOnly/SameSite 쿠키, 변경 요청에는 CSRF 토큰 필요
+- 코레일 비밀번호: 예약 실행을 위해 암호화(Fernet)하여 세션에만 보관, 로그아웃/만료 시 삭제
+- 로그인 제한: 전화번호당 10분에 3회 실패 시 잠금 (코레일은 5회 실패 시 계정 잠금)
+- subprocess 워커에는 forkserver 소켓/파이프로 전달하여 프로세스 목록(`ps`)에 비밀번호가 노출되지 않음
+
+설계 배경은 [docs/webapp-design.md](docs/webapp-design.md)를 참고하세요.
+
+## 사용자 관리
+
+사용자는 DB에서 관리합니다. `ALLOW_LIST`는 최초 실행 시 사용자 DB를 채우는 용도로만 사용되며, 이후 목록에서 번호를 빼도 DB의 사용자는 그대로 유지됩니다.
+
+- **웹 관리 화면**: 관리자 로그인 → 관리 → 사용자 (추가, 비활성화, 삭제)
+- **텔레그램 봇**: `/start` 후 관리자 비밀번호로 로그인한 채팅에서
+  - `/users` - 등록된 사용자 목록
+  - `/adduser 010-1234-5678 [이름]` - 사용자 등록
+  - `/deluser 010-1234-5678` - 사용자 삭제
+
+사용자를 비활성화/삭제하면 해당 사용자의 웹 세션도 즉시 만료됩니다.
 
 ## 모드 선택 가이드
+
+모드별 처리량 측정 결과(2026-09-26 측정, 서버 크기별 동시 예약 수 등)는 [docs/capacity-review.md](docs/capacity-review.md)를 참고하세요.
 
 ### Subprocess 모드를 사용해야 할 때
 - ✅ 단일 사용자 또는 소규모 팀 사용
@@ -194,14 +265,24 @@ GET /health
 POST /message
 ```
 
-### 예약 완료 (Subprocess 모드)
+### 워커 상태 보고 (subprocess / MQ 공통)
 ```
-POST /completion/{chat_id}?status={status}&reserveInfo={info}
+POST /internal/events   {"reservation_id", "token", "status", "attempts", "message", "train_info"}
 ```
 
-### 예약 콜백 (MQ 모드)
+### 웹앱 API (ENABLE_WEBAPP=true)
+전체 명세는 `/api/docs`에서 확인할 수 있습니다.
 ```
-POST /reservation_callback
+POST   /api/auth/login | /api/auth/admin-login | /api/auth/logout
+GET    /api/auth/me
+GET    /api/reservations?status=active|history|all&scope=mine|all
+POST   /api/reservations
+GET    /api/reservations/{id}
+DELETE /api/reservations/{id}
+GET    /api/stations?q=
+GET    /api/events                (SSE)
+POST   /api/push/subscriptions | /api/push/unsubscribe
+GET    /api/admin/users           (관리자)
 ```
 
 ## 봇 명령어
@@ -216,22 +297,31 @@ POST /reservation_callback
 ```
 korail_telegrambot/
 ├── src/
-│   ├── app.py                 # FastAPI 애플리케이션 진입점
+│   ├── app.py                # FastAPI 애플리케이션 조립 (서비스, 봇, 웹 API)
 │   ├── config.py             # 설정 관리
+│   ├── core/                 # 채널 무관 예약 도메인
+│   │   ├── reservations.py   # 예약 시작/취소/조회, 워커 보고, 30일 이력 정리
+│   │   ├── auth.py           # 웹 로그인/세션
+│   │   ├── users.py          # 사용자 DB 관리
+│   │   ├── launchers.py      # subprocess / Celery 실행기
+│   │   ├── runner.py         # 워커 공통 예약 루프
+│   │   ├── notifier.py       # 텔레그램/SSE/Web Push 알림
+│   │   └── models.py         # DB 모델
+│   ├── web/                  # 웹앱 REST API, PWA 정적 파일 서빙
 │   └── telegramBot/
-│       ├── bot.py            # 메인 봇 로직
+│       ├── bot.py            # 텔레그램 대화 흐름
 │       ├── tasks.py          # Celery 작업
 │       ├── worker.py         # Subprocess 워커
 │       ├── korail_client.py  # 코레일 API 클라이언트
-│       ├── messages.py       # 메시지 템플릿
-│       └── keyboards/        # 키보드 인터페이스
+│       └── messages.py       # 메시지 템플릿
+├── webapp/                   # PWA (Vite + React + TypeScript)
+├── docs/webapp-design.md     # 웹앱 설계 문서
 ├── docker-compose.yml        # 운영 Docker 설정
-├── docker-compose.dev.yml    # 개발 Docker 오버라이드
-├── Dockerfile               # 컨테이너 빌드 지시사항
-├── Makefile                 # 빌드 및 실행 명령어
-├── Pipfile                  # Python 의존성
-├── CLAUDE.md               # AI 어시스턴트 지시사항
-└── README.md               # 이 파일
+├── Dockerfile                # 멀티 스테이지 빌드 (웹앱 + 서버)
+├── Makefile                  # 빌드 및 실행 명령어
+├── Pipfile                   # Python 의존성
+├── CLAUDE.md                 # AI 어시스턴트 지시사항
+└── README.md                 # 이 파일
 ```
 
 ## 상세 설정 가이드
@@ -251,7 +341,7 @@ korail_telegrambot/
 
 ### 코레일 계정 설정
 
-- **관리자 계정**: `.env` 파일에 `USERID`, `USERPW` 설정
+- **관리자 계정**: `.env` 파일에 `ADMIN_KORAIL_ID`, `ADMIN_KORAIL_PW` 설정
 - **사용자 계정**: 봇 사용 시 개별적으로 입력
 
 ### 사용자 권한 관리
@@ -286,6 +376,8 @@ location /telebot_dev {
   proxy_set_header X-Forwarded-Proto $scheme;
 }
 ```
+
+웹 서버는 로그인 시도 제한을 접속 IP 기준으로 세므로, `X-Forwarded-For`는 신뢰하는 프록시가 보낸 것만 사용합니다(`FORWARDED_ALLOW_IPS`, 기본 `127.0.0.1`). 위처럼 같은 서버의 nginx가 `localhost`로 전달하면 설정할 것이 없고, Docker Compose는 컨테이너가 보는 게이트웨이 대역(`172.16.0.0/12`)을 기본으로 지정합니다. 다른 서버의 프록시를 쓴다면 그 주소를 `FORWARDED_ALLOW_IPS`에 넣으세요.
 
 ### 시스템 서비스 등록
 
@@ -376,12 +468,13 @@ Bind for 0.0.0.0:8390 failed: port is already allocated
 
 #### Celery 워커 튜닝
 ```bash
-# 동시 처리 작업 수 조정
-celery -A src.telegramBot.tasks worker --concurrency=4
-
-# 메모리 제한 설정
-celery -A src.telegramBot.tasks worker --max-memory-per-child=200000
+# .env
+CELERY_POOL=threads        # 기본값. prefork는 슬롯마다 프로세스(약 35MB)를 미리 띄움
+CELERY_CONCURRENCY=20      # 비우면 MAX_CONCURRENT_RESERVATIONS와 같음
+RESERVATION_TIMEOUT=3600   # 예약 1건의 최대 실행 시간(초)
 ```
+- `CELERY_POOL`은 웹 서버와 워커가 같은 값을 읽어야 합니다. 취소 방식이 풀에 따라 다릅니다(threads: Redis 취소 표시로 다음 시도 전에 멈춤, prefork: 강제 종료).
+- `celery worker`를 직접 실행할 때는 `--pool`을 지정하세요. CLI 기본값(prefork)이 앱 설정보다 우선합니다.
 
 #### Docker 리소스 제한
 ```yaml
@@ -406,7 +499,7 @@ services:
 - HTTPS/TLS 인증서 사용 필수
 
 ### 접근 제어
-- `ALLOW_LIST`를 통한 사용자 제한
+- 사용자 DB(최초 `ALLOW_LIST`로 시드)를 통한 사용자 제한
 - 관리자 기능은 `ADMINPW`로 보호
 
 ## 기여하기

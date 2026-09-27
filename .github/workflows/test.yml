@@ -27,6 +27,29 @@ jobs:
         version: "25.9.0"
         options: "--check --diff ."
 
+  webapp:
+    name: Web App (PWA) Build
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: 'npm'
+        cache-dependency-path: webapp/package-lock.json
+
+    - name: Install dependencies
+      working-directory: webapp
+      run: npm ci
+
+    - name: Typecheck and build
+      working-directory: webapp
+      run: npm run build
+
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest

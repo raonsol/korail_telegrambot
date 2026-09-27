@@ -86,12 +86,12 @@ redis-stop:  ## Stop local Redis server
 	fi
 
 .PHONY: celery-worker-start
-celery-worker-start:  ## Start Celery worker in background
+celery-worker-start:  ## Start Celery worker in background (pool: CELERY_POOL, default threads)
 	@if [ -f ${WORKER_PID_FILE} ] && kill -0 $$(cat ${WORKER_PID_FILE}) 2>/dev/null; then \
 		echo "✅ Celery worker already running (PID: $$(cat ${WORKER_PID_FILE}))"; \
 	else \
 		echo "🚀 Starting Celery worker in background..."; \
-		cd src && PYTHONPATH=. pipenv run celery -A telegramBot.tasks worker --loglevel=info --pidfile=../${WORKER_PID_FILE} --detach; \
+		cd src && PYTHONPATH=. pipenv run sh -c 'celery -A telegramBot.tasks worker --loglevel=info --pool=$${CELERY_POOL:-threads} --pidfile=../${WORKER_PID_FILE} --detach'; \
 	fi
 
 .PHONY: celery-worker-stop
@@ -142,6 +142,22 @@ korail-login-check:  ## Diagnose ADMIN_KORAIL_ID/PW login inside Docker (shows s
 lint:	## Run lint
 	pipenv run black .
 
+.PHONY: webapp-install
+webapp-install:	## Install web app (PWA) dependencies
+	cd webapp && npm ci
+
+.PHONY: webapp-dev
+webapp-dev:	## Run web app dev server (http://localhost:5173/app/, proxies /api to port 8390)
+	cd webapp && npm run dev
+
+.PHONY: webapp-build
+webapp-build:	## Build web app into webapp/dist (served by FastAPI at /app)
+	cd webapp && npm ci && npm run build
+
+.PHONY: vapid-keys
+vapid-keys:	## Generate VAPID keys for Web Push notifications
+	@cd src && PIPENV_DONT_LOAD_ENV=1 pipenv run python -m core.vapid
+
 .PHONY: test
 test:	## Run all tests
 	pipenv run pytest
@@ -187,6 +203,10 @@ coverage-html:	## Generate HTML coverage report and open in browser
 	pipenv run pytest --cov=src --cov-report=html
 	@echo "Opening coverage report..."
 	@which xdg-open > /dev/null && xdg-open htmlcov/index.html || open htmlcov/index.html || echo "Please open htmlcov/index.html manually"
+
+.PHONY: docker-build
+docker-build:	## Build Docker image (includes web app build)
+	docker build -t ${IMAGE_NAME} .
 
 .PHONY: docker-push
 docker-push:  	## Publish Docker Image

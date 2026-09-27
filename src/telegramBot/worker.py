@@ -1,126 +1,138 @@
-import sys
-import signal
+"""Subprocess 모드 예약 워커
+
+웹 서버(``SubprocessLauncher``)는 이 모듈을 미리 import해 둔 forkserver에서
+워커 프로세스를 복제하고 ``run_process(spec, log_path)``를 실행합니다.
+라이브러리를 예약마다 다시 불러오지 않아 메모리(예약당 22MB → 약 6MB)와 시작 시간이 줄어듭니다.
+예약 명세는 명령행 인자가 아닌 forkserver 소켓/파이프로 전달됩니다(``ps``로 비밀번호가 노출되지 않음).
+
+수동 실행 시에는 stdin(JSON)으로 명세를 받습니다.
+
+    echo '{"reservation_id": ..., "korail_pw": ...}' | python -m telegramBot.worker
+"""
+
+import json
 import logging
 import os
+import signal
+import sys
+from contextlib import suppress
 from datetime import datetime
-from .korail_client import ReserveHandler, FATAL_ERRORS
 
-# Configure logging
-# Create logs directory if it doesn't exist
+from core.runner import (
+    build_reporter,
+    result_file,
+    run_reservation,
+    write_result_file,
+)
+
 logs_dir = os.path.join(os.path.dirname(__file__), "..", "..", "logs")
 os.makedirs(logs_dir, exist_ok=True)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.FileHandler(
-            os.path.join(
-                logs_dir, f'worker_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
-            )
-        ),
-        logging.StreamHandler(),
-    ],
-)
 logger = logging.getLogger(__name__)
 
-sys.setrecursionlimit(10**7)
+REQUIRED_FIELDS = (
+    "reservation_id",
+    "callback_url",
+    "callback_token",
+    "korail_id",
+    "korail_pw",
+    "dep_date",
+    "src_station",
+    "dst_station",
+    "dep_time",
+    "max_dep_time",
+    "train_type",
+    "seat_type",
+)
 
 
-# def reserve(self, depDate, srcLocate, dstLocate, depTime='000000', trainType=TrainType.KTX, special=ReserveOption.GENERAL_FIRST, chatId="", maxDepTime'2400'):
-class BackProcess(object):
+def read_spec(stream=None) -> dict:
+    stream = stream or sys.stdin
+    spec = json.loads(stream.read())
+    missing = [field for field in REQUIRED_FIELDS if field not in spec]
+    if missing:
+        raise ValueError(f"Missing fields: {missing}")
+    return spec
 
-    def __init__(self):
-        try:
-            self.username = sys.argv[1]
-            self.password = sys.argv[2]
-            self.depDate = sys.argv[3]
-            self.srcLocate = sys.argv[4]
-            self.dstLocate = sys.argv[5]
-            self.depTime = sys.argv[6]
-            self.trainType = sys.argv[7]
-            self.specialInfo = sys.argv[8]
-            self.chatId = sys.argv[9]
-            self.maxDepTime = sys.argv[10]
 
-            self.reserve_handler = ReserveHandler()
-            self.max_retries = 3
-            self.retry_count = 0
+def _handle_termination(signum, frame):
+    # 취소는 웹 서버가 이미 상태를 기록했으므로 별도 보고 없이 종료
+    logger.info(f"Received termination signal {signum}")
+    sys.exit(0)
 
-            # Register signal handlers
-            signal.signal(signal.SIGTERM, self.handle_termination)
-            signal.signal(signal.SIGINT, self.handle_termination)
 
-            if not self.reserve_handler.login(self.username, self.password):
-                raise Exception("Failed to login")
+def _setup_logging(handlers, force: bool = False) -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=handlers,
+        force=force,
+    )
+    signal.signal(signal.SIGTERM, _handle_termination)
+    signal.signal(signal.SIGINT, _handle_termination)
 
-        except Exception as e:
-            logger.error(f"Initialization error: {str(e)}")
-            self.send_error_message(f"초기화 중 오류 발생: {str(e)}")
-            sys.exit(1)
 
-    def handle_termination(self, signum, frame):
-        logger.info(f"Received termination signal {signum}")
-        self.cleanup()
-        sys.exit(0)
+def _run(spec: dict, result_path: str | None = None) -> int:
+    reporter = build_reporter(spec)
 
-    def cleanup(self):
-        try:
-            if hasattr(self, "reserve_handler"):
-                # Only send termination message if reservation was not successful
-                if not self.reserve_handler.reserveInfo.get("reserveSuc", False):
-                    self.reserve_handler.sendBotStateChange(
-                        self.chatId, "프로세스가 종료되었습니다.", 0
-                    )
-        except Exception as e:
-            logger.error(f"Cleanup error: {str(e)}")
+    def save_result(train_info: str, attempts: int) -> None:
+        # 성공 보고 전에 결과를 남겨 둠: 보고가 끝내 전달되지 않거나 이 프로세스가
+        # 종료돼도(웹 서버 재시작) 웹 서버가 이 파일로 성공을 복구함
+        if result_path:
+            try:
+                write_result_file(result_path, train_info, attempts)
+            except OSError as e:
+                logger.error(f"Failed to save reservation result: {e}")
 
-    def send_error_message(self, message):
-        try:
-            self.reserve_handler.sendBotStateChange(self.chatId, message, 0)
-        except Exception as e:
-            logger.error(f"Failed to send error message: {str(e)}")
+    try:
+        result = run_reservation(spec, reporter, on_success=save_result)
+        logger.info(f"Reservation {spec['reservation_id']} finished: {result}")
+        if result.get("reported") and result_path:
+            with suppress(OSError):
+                os.remove(result_path)
+        return 0
+    except Exception as e:
+        logger.exception("Reservation worker crashed")
+        reporter.send("error", message=f"예약 중 오류 발생: {e}")
+        return 1
 
-    def run(self):
-        try:
-            while self.retry_count < self.max_retries:
-                try:
-                    logger.info(f"Starting reservation attempt {self.retry_count + 1}")
-                    self.reserve_handler.reserve(
-                        self.depDate,
-                        self.srcLocate,
-                        self.dstLocate,
-                        self.depTime,
-                        self.trainType,
-                        self.specialInfo,
-                        self.chatId,
-                        self.maxDepTime,
-                    )
-                    break
-                except FATAL_ERRORS:
-                    # 역 이름 오류, 지난 날짜 등은 재시도해도 같은 결과
-                    raise
-                except Exception as e:
-                    self.retry_count += 1
-                    logger.error(
-                        f"Reservation attempt {self.retry_count} failed: {str(e)}"
-                    )
-                    if self.retry_count < self.max_retries:
-                        logger.info("Retrying...")
-                        continue
-                    else:
-                        raise
 
-        except Exception as e:
-            logger.error(
-                f"Reservation failed after {self.max_retries} attempts: {str(e)}"
-            )
-            self.send_error_message(f"예약 중 오류 발생: {str(e)}")
-        finally:
-            self.cleanup()
-            logger.info(f"Reserve Job for {self.username} is end")
+def run_process(spec: dict, log_path: str) -> None:
+    """forkserver에서 복제된 워커 프로세스의 진입점 (종료 코드는 main()과 같음)"""
+    # print/예외 출력까지 예약별 로그 파일로
+    fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    os.dup2(fd, 1)
+    os.dup2(fd, 2)
+    os.close(fd)
+    _setup_logging([logging.StreamHandler(sys.stderr)], force=True)
+
+    missing = [field for field in REQUIRED_FIELDS if field not in spec]
+    if missing:
+        logger.error(f"Invalid reservation spec: Missing fields: {missing}")
+        sys.exit(2)
+    results_dir = os.path.dirname(os.path.abspath(log_path))
+    sys.exit(_run(spec, result_file(results_dir, spec["reservation_id"])))
+
+
+def main() -> int:
+    _setup_logging(
+        [
+            logging.FileHandler(
+                os.path.join(
+                    logs_dir, f'worker_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+                )
+            ),
+            logging.StreamHandler(),
+        ]
+    )
+
+    try:
+        spec = read_spec()
+    except Exception as e:
+        logger.error(f"Invalid reservation spec: {e}")
+        return 2
+    return _run(spec)
 
 
 if __name__ == "__main__":
-    proc1 = BackProcess()
-    proc1.run()
+    sys.exit(main())

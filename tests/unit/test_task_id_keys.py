@@ -2,13 +2,11 @@
 """
 Integration test to verify task_id based Redis keys with a real Redis instance.
 """
+
 from unittest.mock import Mock, patch
 
 import redis
-import sys
 import pytest
-
-sys.path.insert(0, "src")
 
 from telegramBot.tasks import reservation_task
 from config import web_settings
@@ -38,34 +36,37 @@ def test_task_id_keys():
     mock_response = Mock()
     mock_response.raise_for_status = Mock()
 
-    with patch("telegramBot.tasks.requests.post", return_value=mock_response), patch(
-        "telegramBot.tasks.ReserveHandler"
+    with patch("core.runner.requests.Session.post", return_value=mock_response), patch(
+        "core.runner.ReserveHandler"
     ) as mock_handler_class:
         mock_handler = Mock()
         mock_handler.login = Mock(return_value=False)
         mock_handler_class.return_value = mock_handler
 
         reservation_task.apply(
-            args=[
-                1234567,
-                {
+            kwargs={
+                "spec": {
+                    "reservation_id": task_id,
+                    "callback_url": "http://localhost:8390/internal/events",
+                    "callback_token": "token",
                     "korail_id": "test_user",
                     "korail_pw": "test_pass",
                     "dep_date": "20251019",
-                    "dep_station": "서울",
-                    "arr_station": "부산",
-                    "dep_time": "090000",
-                    "arr_time": "1200",
+                    "src_station": "서울",
+                    "dst_station": "부산",
+                    "dep_time": "0900",
+                    "max_dep_time": "1200",
                     "train_type": "KTX",
-                    "prefer_seat_type": "general",
-                },
-                "http://localhost:8390/reservation_callback",
-            ],
+                    "seat_type": "general",
+                }
+            },
             task_id=task_id,
         )
 
     assert redis_client.exists(expected_key), f"Missing Redis key: {expected_key}"
     assert redis_client.hget(expected_key, "status") == "running"
+    # 상태 키는 만료 시간이 있어 Redis에 계속 쌓이지 않음
+    assert redis_client.ttl(expected_key) > 0
 
     # Cleanup
     redis_client.delete(expected_key)

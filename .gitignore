@@ -4,6 +4,12 @@
 *.pem
 .env
 
+# Local database (subprocess mode SQLite)
+*.db
+*.db-wal
+*.db-shm
+data/
+
 # Logs
 logs/
 *.log.celery-worker.pid

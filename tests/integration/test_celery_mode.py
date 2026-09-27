@@ -2,157 +2,153 @@
 Integration tests for Celery execution mode
 """
 
+from unittest.mock import Mock, patch
+
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-import time
+
+from core.crypto import CredentialVault
+from core.db import Database
+from core.launchers import CeleryLauncher, SubprocessLauncher, create_launcher
+from core.schemas import Owner
+from core.services import build_services
+
+
+def _spec(**overrides):
+    spec = {
+        "reservation_id": "a" * 32,
+        "callback_url": "http://localhost:8390/internal/events",
+        "callback_token": "tok",
+        "korail_id": "010-1234-5678",
+        "korail_pw": "test_password",
+        "dep_date": "20250115",
+        "src_station": "서울",
+        "dst_station": "부산",
+        "dep_time": "0900",
+        "max_dep_time": "1200",
+        "train_type": "KTX",
+        "seat_type": "general",
+    }
+    spec.update(overrides)
+    return spec
 
 
 @pytest.mark.integration
 @pytest.mark.celery
-@pytest.mark.requires_redis
-class TestCeleryMode:
-    """Test Celery execution mode integration"""
+class TestCeleryLauncher:
+    def test_launch_uses_reservation_id_as_task_id_and_encrypts_password(self):
+        vault = CredentialVault("secret")
+        launcher = CeleryLauncher(Mock(), vault=vault)
+
+        with patch("telegramBot.tasks.reservation_task.apply_async") as apply_async:
+            ref = launcher.launch(_spec())
+
+        assert ref == "a" * 32
+        kwargs = apply_async.call_args.kwargs
+        assert kwargs["task_id"] == "a" * 32
+        payload = kwargs["kwargs"]["spec"]
+        # 브로커에 평문 비밀번호가 실리지 않음
+        assert "korail_pw" not in payload
+        assert vault.decrypt(payload["korail_pw_enc"]) == "test_password"
+
+    def test_launch_without_persistent_key_keeps_plaintext(self):
+        launcher = CeleryLauncher(Mock(), vault=CredentialVault(""))
+
+        with patch("telegramBot.tasks.reservation_task.apply_async") as apply_async:
+            launcher.launch(_spec())
+
+        assert apply_async.call_args.kwargs["kwargs"]["spec"]["korail_pw"] == (
+            "test_password"
+        )
+
+    def test_cancel_marks_cancelled_and_revokes_without_terminate(
+        self, mock_redis_client
+    ):
+        """threads 풀(기본): 강제 종료 대신 Redis 취소 표시로 멈춤"""
+        celery_app = Mock()
+        mock_redis_client.hset("reservation_task:task-1", "status", "running")
+        launcher = CeleryLauncher(celery_app, mock_redis_client)
+
+        launcher.cancel("task-1")
+
+        celery_app.control.revoke.assert_called_once_with("task-1", terminate=False)
+        assert mock_redis_client.hget("reservation_task:task-1", "status") == (
+            "cancelled"
+        )
+        assert mock_redis_client.ttl("reservation_task:task-1") > 0
+
+    def test_cancel_terminates_on_prefork(self, mock_redis_client):
+        celery_app = Mock()
+        launcher = CeleryLauncher(celery_app, mock_redis_client, terminate=True)
+
+        launcher.cancel("task-1")
+
+        celery_app.control.revoke.assert_called_once_with("task-1", terminate=True)
+        assert mock_redis_client.hget("reservation_task:task-1", "status") == (
+            "cancelled"
+        )
+
+    def test_cancel_revokes_even_if_redis_fails(self):
+        celery_app = Mock()
+        broken = Mock()
+        broken.pipeline = Mock(side_effect=Exception("Connection refused"))
+        launcher = CeleryLauncher(celery_app, broken)
+
+        launcher.cancel("task-1")
+
+        celery_app.control.revoke.assert_called_once_with("task-1", terminate=False)
+
+    def test_create_launcher_uses_celery_when_redis_available(self, mock_redis_client):
+        with patch("redis.Redis.from_url", return_value=mock_redis_client):
+            launcher = create_launcher(True, "redis://localhost:6379")
+        assert isinstance(launcher, CeleryLauncher)
+        assert launcher.terminate is False
+
+    def test_create_launcher_prefork_terminates(self, mock_redis_client):
+        with patch("redis.Redis.from_url", return_value=mock_redis_client):
+            launcher = create_launcher(
+                True, "redis://localhost:6379", celery_pool="prefork"
+            )
+        assert launcher.terminate is True
+
+    def test_create_launcher_falls_back_to_subprocess(self):
+        broken = Mock()
+        broken.ping = Mock(side_effect=Exception("Connection refused"))
+        with patch("redis.Redis.from_url", return_value=broken):
+            launcher = create_launcher(True, "redis://localhost:6379")
+        assert isinstance(launcher, SubprocessLauncher)
+
+    def test_create_launcher_subprocess_mode(self):
+        assert isinstance(create_launcher(False, "redis://x"), SubprocessLauncher)
 
     @pytest.mark.asyncio
-    async def test_celery_reservation_flow(self, mock_redis_client, sample_user_data):
-        """Test complete reservation flow in Celery mode"""
-        with patch("telegramBot.bot.ApplicationBuilder"), patch(
-            "telegramBot.bot.REDIS_AVAILABLE", True
-        ), patch(
-            "telegramBot.bot.redis.Redis.from_url", return_value=mock_redis_client
-        ):
-            from telegramBot.bot import TelegramBot
+    async def test_service_with_celery_launcher(self, test_settings, valid_request):
+        celery_app = Mock()
+        launcher = CeleryLauncher(celery_app, vault=CredentialVault("secret"))
+        services = build_services(
+            test_settings, db=Database("sqlite://"), launcher=launcher
+        )
+        services.init_storage()
+        owner = Owner(user_id="01012345678")
 
-            # Create bot instance in Celery mode
-            bot = TelegramBot("test_token", enable_redis_celery=True)
-            bot.send_message = AsyncMock()
-            chat_id = 123456
-
-            # Verify Celery mode is enabled
-            assert bot.use_celery is True
-            assert bot.redis_client is not None
-
-            # Setup user data
-            bot.userDict[chat_id] = sample_user_data.copy()
-
-            # Mock Celery task at the source module where it's defined
-            with patch("telegramBot.tasks.reservation_task") as mock_task:
-                mock_task.delay = Mock(return_value=Mock(id="test-task-id"))
-
-                # Simulate starting reservation with Celery
-                task_id = bot._start_celery_task(
-                    sample_user_data["trainInfo"],
-                    sample_user_data["userInfo"],
-                    chat_id,
-                )
-
-                # Verify task was started
-                assert task_id == "test-task-id"
-                mock_task.delay.assert_called_once()
-
-            # Verify Redis state was updated
-            redis_data = mock_redis_client.hgetall(f"reservation:{chat_id}")
-            if redis_data:  # Only if fakeredis is available
-                assert redis_data.get("status") == "started"
-                assert redis_data.get("task_id") == "test-task-id"
-
-    @pytest.mark.asyncio
-    async def test_celery_task_cancellation(self, mock_redis_client, mock_celery_app):
-        """Test Celery task cancellation"""
-        with patch("telegramBot.bot.ApplicationBuilder"), patch(
-            "telegramBot.bot.REDIS_AVAILABLE", True
-        ), patch(
-            "telegramBot.bot.redis.Redis.from_url", return_value=mock_redis_client
-        ):
-            from telegramBot.bot import TelegramBot
-
-            bot = TelegramBot("test_token", enable_redis_celery=True)
-            bot.celery_app = mock_celery_app
-            chat_id = 123456
-
-            # Setup running status with Celery task
-            bot.runningStatus["test-task-id"] = {
-                "chat_id": chat_id,
-                "task_id": "test-task-id",
-                "korailId": "010-1234-5678",
-                "method": "celery",
-            }
-            bot._create_user(chat_id)
-
-            # Cancel reservation
-            success = await bot._cancel_reservation(chat_id)
-
-            # Verify cancellation
-            assert success is True
-            assert "test-task-id" not in bot.runningStatus
-            mock_celery_app.control.revoke.assert_called_once_with(
-                "test-task-id", terminate=True
+        with patch("telegramBot.tasks.reservation_task.apply_async"):
+            first = await services.reservations.start(
+                owner, valid_request, "010", "pw", origin="telegram", chat_id=1
+            )
+            second = await services.reservations.start(
+                owner, valid_request, "010", "pw", origin="web"
             )
 
-    @pytest.mark.asyncio
-    async def test_celery_multiple_concurrent_users(self, mock_redis_client):
-        """Test multiple concurrent users with Celery mode"""
-        with patch("telegramBot.bot.ApplicationBuilder"), patch(
-            "telegramBot.bot.REDIS_AVAILABLE", True
-        ), patch(
-            "telegramBot.bot.redis.Redis.from_url", return_value=mock_redis_client
-        ):
-            from telegramBot.bot import TelegramBot
+        # 같은 사용자의 여러 예약이 독립적으로 추적됨
+        active = services.reservations.list(owner, active=True)
+        assert {r.id for r in active} == {first.id, second.id}
+        assert all(r.status.value == "queued" for r in active)
 
-            bot = TelegramBot("test_token", enable_redis_celery=True)
-            bot.send_message = AsyncMock()
-
-            # Create multiple users
-            users = [111111, 222222, 333333]
-
-            for user_id in users:
-                bot._create_user(user_id)
-                bot.runningStatus[f"task-{user_id}"] = {
-                    "chat_id": user_id,
-                    "task_id": f"task-{user_id}",
-                    "korailId": f"010-{str(user_id)[:4]}-{str(user_id)[-4:]}",
-                    "method": "celery",
-                }
-
-            # Verify all are tracked
-            assert len(bot.runningStatus) == 3
-
-            # Cancel all should work
-            for user_id in users:
-                with patch.object(bot.celery_app.control, "revoke"):
-                    success = await bot._cancel_reservation(user_id)
-                    assert success is True
-
-    def test_celery_fallback_to_subprocess(self):
-        """Test fallback to subprocess mode when Redis unavailable"""
-        with patch("telegramBot.bot.ApplicationBuilder"), patch(
-            "telegramBot.bot.REDIS_AVAILABLE", False
-        ):
-            from telegramBot.bot import TelegramBot
-
-            # Try to create bot with Celery enabled but Redis not available
-            bot = TelegramBot("test_token", enable_redis_celery=True)
-
-            # Should fall back to subprocess mode
-            assert bot.use_celery is False
-            assert bot.redis_client is None
-            assert bot.celery_app is None
-
-    def test_celery_redis_connection_failure(self):
-        """Test handling of Redis connection failure"""
-        with patch("telegramBot.bot.ApplicationBuilder"), patch(
-            "telegramBot.bot.REDIS_AVAILABLE", True
-        ):
-            mock_redis = Mock()
-            mock_redis.ping = Mock(side_effect=Exception("Connection refused"))
-
-            with patch("telegramBot.bot.redis.Redis.from_url", return_value=mock_redis):
-                from telegramBot.bot import TelegramBot
-
-                bot = TelegramBot("test_token", enable_redis_celery=True)
-
-                # Should fall back to subprocess mode on connection error
-                assert bot.use_celery is False
+        await services.reservations.cancel(first.id, owner=owner, source="web")
+        celery_app.control.revoke.assert_called_once_with(first.id, terminate=False)
+        assert [r.id for r in services.reservations.list(owner, active=True)] == [
+            second.id
+        ]
+        services.db.dispose()
 
 
 @pytest.mark.integration
@@ -169,230 +165,455 @@ class TestCeleryTasks:
         assert app.conf.task_serializer == "json"
         assert app.conf.accept_content == ["json"]
 
-    @pytest.mark.parametrize(
-        "special_info, expected_key",
-        [
-            ("GENERAL_FIRST", "general"),
-            ("GENERAL_ONLY", "general_only"),
-            ("SPECIAL_FIRST", "special"),
-            ("SPECIAL_ONLY", "special_only"),
-        ],
-    )
-    def test_celery_task_receives_selected_seat_type(
-        self, mock_redis_client, sample_user_data, special_info, expected_key
-    ):
-        """The seat option chosen in the bot is passed to the Celery task"""
-        with patch("telegramBot.bot.ApplicationBuilder"), patch(
-            "telegramBot.bot.REDIS_AVAILABLE", True
-        ), patch(
-            "telegramBot.bot.redis.Redis.from_url", return_value=mock_redis_client
+    def test_reservation_task_success(self, mock_redis_client):
+        from telegramBot.tasks import reservation_task
+
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ), patch("telegramBot.tasks.run_reservation") as run, patch(
+            "telegramBot.tasks.build_reporter"
         ):
-            from telegramBot.bot import TelegramBot
+            run.side_effect = lambda spec, reporter, should_stop, on_success: (
+                on_success() or {"status": "success"}
+            )
+            result = reservation_task.apply(
+                kwargs={"spec": _spec()}, task_id="task-ok"
+            ).get()
 
-            bot = TelegramBot("test_token", enable_redis_celery=True)
-            train_info = {**sample_user_data["trainInfo"], "specialInfo": special_info}
+        assert result == {"status": "success"}
+        assert run.call_args[0][0]["korail_pw"] == "test_password"
+        assert mock_redis_client.hget("reservation_task:task-ok", "status") == (
+            "completed"
+        )
 
-            with patch("telegramBot.tasks.reservation_task") as mock_task:
-                mock_task.delay = Mock(return_value=Mock(id="test-task-id"))
-                bot._start_celery_task(train_info, sample_user_data["userInfo"], 1)
-
-            reservation_data = mock_task.delay.call_args[0][1]
-            assert reservation_data["prefer_seat_type"] == expected_key
-
-    @pytest.mark.parametrize(
-        "prefer_seat_type, expected_option",
-        [
-            ("general", "GENERAL_FIRST"),
-            ("general_only", "GENERAL_ONLY"),
-            ("special", "SPECIAL_FIRST"),
-            ("special_only", "SPECIAL_ONLY"),
-        ],
-    )
-    @patch("telegramBot.tasks.ReserveHandler")
-    @patch("telegramBot.tasks.requests.post")
-    @patch("telegramBot.tasks.redis.Redis.from_url")
-    def test_reservation_task_uses_seat_type(
-        self,
-        mock_redis_from_url,
-        mock_requests_post,
-        mock_handler_class,
-        sample_reservation_data,
-        prefer_seat_type,
-        expected_option,
-    ):
-        """The Celery task reserves with the ReserveOption matching prefer_seat_type"""
+    def test_reservation_task_decrypts_password(self, mock_redis_client, monkeypatch):
+        from config import web_settings
         from telegramBot.tasks import reservation_task
 
-        mock_redis = Mock()
-        mock_redis.hget = Mock(return_value=None)
-        mock_redis_from_url.return_value = mock_redis
-        mock_handler = Mock()
-        mock_handler.login = Mock(return_value=True)
-        mock_handler.reserve_single_attempt = Mock(
-            return_value={"success": True, "result": "reserved", "error": None}
-        )
-        mock_handler_class.return_value = mock_handler
+        monkeypatch.setattr(web_settings, "webapp_enc_key", "secret")
+        encrypted = CredentialVault("secret").encrypt("pw-from-broker")
+        spec = _spec(korail_pw_enc=encrypted)
+        spec.pop("korail_pw")
 
-        reservation_data = {
-            **sample_reservation_data,
-            "prefer_seat_type": prefer_seat_type,
-        }
-        reservation_task(123456, reservation_data, "http://localhost/callback")
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ), patch(
+            "telegramBot.tasks.run_reservation", return_value={"status": "failed"}
+        ) as run, patch(
+            "telegramBot.tasks.build_reporter"
+        ):
+            reservation_task.apply(kwargs={"spec": spec}, task_id="task-enc")
 
-        call_kwargs = mock_handler.reserve_single_attempt.call_args[1]
-        assert call_kwargs["special"] == expected_option
+        assert run.call_args[0][0]["korail_pw"] == "pw-from-broker"
 
-    @patch("telegramBot.tasks.ReserveHandler")
-    @patch("telegramBot.tasks.requests.post")
-    @patch("telegramBot.tasks.redis.Redis.from_url")
-    def test_reservation_task_success(
-        self, mock_redis_from_url, mock_requests_post, mock_handler_class
-    ):
-        """Test successful reservation task execution"""
+    def test_reservation_task_undecryptable_password(self, mock_redis_client):
         from telegramBot.tasks import reservation_task
 
-        # Setup mocks
-        mock_redis = Mock()
-        mock_redis.hget = Mock(return_value=None)
-        mock_redis.hset = Mock()
-        mock_redis_from_url.return_value = mock_redis
+        spec = _spec(korail_pw_enc="garbage")
+        spec.pop("korail_pw")
+        reporter = Mock()
 
-        mock_handler = Mock()
-        mock_handler.login = Mock(return_value=True)
-        mock_handler.reserve_single_attempt = Mock(
-            return_value={
-                "success": True,
-                "result": "Train KTX 001 reserved",
-                "error": None,
-            }
-        )
-        mock_handler_class.return_value = mock_handler
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ), patch("telegramBot.tasks.run_reservation") as run, patch(
+            "telegramBot.tasks.build_reporter", return_value=reporter
+        ):
+            result = reservation_task.apply(
+                kwargs={"spec": spec}, task_id="task-bad"
+            ).get()
 
-        mock_response = Mock()
-        mock_response.raise_for_status = Mock()
-        mock_requests_post.return_value = mock_response
+        run.assert_not_called()
+        assert result["status"] == "error"
+        assert reporter.send.call_args[0][0] == "error"
 
-        # Execute task
-        chat_id = 123456
-        reservation_data = {
-            "korail_id": "010-1234-5678",
-            "korail_pw": "password",
-            "dep_date": "20250115",
-            "dep_station": "서울",
-            "arr_station": "부산",
-            "dep_time": "090000",
-            "arr_time": "1200",
-            "train_type": "KTX",
-            "prefer_seat_type": "general",
-        }
-        callback_url = "http://localhost:8390/reservation_callback"
-
-        # Call the task directly (not using __wrapped__ which has signature issues)
-        result = reservation_task(chat_id, reservation_data, callback_url)
-
-        # Verify result
-        assert result["status"] == "success"
-        mock_handler.login.assert_called_once()
-        mock_handler.reserve_single_attempt.assert_called()
-
-    @patch("telegramBot.tasks.ReserveHandler")
-    @patch("telegramBot.tasks.requests.post")
-    @patch("telegramBot.tasks.redis.Redis.from_url")
-    def test_reservation_task_login_failure(
-        self, mock_redis_from_url, mock_requests_post, mock_handler_class
-    ):
-        """Test reservation task with login failure"""
+    def test_reservation_task_skips_completed(self, mock_redis_client):
         from telegramBot.tasks import reservation_task
 
-        # Setup mocks
-        mock_redis = Mock()
-        mock_redis.hget = Mock(return_value=None)
-        mock_redis.hset = Mock()
-        mock_redis_from_url.return_value = mock_redis
+        mock_redis_client.hset("reservation_task:task-done", "status", "completed")
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ), patch("telegramBot.tasks.run_reservation") as run, patch(
+            "telegramBot.tasks.build_reporter"
+        ):
+            result = reservation_task.apply(
+                kwargs={"spec": _spec()}, task_id="task-done"
+            ).get()
 
-        mock_handler = Mock()
-        mock_handler.login = Mock(return_value=False)
-        mock_handler_class.return_value = mock_handler
+        run.assert_not_called()
+        assert result == {"status": "already_completed"}
 
-        mock_response = Mock()
-        mock_response.raise_for_status = Mock()
-        mock_requests_post.return_value = mock_response
+    def test_reservation_task_skips_cancelled(self, mock_redis_client):
+        """대기열에 있던 중 취소된 예약은 시작하지 않음"""
+        from telegramBot.tasks import reservation_task
 
-        # Execute task
-        chat_id = 123456
-        reservation_data = {
-            "korail_id": "010-1234-5678",
-            "korail_pw": "wrong_password",
-            "dep_date": "20250115",
-            "dep_station": "서울",
-            "arr_station": "부산",
-            "dep_time": "090000",
-            "arr_time": "1200",
-            "train_type": "KTX",
-            "prefer_seat_type": "general",
+        mock_redis_client.hset("reservation_task:task-c", "status", "cancelled")
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ), patch("telegramBot.tasks.run_reservation") as run, patch(
+            "telegramBot.tasks.build_reporter"
+        ):
+            result = reservation_task.apply(
+                kwargs={"spec": _spec()}, task_id="task-c"
+            ).get()
+
+        run.assert_not_called()
+        assert result == {"status": "already_cancelled"}
+
+    def test_reservation_task_stops_when_cancelled_while_running(
+        self, mock_redis_client
+    ):
+        """실행 중 웹 서버가 취소 표시를 남기면 should_stop이 True가 됨"""
+        from telegramBot.tasks import STATE_TTL_SECONDS, reservation_task
+
+        seen = {}
+
+        def fake_run(spec, reporter, should_stop, on_success):
+            seen["before"] = should_stop()
+            seen["ttl"] = mock_redis_client.ttl("reservation_task:task-r")
+            CeleryLauncher(Mock(), mock_redis_client).cancel("task-r")
+            seen["after"] = should_stop()
+            return {"status": "stopped"}
+
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ), patch("telegramBot.tasks.run_reservation", side_effect=fake_run), patch(
+            "telegramBot.tasks.build_reporter"
+        ):
+            reservation_task.apply(kwargs={"spec": _spec()}, task_id="task-r")
+
+        assert seen["before"] is False
+        assert 0 < seen["ttl"] <= STATE_TTL_SECONDS
+        assert seen["after"] is True
+        # 취소 뒤에는 완료로 덮어쓰지 않음
+        assert mock_redis_client.hget("reservation_task:task-r", "status") == (
+            "cancelled"
+        )
+
+    def test_reservation_task_does_not_overwrite_cancel(self, mock_redis_client):
+        """시작 확인과 running 기록 사이에 취소돼도 cancelled가 유지됨 (HSETNX)"""
+        from telegramBot.tasks import reservation_task
+
+        real_hget = mock_redis_client.hget
+        calls = {"n": 0}
+
+        def racy_hget(key, field):
+            calls["n"] += 1
+            value = real_hget(key, field)
+            if calls["n"] == 1:
+                # 시작 확인 직후 웹 서버가 취소
+                mock_redis_client.hset(key, "status", "cancelled")
+            return value
+
+        mock_redis_client.hget = racy_hget
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ), patch(
+            "telegramBot.tasks.run_reservation",
+            side_effect=lambda spec, reporter, should_stop, on_success: {
+                "stopped": should_stop()
+            },
+        ), patch(
+            "telegramBot.tasks.build_reporter"
+        ):
+            result = reservation_task.apply(
+                kwargs={"spec": _spec()}, task_id="task-race"
+            ).get()
+
+        assert result == {"stopped": True}
+        assert real_hget("reservation_task:task-race", "status") == "cancelled"
+
+    def test_reservation_task_passes_max_duration(self, mock_redis_client):
+        from telegramBot.tasks import RESERVATION_TIMEOUT, reservation_task
+
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ), patch(
+            "telegramBot.tasks.run_reservation", return_value={"status": "failed"}
+        ) as run, patch(
+            "telegramBot.tasks.build_reporter"
+        ):
+            reservation_task.apply(kwargs={"spec": _spec()}, task_id="t1")
+            reservation_task.apply(
+                kwargs={"spec": _spec(max_duration=600)}, task_id="t2"
+            )
+            reservation_task.apply(
+                kwargs={"spec": _spec(max_duration=RESERVATION_TIMEOUT * 10)},
+                task_id="t3",
+            )
+
+        durations = [c.args[0]["max_duration"] for c in run.call_args_list]
+        # 없으면 워커 설정, 있으면 워커 설정을 넘지 않는 범위에서 그대로
+        assert durations == [RESERVATION_TIMEOUT, 600, RESERVATION_TIMEOUT]
+
+    def test_redis_client_is_shared(self, mock_redis_client):
+        from telegramBot.tasks import reservation_task
+
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ) as from_url, patch(
+            "telegramBot.tasks.run_reservation", return_value={"status": "failed"}
+        ), patch(
+            "telegramBot.tasks.build_reporter"
+        ):
+            reservation_task.apply(kwargs={"spec": _spec()}, task_id="s1")
+            reservation_task.apply(kwargs={"spec": _spec()}, task_id="s2")
+
+        from_url.assert_called_once()
+
+    def test_celery_worker_settings(self):
+        from telegramBot.tasks import RESERVATION_TIMEOUT, app
+
+        assert app.conf.worker_pool == "threads"
+        assert app.conf.worker_concurrency >= 1
+        # 실행 중인 태스크가 재전달(중복 실행)되지 않도록 최대 실행 시간보다 길게
+        visibility = app.conf.broker_transport_options["visibility_timeout"]
+        assert visibility > app.conf.task_time_limit > RESERVATION_TIMEOUT
+        assert app.conf.task_soft_time_limit > RESERVATION_TIMEOUT
+
+    def test_reservation_task_without_redis(self):
+        from telegramBot.tasks import reservation_task
+
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url",
+            side_effect=Exception("no redis"),
+        ), patch(
+            "telegramBot.tasks.run_reservation", return_value={"status": "success"}
+        ) as run, patch(
+            "telegramBot.tasks.build_reporter"
+        ):
+            result = reservation_task.apply(
+                kwargs={"spec": _spec()}, task_id="task-noredis"
+            ).get()
+
+        assert result == {"status": "success"}
+        assert run.call_args.kwargs["should_stop"]() is False
+
+
+@pytest.mark.integration
+@pytest.mark.celery
+class TestWorkerLossDetection:
+    """워커 재시작·크래시 감지 (Redis heartbeat + 종료 시 보고)"""
+
+    def test_find_lost_requires_started_task_without_heartbeat(self, mock_redis_client):
+        from core.task_state import heartbeat_key, state_key
+
+        r = mock_redis_client
+        r.hset(state_key("alive"), "status", "running")
+        r.set(heartbeat_key("alive"), "1", ex=60)
+        r.hset(state_key("dead"), "status", "running")  # heartbeat 만료
+        r.hset(state_key("done"), "status", "completed")
+        r.hset(state_key("gone"), "status", "cancelled")
+        # "queued": 아직 대기열에 있어 상태 키가 없음
+
+        launcher = CeleryLauncher(Mock(), r)
+        refs = ["alive", "dead", "done", "gone", "queued"]
+
+        # done: 성공했지만 보고가 전달되지 않았을 수 있음 → 웹 서버가 결과를 복구
+        # (웹 서버는 DB에서 진행 중인 예약만 넘기므로 이미 보고된 예약은 대상이 아님)
+        assert launcher.find_lost(refs) == ["dead", "done"]
+        assert launcher.find_lost([]) == []
+        assert CeleryLauncher(Mock()).find_lost(refs) == []  # Redis 없으면 판단 안 함
+
+    def test_task_keeps_heartbeat_while_running_and_removes_it(self, mock_redis_client):
+        from core.task_state import heartbeat_key
+        from telegramBot.tasks import reservation_task
+
+        seen = {}
+
+        def fake_run(spec, reporter, should_stop, on_success):
+            seen["ttl"] = mock_redis_client.ttl(heartbeat_key("task-hb"))
+            seen["status"] = mock_redis_client.hget(
+                "reservation_task:task-hb", "status"
+            )
+            return {"status": "failed"}
+
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ), patch("telegramBot.tasks.run_reservation", side_effect=fake_run), patch(
+            "telegramBot.tasks.build_reporter"
+        ):
+            reservation_task.apply(kwargs={"spec": _spec()}, task_id="task-hb")
+
+        assert 0 < seen["ttl"] <= 60
+        assert seen["status"] == "running"
+        # 끝나면 heartbeat 삭제 (결과 보고가 실패했으면 웹 서버가 바로 정리할 수 있게)
+        assert not mock_redis_client.exists(heartbeat_key("task-hb"))
+        # 끝난 태스크는 갱신 대상에서 빠짐
+        from telegramBot.tasks import heartbeat
+
+        assert "task-hb" not in heartbeat._ids
+
+    def test_heartbeat_refreshes_running_reservations(self, mock_redis_client):
+        from core.task_state import heartbeat_key
+        from telegramBot.tasks import Heartbeat
+
+        hb = Heartbeat(interval=3600)  # 스레드는 대기만 하고 beat()를 직접 호출
+        hb.add(mock_redis_client, "r1")
+        hb.add(mock_redis_client, "r2")
+        hb.beat()
+        assert mock_redis_client.ttl(heartbeat_key("r1")) > 0
+        assert mock_redis_client.ttl(heartbeat_key("r2")) > 0
+
+        hb.remove(mock_redis_client, "r1")
+        mock_redis_client.delete(heartbeat_key("r2"))
+        hb.beat()
+        assert not mock_redis_client.exists(heartbeat_key("r1"))
+        assert mock_redis_client.exists(heartbeat_key("r2"))
+
+    def test_worker_shutdown_stops_and_reports_restart(self, mock_redis_client):
+        """워커 종료가 시작되면 다음 시도 전에 멈추고 웹 서버에 바로 알림"""
+        import telegramBot.tasks as tasks
+
+        reporter = Mock()
+        seen = {}
+
+        def fake_run(spec, reporter, should_stop, on_success):
+            seen["before"] = should_stop()
+            tasks._on_worker_shutting_down(sig="TERM", how="Warm", exitcode=0)
+            seen["after"] = should_stop()
+            return {"status": "stopped", "attempts": 3}
+
+        try:
+            with patch(
+                "telegramBot.tasks.redis.Redis.from_url",
+                return_value=mock_redis_client,
+            ), patch("telegramBot.tasks.run_reservation", side_effect=fake_run), patch(
+                "telegramBot.tasks.build_reporter", return_value=reporter
+            ):
+                result = tasks.reservation_task.apply(
+                    kwargs={"spec": _spec()}, task_id="task-shutdown"
+                ).get()
+        finally:
+            tasks._shutting_down.clear()
+
+        assert seen == {"before": False, "after": True}
+        assert result == {"status": "interrupted", "attempts": 3}
+        reporter.send.assert_called_once_with(
+            "error", message=tasks.WORKER_RESTART_MESSAGE
+        )
+
+    def test_worker_shutdown_signal_is_connected(self):
+        from celery.signals import worker_shutting_down
+
+        import telegramBot.tasks as tasks
+
+        try:
+            worker_shutting_down.send(sender="test", sig="TERM", how="Warm", exitcode=0)
+            assert tasks._shutting_down.is_set()
+        finally:
+            tasks._shutting_down.clear()
+
+    @pytest.mark.asyncio
+    async def test_service_marks_reservations_of_lost_worker(
+        self, test_settings, valid_request, mock_redis_client
+    ):
+        from core.reservations import WORKER_LOST_MESSAGE
+        from core.task_state import heartbeat_key, state_key
+
+        celery_app = Mock()
+        launcher = CeleryLauncher(
+            celery_app, mock_redis_client, vault=CredentialVault("secret")
+        )
+        services = build_services(
+            test_settings, db=Database("sqlite://"), launcher=launcher
+        )
+        services.init_storage()
+        owner = Owner(user_id="01012345678")
+        events = []
+
+        async def deliver(event):
+            events.append(event)
+
+        services.notifier.add(
+            type("Recorder", (), {"deliver": staticmethod(deliver)})()
+        )
+
+        with patch("telegramBot.tasks.reservation_task.apply_async"):
+            lost = await services.reservations.start(
+                owner, valid_request, "010", "pw", origin="web"
+            )
+            alive = await services.reservations.start(
+                owner, valid_request, "010", "pw", origin="web"
+            )
+            queued = await services.reservations.start(
+                owner, valid_request, "010", "pw", origin="web"
+            )
+        mock_redis_client.hset(state_key(lost.id), "status", "running")
+        mock_redis_client.hset(state_key(alive.id), "status", "running")
+        mock_redis_client.set(heartbeat_key(alive.id), "1", ex=60)
+        events.clear()
+
+        assert await services.reservations.detect_lost_workers() == 1
+
+        r = services.reservations.get(lost.id, owner)
+        assert r.status.value == "error"
+        assert r.error == WORKER_LOST_MESSAGE
+        assert services.reservations.get(alive.id, owner).is_active
+        assert services.reservations.get(queued.id, owner).is_active
+        assert [e.reservation.id for e in events] == [lost.id]
+        # 브로커가 다시 전달해도 시작하지 않도록 취소 표시
+        assert mock_redis_client.hget(state_key(lost.id), "status") == "cancelled"
+        # 이미 처리한 예약은 다시 세지 않음
+        assert await services.reservations.detect_lost_workers() == 0
+        services.db.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.celery
+class TestUnreportedSuccessCelery:
+    def test_task_stores_result_before_reporting(self, mock_redis_client):
+        from telegramBot.tasks import reservation_task
+
+        def fake_run(spec, reporter, should_stop, on_success):
+            on_success(train_info="KTX 101", attempts=9)
+            return {"status": "success", "reported": False}
+
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ), patch("telegramBot.tasks.run_reservation", side_effect=fake_run), patch(
+            "telegramBot.tasks.build_reporter"
+        ):
+            reservation_task.apply(kwargs={"spec": _spec()}, task_id="task-res")
+
+        launcher = CeleryLauncher(Mock(), mock_redis_client)
+        assert launcher.recover_success("task-res") == {
+            "train_info": "KTX 101",
+            "attempts": 9,
         }
-        callback_url = "http://localhost:8390/reservation_callback"
+        mock_redis_client.hset("reservation_task:other", "status", "running")
+        assert launcher.recover_success("other") is None
+        assert launcher.recover_success("missing") is None
 
-        # Call the task directly (not using __wrapped__ which has signature issues)
-        result = reservation_task(chat_id, reservation_data, callback_url)
+    @pytest.mark.asyncio
+    async def test_lost_worker_check_recovers_success(
+        self, test_settings, valid_request, mock_redis_client
+    ):
+        """성공 후 보고가 전달되지 않은 태스크는 오류가 아니라 성공으로 처리"""
+        from core.task_state import state_key
 
-        # Verify failure
-        assert result["status"] == "failed"
-        assert "login" in result["message"].lower()
-
-    @patch("telegramBot.tasks.requests.post")
-    def test_send_callback_success(self, mock_requests_post):
-        """Test callback sending on success"""
-        from telegramBot.tasks import _send_callback
-
-        mock_response = Mock()
-        mock_response.raise_for_status = Mock()
-        mock_requests_post.return_value = mock_response
-
-        _send_callback(
-            "http://localhost:8390/reservation_callback",
-            123456,
-            "success",
-            "Train reserved",
+        launcher = CeleryLauncher(
+            Mock(), mock_redis_client, vault=CredentialVault("secret")
+        )
+        services = build_services(
+            test_settings, db=Database("sqlite://"), launcher=launcher
+        )
+        services.init_storage()
+        owner = Owner(user_id="01012345678")
+        with patch("telegramBot.tasks.reservation_task.apply_async"):
+            r = await services.reservations.start(
+                owner, valid_request, "010", "pw", origin="web"
+            )
+        # 태스크가 끝나 heartbeat는 없고, Redis에 성공 결과만 남음
+        mock_redis_client.hset(
+            state_key(r.id),
+            mapping={"status": "completed", "train_info": "KTX 101", "attempts": 3},
         )
 
-        mock_requests_post.assert_called_once()
-        call_args = mock_requests_post.call_args
-        assert call_args[1]["json"]["status"] == "success"
-        assert call_args[1]["json"]["train_info"] == "Train reserved"
+        assert await services.reservations.detect_lost_workers() == 1
 
-    @patch("telegramBot.tasks.requests.post")
-    def test_send_callback_failure(self, mock_requests_post):
-        """Test callback sending on failure"""
-        from telegramBot.tasks import _send_callback
-
-        mock_response = Mock()
-        mock_response.raise_for_status = Mock()
-        mock_requests_post.return_value = mock_response
-
-        _send_callback(
-            "http://localhost:8390/reservation_callback",
-            123456,
-            "failed",
-            "No trains available",
-        )
-
-        mock_requests_post.assert_called_once()
-        call_args = mock_requests_post.call_args
-        assert call_args[1]["json"]["status"] == "failed"
-        assert call_args[1]["json"]["error"] == "No trains available"
-
-    @patch("telegramBot.tasks.requests.post")
-    def test_send_callback_network_error(self, mock_requests_post):
-        """Test callback handling of network errors"""
-        from telegramBot.tasks import _send_callback
-
-        mock_requests_post.side_effect = Exception("Network error")
-
-        # Should not raise exception
-        _send_callback(
-            "http://localhost:8390/reservation_callback",
-            123456,
-            "success",
-            "Train reserved",
-        )
+        out = services.reservations.get(r.id, owner)
+        assert out.status.value == "success"
+        assert out.result_text == "KTX 101"
+        # 이후에는 다시 실행되지 않도록 취소 표시
+        assert mock_redis_client.hget(state_key(r.id), "status") == "cancelled"
+        services.db.dispose()

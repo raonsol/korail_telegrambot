@@ -1,57 +1,52 @@
 """
-Unit tests for FastAPI application (app.py)
+Unit tests for FastAPI application assembly (app.py / web.factory)
 """
 
+import asyncio
 import importlib
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
+import httpx
 import pytest
 
-
-class DummyRequest:
-    def __init__(self, payload=None, error=None):
-        self.payload = payload
-        self.error = error
-
-    async def json(self):
-        if self.error:
-            raise self.error
-        return self.payload
+from web.factory import create_app
 
 
-@pytest.fixture
-def app_with_mock_bot():
-    with patch("telegramBot.bot.ApplicationBuilder"):
-        import app as app_module
+def _mock_bot():
+    bot = Mock()
+    bot.app = Mock()
+    bot.app.bot = Mock()
+    bot.app.bot.get_webhook_info = AsyncMock(return_value={"url": "http://x"})
+    bot.app.update_queue = Mock()
+    bot.app.update_queue.put = AsyncMock()
+    bot.app.start = AsyncMock()
+    bot.app.stop = AsyncMock()
+    bot.app.__aenter__ = AsyncMock(return_value=bot.app)
+    bot.app.__aexit__ = AsyncMock(return_value=None)
+    bot.set_webhook = AsyncMock(return_value=True)
+    return bot
 
-    mock_bot = Mock()
-    mock_bot.app = Mock()
-    mock_bot.app.bot = Mock()
-    mock_bot.app.update_queue = Mock()
-    mock_bot.app.update_queue.put = AsyncMock()
-    mock_bot.send_message = AsyncMock()
-    mock_bot._reset_user_state = Mock()
-    mock_bot.runningStatus = {}
-    mock_bot.userDict = {}
 
-    app_module.bot = mock_bot
-    return app_module, mock_bot
+def _client(app):
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://t"
+    )
 
 
 @pytest.mark.unit
 class TestFastAPIEndpoints:
     @pytest.mark.asyncio
-    async def test_health_check_endpoint(self, app_with_mock_bot):
-        app_module, _ = app_with_mock_bot
+    async def test_health_check_endpoint(self, test_settings, services):
+        app = create_app(test_settings, services, run_housekeeping=False)
+        async with _client(app) as c:
+            response = await c.get("/health")
 
-        response = await app_module.health_check()
-
-        assert response["status"] == "healthy"
-        assert response["service"] == "korail_telegrambot"
+        assert response.json() == {"status": "healthy", "service": "korail_telegrambot"}
 
     @pytest.mark.asyncio
-    async def test_message_endpoint(self, app_with_mock_bot):
-        app_module, mock_bot = app_with_mock_bot
+    async def test_message_endpoint(self, test_settings, services):
+        bot = _mock_bot()
+        app = create_app(test_settings, services, bot, run_housekeeping=False)
 
         telegram_update = {
             "update_id": 123456,
@@ -63,172 +58,131 @@ class TestFastAPIEndpoints:
                 "date": 1704067200,
             },
         }
+        with patch("telegram.Update.de_json", return_value=Mock()):
+            async with _client(app) as c:
+                response = await c.post("/message", json=telegram_update)
 
-        with patch.object(app_module.Update, "de_json", return_value=Mock()):
-            response = await app_module.process_update(
-                DummyRequest(payload=telegram_update)
+        assert response.status_code == 200
+        bot.app.update_queue.put.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_message_endpoint_absent_without_telegram(
+        self, test_settings, services
+    ):
+        app = create_app(test_settings, services, None, run_housekeeping=False)
+        async with _client(app) as c:
+            response = await c.post("/message", json={})
+        assert response.status_code in (404, 405)
+
+    @pytest.mark.asyncio
+    async def test_legacy_unauthenticated_callbacks_removed(
+        self, test_settings, services
+    ):
+        """/completion, /reservation_callback은 인증이 없어 제거됨"""
+        app = create_app(test_settings, services, run_housekeeping=False)
+        async with _client(app) as c:
+            assert (
+                await c.post("/completion/1?status=1&reserveInfo=x")
+            ).status_code in (
+                404,
+                405,
+            )
+            assert (await c.post("/reservation_callback", json={})).status_code in (
+                404,
+                405,
             )
 
-        assert response.status_code == 200
-        mock_bot.app.update_queue.put.assert_awaited_once()
+    @pytest.mark.asyncio
+    async def test_internal_events_validates_payload(self, test_settings, services):
+        app = create_app(test_settings, services, run_housekeeping=False)
+        async with _client(app) as c:
+            response = await c.post("/internal/events", json={"status": "success"})
+        assert response.status_code == 422
+        assert response.json()["code"] == "VALIDATION"
 
     @pytest.mark.asyncio
-    async def test_completion_endpoint_success(self, app_with_mock_bot):
-        app_module, mock_bot = app_with_mock_bot
-        chat_id = 123456
-
-        mock_bot.runningStatus = {"12345": {"chat_id": chat_id, "pid": 12345}}
-        mock_bot.userDict = {chat_id: {"inProgress": True}}
-
-        await app_module.send_reservation_status(
-            chat_id=chat_id,
-            status=1,
-            reserveInfo="Train KTX 001 reserved",
-        )
-
-        assert "12345" not in mock_bot.runningStatus
-        mock_bot.send_message.assert_awaited_once()
-        mock_bot._reset_user_state.assert_called_once_with(chat_id)
-
-    @pytest.mark.asyncio
-    async def test_completion_endpoint_not_in_queue(self, app_with_mock_bot):
-        app_module, mock_bot = app_with_mock_bot
-
-        mock_bot.runningStatus = {}
-
-        response = await app_module.send_reservation_status(
-            chat_id=999999,
-            status=1,
-            reserveInfo="Train reserved",
-        )
-
-        assert response is None
-        mock_bot.send_message.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_reservation_callback_success(self, app_with_mock_bot):
-        app_module, mock_bot = app_with_mock_bot
-        chat_id = 123456
-
-        mock_bot.runningStatus = {
-            "test-task-id": {"chat_id": chat_id, "task_id": "test-task-id"}
-        }
-        mock_bot.userDict = {chat_id: {"inProgress": True}}
-
-        callback_data = {
-            "user_id": str(chat_id),
-            "status": "success",
-            "train_info": "KTX 001 (09:00~11:30)",
-            "task_id": "test-task-id",
-        }
-
-        response = await app_module.handle_reservation_callback(
-            DummyRequest(payload=callback_data)
-        )
-
-        assert response.status_code == 200
-        assert "test-task-id" not in mock_bot.runningStatus
-        mock_bot.send_message.assert_awaited_once()
-        mock_bot._reset_user_state.assert_called_once_with(chat_id)
-
-    @pytest.mark.asyncio
-    async def test_reservation_callback_failed(self, app_with_mock_bot):
-        app_module, mock_bot = app_with_mock_bot
-        chat_id = 123456
-
-        mock_bot.runningStatus = {
-            "test-task-id": {"chat_id": chat_id, "task_id": "test-task-id"}
-        }
-
-        callback_data = {
-            "user_id": str(chat_id),
-            "status": "failed",
-            "error": "No trains available",
-            "task_id": "test-task-id",
-        }
-
-        response = await app_module.handle_reservation_callback(
-            DummyRequest(payload=callback_data)
-        )
-
-        assert response.status_code == 200
-        assert "test-task-id" not in mock_bot.runningStatus
-        mock_bot.send_message.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_reservation_callback_missing_user_id(self, app_with_mock_bot):
-        app_module, _ = app_with_mock_bot
-
-        callback_data = {"status": "success", "train_info": "KTX 001"}
-
-        response = await app_module.handle_reservation_callback(
-            DummyRequest(payload=callback_data)
-        )
-
-        assert response.status_code == 400
-
-    @pytest.mark.asyncio
-    async def test_reservation_callback_invalid_data(self, app_with_mock_bot):
-        app_module, _ = app_with_mock_bot
-
-        response = await app_module.handle_reservation_callback(
-            DummyRequest(error=ValueError("invalid json"))
-        )
-
-        assert response.status_code == 500
+    async def test_internal_events_unknown_reservation(self, test_settings, services):
+        app = create_app(test_settings, services, run_housekeeping=False)
+        async with _client(app) as c:
+            response = await c.post(
+                "/internal/events",
+                json={"reservation_id": "nope", "token": "t", "status": "success"},
+            )
+        assert response.status_code == 404
 
 
 @pytest.mark.unit
 class TestAppConfiguration:
-    def test_cors_middleware_configured(self, app_with_mock_bot):
-        app_module, _ = app_with_mock_bot
+    def test_no_wildcard_cors(self, test_settings, services):
+        app = create_app(test_settings, services, run_housekeeping=False)
+        middleware_classes = [m.cls.__name__ for m in app.user_middleware]
+        assert "CORSMiddleware" not in middleware_classes
 
-        middleware_classes = [m.cls.__name__ for m in app_module.app.user_middleware]
-        assert "CORSMiddleware" in middleware_classes
+    def test_cors_only_for_configured_origin(self, test_settings, services):
+        settings = test_settings.model_copy(
+            update={"webapp_origin": "https://korail.example.com"}
+        )
+        app = create_app(settings, services, run_housekeeping=False)
+        cors = [m for m in app.user_middleware if m.cls.__name__ == "CORSMiddleware"]
+        assert cors[0].kwargs["allow_origins"] == ["https://korail.example.com"]
 
-    @pytest.mark.skip(
-        reason="Bot token validation happens at module import, difficult to test in isolation"
-    )
-    def test_bot_token_validation(self):
-        pass
+    def test_webapp_routes_disabled(self, test_settings, services):
+        settings = test_settings.model_copy(update={"enable_webapp": False})
+        app = create_app(settings, services, run_housekeeping=False)
+        paths = {r.path for r in app.routes}
+        assert "/internal/events" in paths
+        assert not any(p.startswith("/api/") for p in paths)
 
     def test_use_celery_environment_variable(self):
         with patch.dict("os.environ", {"USE_CELERY": "true"}):
+            with patch("telegramBot.bot.ApplicationBuilder"), patch(
+                "core.services.build_services"
+            ) as mock_build:
+                import app
+
+                importlib.reload(app)
+
+                assert mock_build.call_args[0][1] is True
+
+    def test_app_module_wires_bot_as_notification_channel(self):
+        with patch.dict("os.environ", {"USE_CELERY": "false"}):
             with patch("telegramBot.bot.ApplicationBuilder"):
-                with patch("telegramBot.bot.TelegramBot") as mock_telegram_bot:
-                    import app
+                import app
 
-                    importlib.reload(app)
+                importlib.reload(app)
 
-                    assert mock_telegram_bot.call_args[1]["enable_redis_celery"] is True
+        assert app.bot in app.services.notifier.channels
+        assert app.services.auth.alert == app.bot.broadcast_message
 
 
 @pytest.mark.unit
 class TestLifespan:
     @pytest.mark.asyncio
-    async def test_lifespan_webhook_setup(self):
-        with patch("telegramBot.bot.ApplicationBuilder"):
-            from app import lifespan
-            from fastapi import FastAPI
+    async def test_lifespan_webhook_setup(self, test_settings, services):
+        bot = _mock_bot()
+        app = create_app(test_settings, services, bot, run_housekeeping=False)
 
-        mock_app = FastAPI()
-
-        with patch("app.bot") as mock_bot:
-            mock_bot.set_webhook = AsyncMock(return_value=True)
-            mock_bot.app = Mock()
-            mock_bot.app.bot = Mock()
-            mock_bot.app.bot.get_webhook_info = AsyncMock(
-                return_value={"url": "http://test.example.com"}
+        async with app.router.lifespan_context(app):
+            bot.set_webhook.assert_awaited_once_with(
+                url=f"{test_settings.webhook_url_by_env}/message"
             )
-            mock_bot.app.start = AsyncMock()
-            mock_bot.app.stop = AsyncMock()
-            mock_bot.app.__aenter__ = AsyncMock(return_value=mock_bot.app)
-            mock_bot.app.__aexit__ = AsyncMock()
+            bot.app.start.assert_awaited_once()
 
-            with patch("app.settings") as mock_settings:
-                mock_settings.webhook_url_by_env = "http://test.example.com"
+        bot.app.stop.assert_awaited_once()
 
-                async with lifespan(mock_app):
-                    mock_bot.set_webhook.assert_called_once()
+    @pytest.mark.asyncio
+    async def test_lifespan_without_telegram(self, test_settings, services):
+        app = create_app(test_settings, services, None, run_housekeeping=False)
+        async with app.router.lifespan_context(app):
+            # 저장소 초기화 + ALLOW_LIST 시드
+            assert services.users.is_allowed("01012345678")
 
-                mock_bot.app.stop.assert_called_once()
+    @pytest.mark.asyncio
+    async def test_lifespan_runs_housekeeping(self, test_settings, services):
+        with patch(
+            "web.factory.housekeeping_loop", new=AsyncMock(return_value=None)
+        ) as loop:
+            app = create_app(test_settings, services, None)
+            async with app.router.lifespan_context(app):
+                await asyncio.sleep(0)  # let the background task start
+        loop.assert_awaited_once_with(services)

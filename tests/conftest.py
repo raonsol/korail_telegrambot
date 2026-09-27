@@ -33,13 +33,26 @@ def event_loop():
 
 
 @pytest.fixture(autouse=True)
+def reset_shared_task_redis():
+    """telegramBot.tasks.get_redis()가 캐시한 Redis 클라이언트를 테스트마다 초기화"""
+    import sys
+
+    tasks = sys.modules.get("telegramBot.tasks")
+    if tasks is not None:
+        tasks._redis_client = None
+    yield
+    tasks = sys.modules.get("telegramBot.tasks")
+    if tasks is not None:
+        tasks._redis_client = None
+
+
+@pytest.fixture(autouse=True)
 def reset_telegram_bot_class_state():
     """Reset class-level state shared by TelegramBot across tests."""
     try:
         from telegramBot.bot import TelegramBot
 
         TelegramBot.userDict = {}
-        TelegramBot.runningStatus = {}
         TelegramBot.subscribes = []
     except Exception:
         # Some tests may not import telegramBot.bot
@@ -51,10 +64,113 @@ def reset_telegram_bot_class_state():
         from telegramBot.bot import TelegramBot
 
         TelegramBot.userDict = {}
-        TelegramBot.runningStatus = {}
         TelegramBot.subscribes = []
     except Exception:
         pass
+
+
+class FakeLauncher:
+    """예약을 실제로 실행하지 않고 명세만 기록하는 Launcher"""
+
+    name = "subprocess"
+
+    def __init__(self):
+        self.launched = []
+        self.cancelled = []
+        self.fail = False
+
+    def launch(self, spec):
+        if self.fail:
+            raise RuntimeError("launch failed")
+        self.launched.append(spec)
+        return f"ref-{len(self.launched)}"
+
+    def cancel(self, runner_ref):
+        self.cancelled.append(runner_ref)
+
+
+class KorailLoginStub:
+    """코레일 로그인 대체: 비밀번호가 'correct'(또는 관리자 계정 비밀번호)면 성공"""
+
+    def __init__(self, passwords=("correct", "admin_pass")):
+        self.passwords = passwords
+        self.calls = []
+
+    def __call__(self, korail_id, password):
+        self.calls.append((korail_id, password))
+        return password in self.passwords
+
+
+@pytest.fixture
+def test_settings():
+    from config import web_settings
+
+    return web_settings.model_copy(
+        update={
+            "enable_webapp": True,
+            "webapp_enc_key": "test-encryption-key",
+            "vapid_public_key": "",
+            "vapid_private_key": "",
+            "admin_password": "test_admin_password",
+            "admin_korail_id": "admin_user",
+            "admin_korail_pw": "admin_pass",
+            "allow_list": "01012345678,01087654321",
+            "max_concurrent_reservations": 10,
+            "max_reservations_per_user": 3,
+            "reservation_retention_days": 30,
+            "internal_callback_url": "http://testserver/internal/events",
+        }
+    )
+
+
+@pytest.fixture
+def fake_launcher():
+    return FakeLauncher()
+
+
+@pytest.fixture
+def korail_login():
+    return KorailLoginStub()
+
+
+@pytest.fixture
+def services(test_settings, fake_launcher, korail_login):
+    """메모리 SQLite + 가짜 Launcher로 구성한 서비스 (ALLOW_LIST 시드 완료)
+
+    TEST_DATABASE_URL을 지정하면 해당 DB(예: PostgreSQL)에서 실행하고 테스트 후 테이블을 삭제합니다.
+    """
+    from core.db import Base, Database
+    from core.services import build_services
+
+    db = Database(os.getenv("TEST_DATABASE_URL", "sqlite://"))
+    svc = build_services(
+        test_settings,
+        db=db,
+        launcher=fake_launcher,
+        korail_login=korail_login,
+    )
+    svc.init_storage()
+    yield svc
+    if os.getenv("TEST_DATABASE_URL"):
+        Base.metadata.drop_all(db.engine)
+    db.dispose()
+
+
+@pytest.fixture
+def valid_request():
+    """항상 미래 날짜인 예약 요청"""
+    from datetime import timedelta
+    from core.schemas import ReservationRequest, now_kst
+
+    return ReservationRequest(
+        dep_date=now_kst().date() + timedelta(days=7),
+        src_station="서울",
+        dst_station="부산",
+        dep_time="0900",
+        max_dep_time="1200",
+        train_type="KTX",
+        seat_type="general",
+    )
 
 
 @pytest.fixture

@@ -1,2 +1,5 @@
-from .korail_client import ReserveHandler
-from .bot import TelegramBot
+"""텔레그램 채널 패키지
+
+워커 프로세스는 ``telegramBot.korail_client`` 만 필요하므로 여기서 봇을 import하지 않는다.
+(봇까지 로드하면 워커 1개당 메모리가 약 3배로 늘어남)
+"""
