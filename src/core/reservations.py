@@ -50,6 +50,9 @@ WORKER_STATUS_MAP = {
 INTERRUPTED_MESSAGE = (
     "서버가 다시 시작되어 예약이 중단되었습니다. 예약을 다시 시작해 주세요."
 )
+WORKER_LOST_MESSAGE = (
+    "예약 워커가 종료되어 예약이 중단되었습니다. 예약을 다시 시작해 주세요."
+)
 
 
 class ReservationService:
@@ -452,6 +455,41 @@ class ReservationService:
                 count += 1
         if count:
             logger.warning(f"Marked {count} reservations interrupted by restart")
+        return count
+
+    async def detect_lost_workers(self) -> int:
+        """워커가 종료돼(재시작·크래시) 멈춘 예약을 오류 처리 (Celery 모드, 1분마다)
+
+        워커는 실행 중인 예약의 heartbeat를 Redis에 갱신한다(telegramBot.tasks.Heartbeat).
+        정상 종료 시에는 워커가 직접 보고하므로, 여기서는 그 보고가 실패했거나
+        워커가 강제 종료된 경우를 잡는다. subprocess 모드는 해당 없음(abort_interrupted).
+        """
+        find_lost = getattr(self.launcher, "find_lost", None)
+        if find_lost is None:
+            return 0
+        with self.db.session() as s:
+            rows = s.execute(
+                select(Reservation.runner_ref, Reservation.id).where(
+                    Reservation.runner == self.launcher.name,
+                    Reservation.status.in_(ACTIVE_STATUSES),
+                    Reservation.runner_ref.is_not(None),
+                )
+            ).all()
+        if not rows:
+            return 0
+        by_ref = dict(rows)
+        lost = await asyncio.to_thread(find_lost, list(by_ref))
+        count = 0
+        for ref in lost:
+            try:
+                # 브로커가 태스크를 다시 전달해도 시작하지 않도록 취소 표시
+                await asyncio.to_thread(self.launcher.cancel, ref)
+            except Exception as e:
+                logger.warning(f"Failed to mark lost task {ref} cancelled: {e}")
+            if await self._fail_if_active(by_ref[ref], WORKER_LOST_MESSAGE):
+                count += 1
+        if count:
+            logger.warning(f"Marked {count} reservations whose worker stopped")
         return count
 
     def purge_history(self) -> int:

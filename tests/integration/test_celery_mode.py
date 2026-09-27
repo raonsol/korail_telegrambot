@@ -387,3 +387,170 @@ class TestCeleryTasks:
 
         assert result == {"status": "success"}
         assert run.call_args.kwargs["should_stop"]() is False
+
+
+@pytest.mark.integration
+@pytest.mark.celery
+class TestWorkerLossDetection:
+    """워커 재시작·크래시 감지 (Redis heartbeat + 종료 시 보고)"""
+
+    def test_find_lost_requires_started_task_without_heartbeat(self, mock_redis_client):
+        from core.task_state import heartbeat_key, state_key
+
+        r = mock_redis_client
+        r.hset(state_key("alive"), "status", "running")
+        r.set(heartbeat_key("alive"), "1", ex=60)
+        r.hset(state_key("dead"), "status", "running")  # heartbeat 만료
+        r.hset(state_key("done"), "status", "completed")
+        r.hset(state_key("gone"), "status", "cancelled")
+        # "queued": 아직 대기열에 있어 상태 키가 없음
+
+        launcher = CeleryLauncher(Mock(), r)
+        refs = ["alive", "dead", "done", "gone", "queued"]
+
+        assert launcher.find_lost(refs) == ["dead"]
+        assert launcher.find_lost([]) == []
+        assert CeleryLauncher(Mock()).find_lost(refs) == []  # Redis 없으면 판단 안 함
+
+    def test_task_keeps_heartbeat_while_running_and_removes_it(self, mock_redis_client):
+        from core.task_state import heartbeat_key
+        from telegramBot.tasks import reservation_task
+
+        seen = {}
+
+        def fake_run(spec, reporter, should_stop, on_success):
+            seen["ttl"] = mock_redis_client.ttl(heartbeat_key("task-hb"))
+            seen["status"] = mock_redis_client.hget(
+                "reservation_task:task-hb", "status"
+            )
+            return {"status": "failed"}
+
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ), patch("telegramBot.tasks.run_reservation", side_effect=fake_run), patch(
+            "telegramBot.tasks.build_reporter"
+        ):
+            reservation_task.apply(kwargs={"spec": _spec()}, task_id="task-hb")
+
+        assert 0 < seen["ttl"] <= 60
+        assert seen["status"] == "running"
+        # 끝나면 heartbeat 삭제 (결과 보고가 실패했으면 웹 서버가 바로 정리할 수 있게)
+        assert not mock_redis_client.exists(heartbeat_key("task-hb"))
+        # 끝난 태스크는 갱신 대상에서 빠짐
+        from telegramBot.tasks import heartbeat
+
+        assert "task-hb" not in heartbeat._ids
+
+    def test_heartbeat_refreshes_running_reservations(self, mock_redis_client):
+        from core.task_state import heartbeat_key
+        from telegramBot.tasks import Heartbeat
+
+        hb = Heartbeat(interval=3600)  # 스레드는 대기만 하고 beat()를 직접 호출
+        hb.add(mock_redis_client, "r1")
+        hb.add(mock_redis_client, "r2")
+        hb.beat()
+        assert mock_redis_client.ttl(heartbeat_key("r1")) > 0
+        assert mock_redis_client.ttl(heartbeat_key("r2")) > 0
+
+        hb.remove(mock_redis_client, "r1")
+        mock_redis_client.delete(heartbeat_key("r2"))
+        hb.beat()
+        assert not mock_redis_client.exists(heartbeat_key("r1"))
+        assert mock_redis_client.exists(heartbeat_key("r2"))
+
+    def test_worker_shutdown_stops_and_reports_restart(self, mock_redis_client):
+        """워커 종료가 시작되면 다음 시도 전에 멈추고 웹 서버에 바로 알림"""
+        import telegramBot.tasks as tasks
+
+        reporter = Mock()
+        seen = {}
+
+        def fake_run(spec, reporter, should_stop, on_success):
+            seen["before"] = should_stop()
+            tasks._on_worker_shutting_down(sig="TERM", how="Warm", exitcode=0)
+            seen["after"] = should_stop()
+            return {"status": "stopped", "attempts": 3}
+
+        try:
+            with patch(
+                "telegramBot.tasks.redis.Redis.from_url",
+                return_value=mock_redis_client,
+            ), patch("telegramBot.tasks.run_reservation", side_effect=fake_run), patch(
+                "telegramBot.tasks.build_reporter", return_value=reporter
+            ):
+                result = tasks.reservation_task.apply(
+                    kwargs={"spec": _spec()}, task_id="task-shutdown"
+                ).get()
+        finally:
+            tasks._shutting_down.clear()
+
+        assert seen == {"before": False, "after": True}
+        assert result == {"status": "interrupted", "attempts": 3}
+        reporter.send.assert_called_once_with(
+            "error", message=tasks.WORKER_RESTART_MESSAGE
+        )
+
+    def test_worker_shutdown_signal_is_connected(self):
+        from celery.signals import worker_shutting_down
+
+        import telegramBot.tasks as tasks
+
+        try:
+            worker_shutting_down.send(sender="test", sig="TERM", how="Warm", exitcode=0)
+            assert tasks._shutting_down.is_set()
+        finally:
+            tasks._shutting_down.clear()
+
+    @pytest.mark.asyncio
+    async def test_service_marks_reservations_of_lost_worker(
+        self, test_settings, valid_request, mock_redis_client
+    ):
+        from core.reservations import WORKER_LOST_MESSAGE
+        from core.task_state import heartbeat_key, state_key
+
+        celery_app = Mock()
+        launcher = CeleryLauncher(
+            celery_app, mock_redis_client, vault=CredentialVault("secret")
+        )
+        services = build_services(
+            test_settings, db=Database("sqlite://"), launcher=launcher
+        )
+        services.init_storage()
+        owner = Owner(user_id="01012345678")
+        events = []
+
+        async def deliver(event):
+            events.append(event)
+
+        services.notifier.add(
+            type("Recorder", (), {"deliver": staticmethod(deliver)})()
+        )
+
+        with patch("telegramBot.tasks.reservation_task.apply_async"):
+            lost = await services.reservations.start(
+                owner, valid_request, "010", "pw", origin="web"
+            )
+            alive = await services.reservations.start(
+                owner, valid_request, "010", "pw", origin="web"
+            )
+            queued = await services.reservations.start(
+                owner, valid_request, "010", "pw", origin="web"
+            )
+        mock_redis_client.hset(state_key(lost.id), "status", "running")
+        mock_redis_client.hset(state_key(alive.id), "status", "running")
+        mock_redis_client.set(heartbeat_key(alive.id), "1", ex=60)
+        events.clear()
+
+        assert await services.reservations.detect_lost_workers() == 1
+
+        r = services.reservations.get(lost.id, owner)
+        assert r.status.value == "error"
+        assert r.error == WORKER_LOST_MESSAGE
+        assert services.reservations.get(alive.id, owner).is_active
+        assert services.reservations.get(queued.id, owner).is_active
+        assert [e.reservation.id for e in events] == [lost.id]
+        # 브로커가 다시 전달해도 시작하지 않도록 취소 표시
+        assert mock_redis_client.hget(state_key(lost.id), "status") == "cancelled"
+        # 이미 처리한 예약은 다시 세지 않음
+        assert await services.reservations.detect_lost_workers() == 0
+        services.db.dispose()

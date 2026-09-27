@@ -12,6 +12,13 @@ from multiprocessing.connection import wait as wait_ready
 from typing import Callable, Optional, Protocol
 
 from .crypto import CredentialVault
+from .task_state import (
+    CANCEL_TTL_SECONDS,
+    STATUS_CANCELLED,
+    STATUS_RUNNING,
+    heartbeat_key,
+    state_key,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,9 +129,6 @@ class SubprocessLauncher:
 class CeleryLauncher:
     name = "celery"
 
-    # 취소 표시 보관 시간 (재전달된 태스크도 시작하지 않도록 충분히 길게)
-    CANCEL_TTL_SECONDS = 7 * 24 * 3600
-
     def __init__(
         self,
         celery_app,
@@ -160,15 +164,34 @@ class CeleryLauncher:
         # 실행 중인 태스크는 다음 시도 전에 이 표시를 보고 멈춤 (core/runner.py should_stop)
         if self.redis_client:
             try:
-                key = f"reservation_task:{runner_ref}"
+                key = state_key(runner_ref)
                 pipe = self.redis_client.pipeline()
-                pipe.hset(key, "status", "cancelled")
-                pipe.expire(key, self.CANCEL_TTL_SECONDS)
+                pipe.hset(key, "status", STATUS_CANCELLED)
+                pipe.expire(key, CANCEL_TTL_SECONDS)
                 pipe.execute()
             except Exception as e:
                 logger.warning(f"Failed to mark reservation cancelled in Redis: {e}")
         # 아직 대기열에 있는 태스크는 워커가 받는 즉시 버림
         self.celery_app.control.revoke(runner_ref, terminate=self.terminate)
+
+    def find_lost(self, runner_refs: list[str]) -> list[str]:
+        """워커가 종료돼 더 이상 실행되지 않는 태스크 (시작됐는데 heartbeat가 없음)
+
+        대기열에 있어 아직 시작하지 않은 태스크(상태 키 없음)나 Redis 없이 실행된
+        태스크는 판단할 수 없으므로 제외한다 (30분 무응답 정리가 처리).
+        """
+        if not self.redis_client or not runner_refs:
+            return []
+        pipe = self.redis_client.pipeline(transaction=False)
+        for ref in runner_refs:
+            pipe.hget(state_key(ref), "status")
+            pipe.exists(heartbeat_key(ref))
+        values = pipe.execute()
+        return [
+            ref
+            for ref, status, alive in zip(runner_refs, values[0::2], values[1::2])
+            if status == STATUS_RUNNING and not alive
+        ]
 
 
 def create_launcher(

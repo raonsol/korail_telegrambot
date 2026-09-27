@@ -93,6 +93,9 @@ services:
     build: .
     # CLI의 --pool 기본값(prefork)이 앱 설정보다 우선하므로 명시 (web_celery의 CELERY_POOL과 같아야 함)
     command: celery -A telegramBot.tasks worker --loglevel=info --pool=${CELERY_POOL:-threads}
+    # 종료 시 실행 중인 예약이 진행 중인 코레일 요청(최대 30초)을 마치고
+    # "워커 재시작" 보고를 보낼 시간. 넘기면 강제 종료되고 웹 서버가 heartbeat 만료로 감지
+    stop_grace_period: 40s
     env_file:
       - .env
     environment:

@@ -16,6 +16,8 @@ from .users import UserService
 logger = logging.getLogger(__name__)
 
 HOUSEKEEPING_INTERVAL_SECONDS = 600
+# Celery 워커 heartbeat 만료(60초) 후 이 주기 안에 감지
+LOST_WORKER_CHECK_SECONDS = 60
 
 
 @dataclass
@@ -118,9 +120,25 @@ async def run_housekeeping(services: Services) -> None:
         logger.error(f"Housekeeping failed: {e}")
 
 
+async def check_lost_workers(services: Services) -> None:
+    try:
+        await services.reservations.detect_lost_workers()
+    except Exception as e:
+        logger.error(f"Lost worker check failed: {e}")
+
+
 async def housekeeping_loop(
-    services: Services, interval: int = HOUSEKEEPING_INTERVAL_SECONDS
+    services: Services,
+    interval: int = HOUSEKEEPING_INTERVAL_SECONDS,
+    lost_worker_interval: int = LOST_WORKER_CHECK_SECONDS,
 ) -> None:
+    """정리 작업은 interval마다, 워커 종료 감지(Celery)는 lost_worker_interval마다"""
+    loop = asyncio.get_running_loop()
+    last_housekeeping = None
     while True:
-        await run_housekeeping(services)
-        await asyncio.sleep(interval)
+        now = loop.time()
+        if last_housekeeping is None or now - last_housekeeping >= interval:
+            await run_housekeeping(services)
+            last_housekeeping = now
+        await check_lost_workers(services)
+        await asyncio.sleep(min(interval, lost_worker_interval))

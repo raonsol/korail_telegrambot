@@ -47,6 +47,9 @@ Browser (PWA) ────▶ /api/*   ─▶ web/routes_*.py (session cookie + 
 - **Background Tasks**: `reservation_task(spec)` published with `task_id=reservation_id`
 - **Worker pool**: `CELERY_POOL` (default `threads`; `prefork` optional). The CLI `--pool` default (prefork) overrides `app.conf.worker_pool`, so compose / Makefile pass `--pool=${CELERY_POOL:-threads}`. Concurrency = `CELERY_CONCURRENCY` or `MAX_CONCURRENT_RESERVATIONS`
 - **Cancel**: `CeleryLauncher.cancel` writes `status=cancelled` to `reservation_task:{id}` (checked by `should_stop` before every attempt) and revokes; `terminate=True` only with prefork (threads cannot kill)
+- **Worker restart detection** (keys in `core/task_state.py`):
+  - graceful stop (deploy, `docker stop`): `worker_shutting_down` sets a flag → running tasks stop before their next attempt and report `error` ("예약 워커가 다시 시작되어...") within seconds (threads pool only; compose `stop_grace_period: 40s`)
+  - crash / OOM / SIGKILL, or the stop report failed: each worker process refreshes `reservation_hb:{id}` (TTL 60s, every 15s) for its running tasks and deletes it when a task ends; the web server checks every 60s (`ReservationService.detect_lost_workers`) and marks reservations whose state is `running` but have no heartbeat as `error` + sets `cancelled` so a redelivered task does not start. Tasks that never started (no state key) or ran without Redis are left to the 30-min rule
 - **Time limit**: the shared loop enforces `spec["max_duration"]` (`RESERVATION_TIMEOUT`, default 3600s) because the threads pool ignores Celery time limits; `visibility_timeout` = 2 × timeout so running tasks are not redelivered
 - **Dependencies**: Redis, PostgreSQL, Celery workers
 - **Scaling**: Horizontal scaling of workers
@@ -102,7 +105,7 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 #### Telegram Bot (`src/telegramBot/`)
 - **bot.py**: Conversation state machine only (`userDict`); calls `ReservationService`; `deliver()` sends results
   - Admin-only commands (after ADMINPW login in that chat): `/users`, `/adduser`, `/deluser`
-- **tasks.py**: `reservation_task(spec)`; Redis `reservation_task:{task_id}` guard against duplicate execution
+- **tasks.py**: `reservation_task(spec)`; Redis `reservation_task:{task_id}` guard against duplicate execution; `Heartbeat` thread + `worker_shutting_down` handler (restart detection)
 - **worker.py**: Subprocess entry point `run_process(spec, log_path)` (stdout/stderr → `logs/worker_{id8}.log`); `python -m telegramBot.worker` still reads a spec from stdin for manual runs
 - **korail_client.py** (pykorail): `ReserveHandler.login` (bool + `loginError` reason) / `reserve_single_attempt` / `close`
   - `create_korail_client()`: logs Korail server block responses (code -2000)
@@ -160,7 +163,7 @@ subscribes = []    # chats receiving broadcast notifications
 ```
 
 Reservation status: `queued → running → success | failed | error | cancelled`.
-On startup, active `subprocess` reservations → `error` (their workers stopped with the previous server). Housekeeping (every 10 min): RUNNING idle > 30 min or QUEUED > 24 h → `error`; terminal reservations older than `RESERVATION_RETENTION_DAYS` (default **30**) are deleted; expired sessions are deleted.
+On startup, active `subprocess` reservations → `error` (their workers stopped with the previous server). Celery mode: lost-worker check every 60s (see Celery Mode). Housekeeping (every 10 min): RUNNING idle > 30 min or QUEUED > 24 h → `error`; terminal reservations older than `RESERVATION_RETENTION_DAYS` (default **30**) are deleted; expired sessions are deleted.
 
 The DB schema is created with `create_all` (no migrations yet). Add Alembic before changing existing columns.
 
@@ -169,7 +172,7 @@ The DB schema is created with `create_all` (no migrations yet). Add Alembic befo
 **Design Philosophy**: Each reservation is completely independent, identified by the `reservation_id` issued by `ReservationService`.
 
 - `runner_ref` holds the PID (subprocess) or Celery task id (== `reservation_id`); it is only used for cancellation.
-- Celery Redis guard key: `reservation_task:{task_id}` (task_id == reservation_id), status `running` (HSETNX) / `completed` / `cancelled`, with TTL
+- Celery Redis guard key: `reservation_task:{task_id}` (task_id == reservation_id), status `running` (HSETNX) / `completed` / `cancelled`, with TTL; heartbeat `reservation_hb:{task_id}`
 - Worker callbacks carry `reservation_id` + token → only that reservation is updated
 - Same user can run several reservations at once, from Telegram and the web (per-user limit applies)
 - Telegram cancel menu: callback data `cancel_{reservation_id}` or `cancel_all`

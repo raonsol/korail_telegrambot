@@ -376,3 +376,42 @@ class TestHousekeeping:
 
         ids = {r.id for r in services.reservations.list(USER)}
         assert ids == {recent.id, running.id}
+
+
+class TestLostWorkerLoop:
+    @pytest.mark.asyncio
+    async def test_detect_lost_workers_is_noop_for_subprocess(self, services):
+        assert await services.reservations.detect_lost_workers() == 0
+
+    @pytest.mark.asyncio
+    async def test_housekeeping_loop_checks_workers_more_often(
+        self, services, monkeypatch
+    ):
+        import asyncio
+
+        from core import services as services_module
+
+        calls = {"housekeeping": 0, "lost": 0}
+
+        async def housekeeping(_):
+            calls["housekeeping"] += 1
+
+        async def lost(_):
+            calls["lost"] += 1
+
+        monkeypatch.setattr(services_module, "run_housekeeping", housekeeping)
+        monkeypatch.setattr(services_module, "check_lost_workers", lost)
+
+        task = asyncio.create_task(
+            services_module.housekeeping_loop(
+                services, interval=0.5, lost_worker_interval=0.05
+            )
+        )
+        await asyncio.sleep(0.6)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # 정리 작업은 시작 직후 + 0.5초 뒤, 워커 확인은 0.05초마다
+        assert calls["housekeeping"] in (1, 2)
+        assert calls["lost"] >= 5 * calls["housekeeping"]
