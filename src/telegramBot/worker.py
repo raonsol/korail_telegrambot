@@ -1,7 +1,11 @@
 """Subprocess 모드 예약 워커
 
-예약 명세는 명령행 인자가 아닌 **stdin(JSON)** 으로 전달받습니다.
-(argv로 넘기면 ``ps``로 코레일 비밀번호가 노출되기 때문)
+웹 서버(``SubprocessLauncher``)는 이 모듈을 미리 import해 둔 forkserver에서
+워커 프로세스를 복제하고 ``run_process(spec, log_path)``를 실행합니다.
+라이브러리를 예약마다 다시 불러오지 않아 메모리(예약당 22MB → 약 6MB)와 시작 시간이 줄어듭니다.
+예약 명세는 명령행 인자가 아닌 forkserver 소켓/파이프로 전달됩니다(``ps``로 비밀번호가 노출되지 않음).
+
+수동 실행 시에는 stdin(JSON)으로 명세를 받습니다.
 
     echo '{"reservation_id": ..., "korail_pw": ...}' | python -m telegramBot.worker
 """
@@ -51,28 +55,18 @@ def _handle_termination(signum, frame):
     sys.exit(0)
 
 
-def main() -> int:
+def _setup_logging(handlers, force: bool = False) -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler(
-                os.path.join(
-                    logs_dir, f'worker_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
-                )
-            ),
-            logging.StreamHandler(),
-        ],
+        handlers=handlers,
+        force=force,
     )
     signal.signal(signal.SIGTERM, _handle_termination)
     signal.signal(signal.SIGINT, _handle_termination)
 
-    try:
-        spec = read_spec()
-    except Exception as e:
-        logger.error(f"Invalid reservation spec: {e}")
-        return 2
 
+def _run(spec: dict) -> int:
     reporter = build_reporter(spec)
     try:
         result = run_reservation(spec, reporter)
@@ -82,6 +76,42 @@ def main() -> int:
         logger.exception("Reservation worker crashed")
         reporter.send("error", message=f"예약 중 오류 발생: {e}")
         return 1
+
+
+def run_process(spec: dict, log_path: str) -> None:
+    """forkserver에서 복제된 워커 프로세스의 진입점 (종료 코드는 main()과 같음)"""
+    # print/예외 출력까지 예약별 로그 파일로
+    fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    os.dup2(fd, 1)
+    os.dup2(fd, 2)
+    os.close(fd)
+    _setup_logging([logging.StreamHandler(sys.stderr)], force=True)
+
+    missing = [field for field in REQUIRED_FIELDS if field not in spec]
+    if missing:
+        logger.error(f"Invalid reservation spec: Missing fields: {missing}")
+        sys.exit(2)
+    sys.exit(_run(spec))
+
+
+def main() -> int:
+    _setup_logging(
+        [
+            logging.FileHandler(
+                os.path.join(
+                    logs_dir, f'worker_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+                )
+            ),
+            logging.StreamHandler(),
+        ]
+    )
+
+    try:
+        spec = read_spec()
+    except Exception as e:
+        logger.error(f"Invalid reservation spec: {e}")
+        return 2
+    return _run(spec)
 
 
 if __name__ == "__main__":

@@ -221,7 +221,7 @@ Docker 이미지는 멀티 스테이지 빌드로 웹앱을 함께 빌드하므�
 - 세션: 서버 저장 세션 + HttpOnly/SameSite 쿠키, 변경 요청에는 CSRF 토큰 필요
 - 코레일 비밀번호: 예약 실행을 위해 암호화(Fernet)하여 세션에만 보관, 로그아웃/만료 시 삭제
 - 로그인 제한: 전화번호당 10분에 3회 실패 시 잠금 (코레일은 5회 실패 시 계정 잠금)
-- subprocess 워커에는 stdin으로 전달하여 프로세스 목록(`ps`)에 비밀번호가 노출되지 않음
+- subprocess 워커에는 forkserver 소켓/파이프로 전달하여 프로세스 목록(`ps`)에 비밀번호가 노출되지 않음
 
 설계 배경은 [docs/webapp-design.md](docs/webapp-design.md)를 참고하세요.
 

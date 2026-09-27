@@ -36,7 +36,8 @@ Browser (PWA) ────▶ /api/*   ─▶ web/routes_*.py (session cookie + 
 #### Subprocess Mode (Default/Lightweight)
 - **Purpose**: Single-user deployments, development, testing
 - **Storage**: SQLite (`DATABASE_URL`, default `sqlite:///./korail_bot.db`) + in-memory conversation state (`userDict`)
-- **Background Tasks**: `python -m telegramBot.worker`, reservation spec passed via **stdin JSON** (never argv)
+- **Background Tasks**: one process per reservation, forked from a `multiprocessing` forkserver that preloads `telegramBot.worker` (~8MB PSS each instead of ~22MB for a fresh interpreter); entry `telegramBot.worker.run_process(spec, log_path)`; the spec travels over the forkserver socket/pipe (never argv)
+- **Restart**: workers are `daemon=True`, so they stop with the web server (a non-daemon worker would make every shutdown/reload wait for all reservations). On startup `ReservationService.abort_interrupted()` marks leftover subprocess reservations `error` and notifies users. Do not patch `multiprocessing` internals to keep workers alive
 - **Dependencies**: Minimal - only FastAPI web server
 - **Scaling**: Vertical scaling only (single server)
 
@@ -85,7 +86,7 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 - **reservations.py** `ReservationService`: start / cancel / list / worker events / stale expiry / 30-day purge
   - Issues `reservation_id` (uuid hex) and a per-reservation callback token (only its SHA-256 is stored)
   - Limits: `MAX_CONCURRENT_RESERVATIONS` (global), `MAX_RESERVATIONS_PER_USER` (admin exempt)
-- **launchers.py**: `SubprocessLauncher` (stdin spec, `process.wait()` thread → `handle_process_exit`), `CeleryLauncher` (encrypts Korail password for the broker), `create_launcher()` (falls back to subprocess if Redis is unreachable)
+- **launchers.py**: `SubprocessLauncher` (forkserver `Process`, sentinel wait thread → `handle_process_exit`; `start()` and exit-code reads share one lock because forkserver exit codes can be read from the pipe only once; cancel = SIGTERM to that PID only, never `killpg` - workers share the web server's process group), `CeleryLauncher` (encrypts Korail password for the broker), `create_launcher()` (falls back to subprocess if Redis is unreachable)
 - **runner.py**: Worker-side loop shared by subprocess and Celery (`CallbackReporter` → `/internal/events`). Must not import DB/web modules.
 - **auth.py** `AuthService`: web login (DB user check → throttle → Korail login), admin login, server-side sessions (token hash in DB, Fernet-encrypted Korail password), CSRF token
 - **users.py** `UserService`: user DB (replaces `ALLOW_LIST`), Telegram chat linking
@@ -102,7 +103,7 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 - **bot.py**: Conversation state machine only (`userDict`); calls `ReservationService`; `deliver()` sends results
   - Admin-only commands (after ADMINPW login in that chat): `/users`, `/adduser`, `/deluser`
 - **tasks.py**: `reservation_task(spec)`; Redis `reservation_task:{task_id}` guard against duplicate execution
-- **worker.py**: Subprocess entry point (reads spec from stdin)
+- **worker.py**: Subprocess entry point `run_process(spec, log_path)` (stdout/stderr → `logs/worker_{id8}.log`); `python -m telegramBot.worker` still reads a spec from stdin for manual runs
 - **korail_client.py** (pykorail): `ReserveHandler.login` (bool + `loginError` reason) / `reserve_single_attempt` / `close`
   - `create_korail_client()`: logs Korail server block responses (code -2000)
   - `FATAL_ERRORS` (`StationNotFoundError`, `PastDepartureError`): `reserve_single_attempt` returns `fatal: True` → `core/runner.py` reports `failed` immediately
@@ -159,7 +160,7 @@ subscribes = []    # chats receiving broadcast notifications
 ```
 
 Reservation status: `queued → running → success | failed | error | cancelled`.
-Housekeeping (every 10 min): RUNNING idle > 30 min or QUEUED > 24 h → `error`; terminal reservations older than `RESERVATION_RETENTION_DAYS` (default **30**) are deleted; expired sessions are deleted.
+On startup, active `subprocess` reservations → `error` (their workers stopped with the previous server). Housekeeping (every 10 min): RUNNING idle > 30 min or QUEUED > 24 h → `error`; terminal reservations older than `RESERVATION_RETENTION_DAYS` (default **30**) are deleted; expired sessions are deleted.
 
 The DB schema is created with `create_all` (no migrations yet). Add Alembic before changing existing columns.
 
@@ -241,7 +242,7 @@ The web app submits the same fields in one form (`ReservationRequest` validates 
 
 #### Subprocess Flow
 ```
-ReservationService -> SubprocessLauncher (Popen + stdin JSON) -> worker.py -> core/runner.py -> Korail API
+ReservationService -> SubprocessLauncher (forkserver Process, spec pickled over its socket) -> worker.run_process -> core/runner.py -> Korail API
                    <- POST /internal/events {reservation_id, token, status, ...}
 ```
 
@@ -434,7 +435,7 @@ DATAGOV_API_KEY       # 공공데이터포털 API 서비스키 (역 검색용)
 - `make korail-login-check` pipes `scripts/check_korail_login.py` into the running web container to diagnose ADMIN_KORAIL_ID/PW (env values as received, raw server response)
 - Station names are validated against Korail's station master before searching (`StationNotFoundError`)
 - Searching a past time raises `PastDepartureError`; `ReserveHandler._depart_after()` clamps today's past times to now (KST)
-- `TrainType` / `ReserveOption` are plain string constants (same values as korail2), safe for the worker spec JSON (subprocess stdin / Celery)
+- `TrainType` / `ReserveOption` are plain string constants (same values as korail2), safe for the worker spec (subprocess forkserver / Celery JSON)
 
 ### Optional Variables
 ```bash
@@ -473,7 +474,7 @@ ADMIN_KORAIL_PW       # Default Korail password for admin quick-login
 - **Configuration-based**: Clean separation without code duplication
 
 ### Capacity (measured 2026-09-26, see `docs/capacity-review.md`)
-- Subprocess mode is memory-bound: ~22MB PSS per concurrent reservation; CPU ~0.035% of a core each; the web server is not a bottleneck
+- Subprocess mode is memory-bound: ~8MB PSS per concurrent reservation since the forkserver switch (2026-09-27; was ~22MB); CPU ~0.04% of a core each; the web server is not a bottleneck
 - Celery prefork pre-allocates every slot (~35MB each); Celery threads (default since 2026-09-27) is ~0.3MB per reservation and cancels cooperatively via Redis (stops within one attempt interval)
 - The practical ceiling for both modes is Korail's per-IP request limit, not server resources
 - Keep worker imports light: `telegramBot/__init__.py` must not import `bot.py`
@@ -516,7 +517,7 @@ Removed: beat (no periodic tasks; add it back only if a beat_schedule is introdu
 5. **Configuration Over Detection**: Use configuration parameters instead of ImportError patterns
 6. **Resource Considerations**: Subprocess mode should remain lightweight, Celery mode (MQ pattern) can use more resources
 7. **Reservation identity**: Always use `reservation_id`; never key reservation state by chat_id/user. Workers must only talk to the web server via `/internal/events`.
-8. **Secrets**: Never pass the Korail password via argv or log it; subprocess gets stdin JSON, Celery gets `korail_pw_enc`.
+8. **Secrets**: Never pass the Korail password via argv or log it; subprocess gets it via the forkserver socket (process args), Celery gets `korail_pw_enc`.
 9. **Both channels**: Changes to reservation rules belong in `core/` (and `ReservationRequest` validation), not in `bot.py` or `web/`.
 10. **Docker Build Strategy**: **CRITICAL** - When code changes, ALWAYS use `docker compose up -d --build` to ensure containers get updated code. All services use `build: .` context and share the same codebase. Never manually rebuild individual services or use complex docker build/tag workflows. The correct process is:
    ```bash

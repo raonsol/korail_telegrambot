@@ -445,3 +445,21 @@ class TestStaticWebapp:
     async def test_no_path_traversal(self, client):
         response = await client.get("/app/..%2F..%2Fetc%2Fpasswd")
         assert "root:" not in response.text
+
+
+class TestLifespan:
+    @pytest.mark.asyncio
+    async def test_startup_aborts_reservations_interrupted_by_restart(
+        self, app, services, valid_request
+    ):
+        from core.schemas import Owner
+
+        owner = Owner(user_id="01012345678")
+        reservation = await services.reservations.start(
+            owner, valid_request, "010", "pw", origin="web"
+        )
+
+        async with app.router.lifespan_context(app):
+            r = services.reservations.get(reservation.id, owner)
+            assert r.status.value == "error"
+            assert "서버가 다시 시작" in r.error

@@ -8,7 +8,10 @@ Integration tests for subprocess execution mode
 import asyncio
 import io
 import json
+import os
+import subprocess
 import sys
+import threading
 import time
 from unittest.mock import Mock, patch
 
@@ -16,9 +19,11 @@ import httpx
 import pytest
 
 from core.db import Database
-from core.launchers import SubprocessLauncher
+from core.launchers import LOGS_DIR, SubprocessLauncher
 from core.schemas import Owner
 from core.services import build_services
+
+from . import fake_workers
 
 
 @pytest.fixture
@@ -45,41 +50,47 @@ async def _wait_until(predicate, timeout=10.0):
     return False
 
 
+def _process_alive(pid: int) -> bool:
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except FileNotFoundError:
+        return False
+
+
+def _log_path(reservation_id: str) -> str:
+    return os.path.join(LOGS_DIR, f"worker_{reservation_id[:8]}.log")
+
+
 @pytest.mark.integration
 @pytest.mark.subprocess
 class TestSubprocessLauncher:
-    def test_spec_is_sent_via_stdin_not_argv(self):
-        """비밀번호가 프로세스 인자(ps)에 노출되지 않아야 함"""
-        launcher = SubprocessLauncher()
-        spec = {"reservation_id": "abcd1234", "korail_pw": "secret-pw"}
+    def test_spec_is_not_in_argv_and_modules_are_preloaded(self):
+        """비밀번호가 프로세스 인자(ps)에 노출되지 않고, 워커 모듈은 forkserver에서 물려받음"""
+        done = threading.Event()
+        launcher = SubprocessLauncher(
+            on_exit=lambda rid, code: done.set(),
+            target=fake_workers.record_process_info,
+        )
+        spec = {"reservation_id": "argv0001", "korail_pw": "secret-pw"}
+        if os.path.exists(_log_path("argv0001")):
+            os.remove(_log_path("argv0001"))
 
-        with patch("core.launchers.subprocess.Popen") as mock_popen, patch(
-            "builtins.open"
-        ), patch("core.launchers.threading.Thread"):
-            process = Mock(pid=4321, stdin=io.StringIO())
-            process.stdin.close = Mock()
-            mock_popen.return_value = process
+        launcher.launch(spec)
+        assert done.wait(20)
 
-            ref = launcher.launch(spec)
-
-        assert ref == "4321"
-        argv = mock_popen.call_args[0][0]
-        assert "secret-pw" not in " ".join(argv)
-        assert argv[-2:] == ["-m", "telegramBot.worker"]
-        assert json.loads(process.stdin.getvalue()) == spec
+        with open(_log_path("argv0001")) as f:
+            info = json.load(f)
+        assert info["spec"] == spec
+        assert "secret-pw" not in info["cmdline"]
+        assert info["preloaded"] is True
 
     @pytest.mark.asyncio
     async def test_process_exit_without_report_marks_error(
         self, make_services, valid_request
     ):
-        # 명세만 읽고 결과 보고 없이 종료하는 워커
-        launcher = SubprocessLauncher(
-            command=[
-                sys.executable,
-                "-c",
-                "import sys, json; json.load(sys.stdin); sys.exit(3)",
-            ]
-        )
+        # 결과 보고 없이 종료하는 워커
+        launcher = SubprocessLauncher(target=fake_workers.exit_with_code)
         services = make_services(launcher)
 
         reservation = await services.reservations.start(
@@ -96,9 +107,7 @@ class TestSubprocessLauncher:
 
     @pytest.mark.asyncio
     async def test_cancel_terminates_process(self, make_services, valid_request):
-        launcher = SubprocessLauncher(
-            command=[sys.executable, "-c", "import time; time.sleep(30)"]
-        )
+        launcher = SubprocessLauncher(target=fake_workers.sleep_forever)
         services = make_services(launcher)
         exits = []
         original = launcher.on_exit
@@ -120,27 +129,122 @@ class TestSubprocessLauncher:
         r = services.reservations.get(reservation.id, owner)
         assert r.status.value == "cancelled"
 
+    def test_cancel_only_terminates_that_worker(self):
+        """워커는 웹 서버와 같은 프로세스 그룹이므로 그룹이 아닌 해당 프로세스만 종료"""
+        launcher = SubprocessLauncher(target=fake_workers.sleep_forever)
+        first = int(launcher.launch({"reservation_id": "keep0001"}))
+        second = int(launcher.launch({"reservation_id": "stop0001"}))
+        try:
+            launcher.cancel(str(second))
+            deadline = time.monotonic() + 10
+            while _process_alive(second) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert not _process_alive(second)
+            assert _process_alive(first)
+            assert launcher.running_count() == 1
+        finally:
+            launcher.cancel(str(first))
 
-# 코레일 대신 매번 "열차 없음"을 돌려주는 워커 (빠른 간격으로 실제 run_reservation 실행)
-ORPHAN_WORKER = """
-import json, sys
-import telegramBot.korail_client as kc
+    def test_cancel_unknown_pid_does_nothing(self):
+        """재시작 전 PID(다른 프로세스가 재사용했을 수 있음)는 종료하지 않음"""
+        sleeper = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"]
+        )
+        try:
+            SubprocessLauncher().cancel(str(sleeper.pid))
+            time.sleep(0.2)
+            assert sleeper.poll() is None
+        finally:
+            sleeper.kill()
+            sleeper.wait()
 
-class NoTrains:
-    def login(self, *a):
-        return True
-    def reserve_single_attempt(self, **kw):
-        return {"success": False, "result": None, "error": "No trains available"}
-    def close(self):
-        pass
+    def test_concurrent_launches_report_their_own_exit_codes(self):
+        """시작과 종료 코드 읽기가 겹쳐도 코드가 뒤섞이거나 255가 되지 않음"""
+        results = {}
+        lock = threading.Lock()
+        done = threading.Event()
+        count = 24
 
-kc.ReserveHandler = NoTrains
-from core.runner import build_reporter, run_reservation
+        def on_exit(rid, code):
+            with lock:
+                results[rid] = code
+                if len(results) == count:
+                    done.set()
 
-spec = json.loads(sys.stdin.read())
-result = run_reservation(spec, build_reporter(spec), interval=0.01, progress_every=5, max_attempts=100000)
-sys.exit(0 if result["status"] == "rejected" else 1)
+        launcher = SubprocessLauncher(
+            on_exit=on_exit, target=fake_workers.exit_with_code
+        )
+        threads = [
+            threading.Thread(
+                target=launcher.launch,
+                args=({"reservation_id": f"code{i:04d}", "code": 10 + i},),
+            )
+            for i in range(count)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert done.wait(30)
+        assert results == {f"code{i:04d}": 10 + i for i in range(count)}
+        assert launcher.running_count() == 0
+
+    def test_real_entrypoint_rejects_incomplete_spec(self):
+        """기본 진입점(telegramBot.worker.run_process): 로그 파일로 출력, 잘못된 명세는 코드 2"""
+        codes = []
+        done = threading.Event()
+        launcher = SubprocessLauncher(
+            on_exit=lambda rid, code: (codes.append(code), done.set())
+        )
+        launcher.launch({"reservation_id": "badspec1"})
+        assert done.wait(20)
+        assert codes == [2]
+        with open(_log_path("badspec1")) as f:
+            assert "Missing fields" in f.read()
+
+
+# 웹 서버 역할: 워커를 띄운 뒤 SIGTERM을 받으면 정상 종료 (uvicorn과 같은 종료 경로)
+SERVER_SCRIPT = """
+import signal, sys, time
+sys.path[:0] = {paths!r}
+from core.launchers import SubprocessLauncher
+from tests.integration import fake_workers
+
+launcher = SubprocessLauncher(target=fake_workers.sleep_forever)
+print(launcher.launch({{"reservation_id": "daemon01"}}), flush=True)
+signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+while True:
+    time.sleep(1)
 """
+
+
+@pytest.mark.integration
+@pytest.mark.subprocess
+class TestServerShutdown:
+    def test_workers_stop_with_server(self):
+        """워커는 daemon: 웹 서버가 종료되면 기다리지 않고 함께 종료"""
+        root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        paths = [os.path.join(root, "src"), root]
+        server = subprocess.Popen(
+            [sys.executable, "-c", SERVER_SCRIPT.format(paths=paths)],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            worker_pid = int(server.stdout.readline())
+            assert _process_alive(worker_pid)
+
+            server.terminate()
+            assert server.wait(timeout=10) == 0  # 워커가 끝날 때까지 기다리지 않음
+
+            deadline = time.monotonic() + 10
+            while _process_alive(worker_pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert not _process_alive(worker_pid)
+        finally:
+            server.kill()
+            server.wait()
 
 
 @pytest.mark.integration
@@ -148,7 +252,6 @@ sys.exit(0 if result["status"] == "rejected" else 1)
 class TestOrphanWorker:
     def test_worker_stops_when_server_forgets_reservation(self):
         """웹 서버 DB가 초기화돼 예약을 모르면(404) 워커가 스스로 종료"""
-        import threading
         from http.server import BaseHTTPRequestHandler, HTTPServer
 
         calls = []
@@ -173,7 +276,7 @@ class TestOrphanWorker:
         done = threading.Event()
         launcher = SubprocessLauncher(
             on_exit=lambda rid, code: (exits.append(code), done.set()),
-            command=[sys.executable, "-c", ORPHAN_WORKER],
+            target=fake_workers.run_with_no_trains,
         )
         try:
             launcher.launch(

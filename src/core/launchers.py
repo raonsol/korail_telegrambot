@@ -1,16 +1,14 @@
 """모드별 예약 실행기
 
-- SubprocessLauncher: ``python -m telegramBot.worker`` 프로세스 실행 (stdin으로 명세 전달)
+- SubprocessLauncher: 워커 모듈을 미리 불러 둔 forkserver에서 예약마다 프로세스를 복제
 - CeleryLauncher: ``reservation_task`` 를 ``task_id=reservation_id`` 로 발행
 """
 
-import json
 import logging
+import multiprocessing
 import os
-import signal
-import subprocess
-import sys
 import threading
+from multiprocessing.connection import wait as wait_ready
 from typing import Callable, Optional, Protocol
 
 from .crypto import CredentialVault
@@ -33,59 +31,92 @@ class Launcher(Protocol):
     def cancel(self, runner_ref: str) -> None: ...
 
 
+WorkerTarget = Callable[[dict, str], None]
+
+# forkserver가 미리 import하는 워커 모듈 (복제된 워커들이 메모리를 공유)
+WORKER_PRELOAD = ["telegramBot.worker"]
+
+
 class SubprocessLauncher:
+    """예약마다 워커 프로세스 1개 (multiprocessing forkserver)
+
+    - 워커 모듈을 한 번만 불러 두고 복제하므로 예약당 메모리가 약 6MB (새 인터프리터는 22MB)
+    - 명세는 forkserver 소켓/파이프로 전달 (argv에 비밀번호가 실리지 않음)
+    - 워커는 daemon 프로세스라 웹 서버가 종료되면 같이 종료됨
+      (중단된 예약은 다음 시작 때 ReservationService.abort_interrupted()가 정리)
+    """
+
     name = "subprocess"
 
     def __init__(
         self,
         on_exit: Optional[ExitCallback] = None,
-        command: Optional[list[str]] = None,
+        target: Optional[WorkerTarget] = None,
     ):
         # 프로세스가 종료되면 (reservation_id, returncode)로 호출 (별도 스레드에서)
         self.on_exit = on_exit
-        self.command = command or [sys.executable, "-m", "telegramBot.worker"]
+        # 워커 진입점 target(spec, log_path). 기본값 telegramBot.worker.run_process
+        self.target = target
+        self._ctx = multiprocessing.get_context("forkserver")
+        self._ctx.set_forkserver_preload(WORKER_PRELOAD)
+        # Process.start()는 다른 자식의 종료 코드를 읽고(_cleanup), 종료 코드는 파이프에서
+        # 한 번만 읽을 수 있다. 시작과 종료 코드 확인을 이 잠금으로 직렬화해
+        # 두 스레드가 같은 파이프를 읽다가 코드가 255로 바뀌는 경쟁을 막는다
+        self._lock = threading.Lock()
+        self._processes: dict[int, multiprocessing.process.BaseProcess] = {}
+
+    def _worker_target(self) -> WorkerTarget:
+        if self.target is None:
+            from telegramBot.worker import run_process
+
+            self.target = run_process
+        return self.target
 
     def launch(self, spec: dict) -> str:
         os.makedirs(LOGS_DIR, exist_ok=True)
-        log_path = os.path.join(LOGS_DIR, f"worker_{spec['reservation_id'][:8]}.log")
-        log_file = open(log_path, "a")
-
-        process = subprocess.Popen(
-            self.command,
-            stdin=subprocess.PIPE,
-            stdout=log_file,
-            stderr=log_file,
-            text=True,
-            cwd=SRC_DIR,
-            start_new_session=True,  # 취소 시 프로세스 그룹 전체 종료
-        )
-        try:
-            process.stdin.write(json.dumps(spec))
-            process.stdin.close()
-        except Exception:
-            process.kill()
-            log_file.close()
-            raise
-
         reservation_id = spec["reservation_id"]
+        log_path = os.path.join(LOGS_DIR, f"worker_{reservation_id[:8]}.log")
 
-        def _wait():
-            returncode = process.wait()
-            log_file.close()
-            if self.on_exit:
-                try:
-                    self.on_exit(reservation_id, returncode)
-                except Exception as e:
-                    logger.error(f"on_exit callback failed: {e}")
+        process = self._ctx.Process(
+            target=self._worker_target(),
+            args=(spec, log_path),
+            name=f"reservation-{reservation_id[:8]}",
+            daemon=True,
+        )
+        with self._lock:
+            process.start()
+            pid = process.pid
+            self._processes[pid] = process
 
-        threading.Thread(target=_wait, daemon=True).start()
-        return str(process.pid)
+        threading.Thread(
+            target=self._wait, args=(reservation_id, pid, process), daemon=True
+        ).start()
+        return str(pid)
+
+    def _wait(self, reservation_id: str, pid: int, process) -> None:
+        wait_ready([process.sentinel])  # 종료될 때까지 대기 (파이프는 읽지 않음)
+        with self._lock:
+            returncode = process.exitcode
+            self._processes.pop(pid, None)
+            process.close()
+        if self.on_exit:
+            try:
+                self.on_exit(reservation_id, returncode)
+            except Exception as e:
+                logger.error(f"on_exit callback failed: {e}")
 
     def cancel(self, runner_ref: str) -> None:
-        try:
-            os.killpg(os.getpgid(int(runner_ref)), signal.SIGTERM)
-        except ProcessLookupError:
-            logger.info(f"Process {runner_ref} already terminated")
+        with self._lock:
+            process = self._processes.get(int(runner_ref))
+            if process is None:
+                # 이미 끝났거나 이 서버가 띄운 워커가 아님 (재시작 전 PID는 재사용됐을 수 있음)
+                logger.info(f"Process {runner_ref} is not running")
+                return
+            process.terminate()  # 해당 워커에만 SIGTERM (웹 서버와 같은 프로세스 그룹)
+
+    def running_count(self) -> int:
+        with self._lock:
+            return len(self._processes)
 
 
 class CeleryLauncher:

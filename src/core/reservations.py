@@ -47,6 +47,11 @@ WORKER_STATUS_MAP = {
 }
 
 
+INTERRUPTED_MESSAGE = (
+    "서버가 다시 시작되어 예약이 중단되었습니다. 예약을 다시 시작해 주세요."
+)
+
+
 class ReservationService:
     def __init__(
         self,
@@ -162,7 +167,7 @@ class ReservationService:
         if self._loop is None:
             self.bind_loop()
 
-        # DB 기록과 프로세스 실행(Popen)/Celery 발행은 블로킹 작업이라 스레드에서 수행
+        # DB 기록과 워커 프로세스 시작/Celery 발행은 블로킹 작업이라 스레드에서 수행
         # (이벤트 루프에서 직접 하면 동시 요청이 몰릴 때 다른 요청까지 멈춤)
         out = await asyncio.to_thread(
             self._start_blocking, owner, request, korail_id, korail_pw, origin, chat_id
@@ -423,6 +428,30 @@ class ReservationService:
                 r.id, "워커 응답이 없어 예약이 중단되었습니다."
             ):
                 count += 1
+        return count
+
+    async def abort_interrupted(self) -> int:
+        """서버 재시작으로 멈춘 subprocess 예약을 오류 처리 (웹 서버 시작 시 1회)
+
+        subprocess 워커는 웹 서버 프로세스와 함께 종료되므로(daemon), 시작 시점에
+        진행 중으로 남아 있는 subprocess 예약은 더 이상 실행되지 않는다.
+        혹시 살아남은 워커(웹 서버가 강제 종료된 경우)는 다음 보고가 거부돼 스스로 멈춘다.
+        """
+        with self.db.session() as s:
+            ids = list(
+                s.scalars(
+                    select(Reservation.id).where(
+                        Reservation.runner == SubprocessLauncher.name,
+                        Reservation.status.in_(ACTIVE_STATUSES),
+                    )
+                )
+            )
+        count = 0
+        for reservation_id in ids:
+            if await self._fail_if_active(reservation_id, INTERRUPTED_MESSAGE):
+                count += 1
+        if count:
+            logger.warning(f"Marked {count} reservations interrupted by restart")
         return count
 
     def purge_history(self) -> int:

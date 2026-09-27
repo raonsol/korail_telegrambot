@@ -324,6 +324,36 @@ class TestHousekeeping:
         assert set(fake_launcher.cancelled) == {"ref-1", "ref-3"}
 
     @pytest.mark.asyncio
+    async def test_abort_interrupted_subprocess_reservations(
+        self, services, fake_launcher, valid_request, events
+    ):
+        """subprocess 워커는 웹 서버와 함께 종료되므로 시작 시 남은 예약을 오류 처리"""
+        from core.reservations import INTERRUPTED_MESSAGE
+
+        queued = await _start(services, request=valid_request)
+        running = await _start(services, OTHER, request=valid_request)
+        celery = await _start(services, request=valid_request)
+        done = await _start(services, request=valid_request)
+        self._age(services, running.id, status="running")
+        self._age(services, celery.id, status="running", runner="celery")
+        self._age(services, done.id, status="success")
+        events.reset_mock()
+
+        assert await services.reservations.abort_interrupted() == 2
+
+        for r, owner in ((queued, USER), (running, OTHER)):
+            out = services.reservations.get(r.id, owner)
+            assert out.status.value == "error"
+            assert out.error == INTERRUPTED_MESSAGE
+        # Celery 워커는 웹 서버와 별개로 계속 실행됨
+        assert services.reservations.get(celery.id, USER).status.value == "running"
+        assert services.reservations.get(done.id, USER).status.value == "success"
+        assert events.await_count == 2
+        # 이미 종료된 워커이므로 프로세스 종료를 시도하지 않음
+        assert fake_launcher.cancelled == []
+        assert await services.reservations.abort_interrupted() == 0
+
+    @pytest.mark.asyncio
     async def test_purge_history_after_30_days(self, services, valid_request):
         old = await _start(services, request=valid_request)
         recent = await _start(services, request=valid_request)

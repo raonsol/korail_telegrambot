@@ -72,10 +72,13 @@ def create_app(
                 async with bot.app:
                     await bot.app.start()
                     logger.info("Bot application started")
+                    # 알림 채널(텔레그램)이 준비된 뒤 정리해야 사용자에게 전달됨
+                    await services.reservations.abort_interrupted()
                     yield
                     logger.info("Shutting down bot application")
                     await bot.app.stop()
             else:
+                await services.reservations.abort_interrupted()
                 yield
         finally:
             if housekeeping:
