@@ -263,7 +263,7 @@ flowchart TB
 | 2026-09-27 | threads 풀에서 취소·시간 제한이 동작하지 않음 | 취소 후 최대 1분 계속 조회, 최대 실행 시간 없음 (5절) | `fdbfb29` |
 | 2026-09-27 | 브로커 `visibility_timeout`(1시간)이 태스크 시간 제한(1시간)과 같음 | 오래 실행된 예약이 다른 워커에 재전달돼 중복 실행될 수 있음 | `fdbfb29` |
 | 2026-09-27 | `reservation_task:{id}` 키에 만료 시간이 없음, 태스크마다 Redis 클라이언트 생성 | Redis에 키가 계속 쌓이고 태스크마다 연결 풀을 새로 만듦 | `fdbfb29` |
-| 2026-09-27 | Subprocess 워커마다 새 Python이 같은 라이브러리를 다시 import | 예약 1건당 22MB, 워커 시작마다 CPU 0.2~0.3초 → forkserver 복제로 8MB, 시작 비용 제거 | 이 문서 forkserver 전환 커밋 |
+| 2026-09-27 | Subprocess 워커마다 새 Python이 같은 라이브러리를 다시 import | 예약 1건당 22MB, 워커 시작마다 CPU 0.2~0.3초 → forkserver 복제로 8MB, 시작 비용 제거 | `abdf85d` |
 
 ## 8. 남은 개선 과제 (2026-09-26 기준)
 
