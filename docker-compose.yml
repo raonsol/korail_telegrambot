@@ -116,28 +116,6 @@ services:
     profiles:
       - celery  # Only start with Celery profile
 
-  # Celery Beat - 스케줄링 (필요시)
-  beat:
-    build: .
-    command: celery -A telegramBot.tasks beat --loglevel=info
-    env_file:
-      - .env
-    environment:
-      - TZ=Asia/Seoul
-      - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql://korail:password@postgres:5432/korail_bot
-      - CELERY_BROKER=redis://redis:6379
-      - CELERY_RESULT_BACKEND=redis://redis:6379
-      - USE_CELERY=true
-      - CELERY_WORKER_NAME=beat
-    depends_on:
-      - redis
-      - postgres
-    networks:
-      - korail_network
-    profiles:
-      - celery  # Only start with Celery profile
-
   # Flower - Celery 모니터링
   flower:
     build: .

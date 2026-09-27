@@ -119,7 +119,7 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 
 #### Profile-Based Service Management
 - **`subprocess` Profile**: `web` only (SQLite at `./data`)
-- **`celery` Profile**: `web_celery`, `redis`, `postgres`, `worker` (+ `beat`, `flower`)
+- **`celery` Profile**: `web_celery`, `redis`, `postgres`, `worker` (+ `flower`)
 
 #### Container Configuration
 - **Network**: Uses `korail_prod_network` bridge network
@@ -136,13 +136,12 @@ web_celery: FastAPI application (Celery mode), INTERNAL_CALLBACK_URL=http://web_
 redis: Message broker and result backend (REQUIRED for MQ) - internal only (no host port), healthcheck gates web_celery/worker
 postgres: Users / sessions / reservation history (REQUIRED for MQ web_celery) - internal only (no host port), healthcheck gates web_celery
 worker: Celery worker (threads pool by default, --pool=${CELERY_POOL:-threads}) (REQUIRED for MQ)
-beat: MQ scheduler (NOT NEEDED - no periodic tasks defined)
 flower: Web-based monitoring (OPTIONAL - for debugging)
 ```
 
 **Important Notes:**
 - **PostgreSQL**: Now used by `web_celery` (healthcheck-gated). Workers do not access the DB.
-- **Beat**: No periodic tasks are defined (housekeeping runs inside the web process). Can be removed.
+- **Beat**: Removed (2026-09-27). No periodic tasks are defined; housekeeping runs inside the web process. `docker-compose-up-mq` (`--remove-orphans`) removes an old `beat` container.
 - **Flower**: Only needed during development/debugging to monitor MQ tasks.
 
 ### State Management Architecture
@@ -501,16 +500,11 @@ Always run `make lint` before committing changes to maintain code formatting con
 
 ## Service Optimization Recommendations
 
-### Services That Can Be Removed (MQ Profile)
-1. **Beat (`beat`)**: No periodic tasks defined in the application (housekeeping runs in the web process).
-   - Remove to save ~100MB RAM
-   - Only add back if implementing scheduled tasks
-
-### Minimal MQ Profile (Recommended)
+### MQ Profile Services
 ```yaml
 Services needed: web_celery, redis, postgres, worker
-Optional: flower (for debugging only)
-Remove: beat
+Optional: flower (for debugging only; published on 5555 without auth - keep it off public networks)
+Removed: beat (no periodic tasks; add it back only if a beat_schedule is introduced)
 ```
 
 ## Important Notes for AI Assistant

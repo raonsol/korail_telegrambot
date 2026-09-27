@@ -209,7 +209,6 @@ flowchart TB
         REDIS[("redis 컨테이너<br/>브로커 · 중복 실행 가드")]
         WK["worker 컨테이너<br/>Celery threads × concurrency<br/>core/runner.py"]
         FLOWER["flower (선택)"]
-        BEAT["beat (미사용)"]
     end
 
     KORAIL[("코레일 API")]
@@ -228,7 +227,6 @@ flowchart TB
     NOTI -- "메시지" --> TG
     NOTI -- "SSE · 푸시" --> PWA
     FLOWER -.-> REDIS
-    BEAT -.-> REDIS
 ```
 
 ## 7. 검토 중 발견해 수정한 문제
