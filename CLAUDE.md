@@ -531,6 +531,8 @@ ADMIN_KORAIL_PW       # Default Korail password for admin quick-login
 
 Always run `make lint` before committing changes to maintain code formatting consistency.
 
+Write pull request titles and descriptions in Korean, ending sentences in noun form (명사형 종결, e.g. "~추가", "~변경", "~확인", "~함"), not polite verb endings ("~합니다", "~한다").
+
 ## Service Optimization Recommendations
 
 ### MQ Profile Services
