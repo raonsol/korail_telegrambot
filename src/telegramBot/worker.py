@@ -75,12 +75,12 @@ def _setup_logging(handlers, force: bool = False) -> None:
 def _run(spec: dict, result_path: str | None = None) -> int:
     reporter = build_reporter(spec)
 
-    def save_result(train_info: str, attempts: int) -> None:
+    def save_result(train_info: str, attempts: int, waiting: bool = False) -> None:
         # 성공 보고 전에 결과를 남겨 둠: 보고가 끝내 전달되지 않거나 이 프로세스가
         # 종료돼도(웹 서버 재시작) 웹 서버가 이 파일로 성공을 복구함
         if result_path:
             try:
-                write_result_file(result_path, train_info, attempts)
+                write_result_file(result_path, train_info, attempts, waiting)
             except OSError as e:
                 logger.error(f"Failed to save reservation result: {e}")
 

@@ -25,6 +25,15 @@ KST = timezone(timedelta(hours=9))
 # 재시도해도 결과가 바뀌지 않는 오류 (역 이름 오류, 이미 지난 날짜)
 FATAL_ERRORS = (StationNotFoundError, PastDepartureError)
 
+# 좌석이 없을 때 예약대기를 신청하는 좌석 옵션
+# 코레일 조회 결과의 예약대기 여부(h_wait_rsv_flg)는 일반실 기준이므로 일반실 대기만 신청하고,
+# 특실만 원하는 경우(SPECIAL_ONLY)는 대기를 걸지 않는다
+WAITLIST_OPTIONS = (
+    ReserveOption.GENERAL_FIRST,
+    ReserveOption.GENERAL_ONLY,
+    ReserveOption.SPECIAL_FIRST,
+)
+
 # 코레일 서버가 매크로/비정상 환경으로 판단해 요청을 차단할 때 주는 응답 코드
 # 응답 형식이 {"code": -2000, "id": ..., "message": ...} 로 일반 API 응답과 다름
 # pykorail 0.2.1 부터 HTTP 4xx·5xx(차단은 403)이면 HttpStatusError 로 올라오고 id 는 버려짐
@@ -207,9 +216,13 @@ class ReserveHandler:
             special (ReserveOption, optional): 예약 옵션. 기본값은 ReserveOption.GENERAL_FIRST.
             maxDepTime (str, optional): 최대 출발 시간, 형식은 'HHMM'. 기본값은 "2400".
 
+        좌석이 있는 열차를 먼저 예약하고, 범위 안의 열차가 모두 매진이면 예약대기가 열린
+        가장 이른 열차에 (일반실) 예약대기를 신청한다 (특실만 예약 옵션 제외).
+
         Returns:
             dict: {'success': bool, 'result': reservation_object_or_none, 'error': str_or_none}
                 재시도가 무의미한 오류(역 이름 오류, 지난 날짜)이면 'fatal': True 가 추가됨
+                예약대기를 신청했으면 'waiting': True 가 추가됨
         """
         self._update_reserve_info(
             depDate, srcLocate, dstLocate, depTime, trainType, special, maxDepTime
@@ -225,32 +238,20 @@ class ReserveHandler:
                     "error": "No trains available",
                 }
 
-            # Try to reserve the first available train
-            for train in trains:
+            # 좌석이 있는 열차부터 (출발 시각 순)
+            for train in (t for t in trains if t.has_seat()):
                 print(f"열차 발견 : {train} <- 에 대한 예약을 시작합니다.")
-                try:
-                    reservation = self._try_reserve(train)
-                    if reservation:
-                        self.reserveInfo["reserveSuc"] = True
-                        return {"success": True, "result": reservation, "error": None}
-                except SoldOutError:
-                    print("예약을 놓쳤습니다. 다음 열차를 찾습니다.")
-                    continue
-                except Exception as e:
-                    error_str = str(e)
-                    # Check for duplicate reservation (which is actually success)
-                    if (
-                        "동일한 예약 내역이 있으니" in error_str
-                        or "WRR800029" in error_str
-                    ):
-                        self.reserveInfo["reserveSuc"] = True
-                        return {
-                            "success": True,
-                            "result": "duplicate_reservation",
-                            "error": None,
-                        }
-                    # Re-raise other exceptions
-                    raise
+                result = self._attempt(train, self._try_reserve)
+                if result:
+                    return result
+
+            # 모두 매진이면 예약대기가 열린 열차에 대기 신청
+            if self.reserveInfo["special"] in WAITLIST_OPTIONS:
+                for train in (t for t in trains if self._waitlist_open(t)):
+                    print(f"예약대기 가능 : {train} <- 에 예약대기를 신청합니다.")
+                    result = self._attempt(train, self._try_waitlist)
+                    if result:
+                        return result
 
             return {"success": False, "result": None, "error": "All trains sold out"}
 
@@ -267,6 +268,38 @@ class ReserveHandler:
                     "error": None,
                 }
             return {"success": False, "result": None, "error": error_str}
+
+    def _attempt(self, train, reserve):
+        """열차 하나 예약 시도. 성공하면 결과 dict, 매진이면 None"""
+        try:
+            reservation = reserve(train)
+        except SoldOutError:
+            print("예약을 놓쳤습니다. 다음 열차를 찾습니다.")
+            return None
+        except Exception as e:
+            error_str = str(e)
+            # 이미 같은 예약(또는 예약대기)이 있음 - 사실상 성공
+            if "동일한 예약 내역이 있으니" in error_str or "WRR800029" in error_str:
+                self.reserveInfo["reserveSuc"] = True
+                return {
+                    "success": True,
+                    "result": "duplicate_reservation",
+                    "error": None,
+                }
+            raise
+        if not reservation:
+            return None
+        self.reserveInfo["reserveSuc"] = True
+        return {
+            "success": True,
+            "result": reservation,
+            "error": None,
+            "waiting": getattr(reservation, "is_waiting", False) is True,
+        }
+
+    @staticmethod
+    def _waitlist_open(train):
+        return not train.has_seat() and train.has_waiting_list()
 
     def _update_reserve_info(
         self, depDate, srcLocate, dstLocate, depTime, trainType, special, maxDepTime
@@ -290,6 +323,8 @@ class ReserveHandler:
                 self.reserveInfo["dstLocate"],
                 depart_after=self._depart_after(),
                 train_type=self.reserveInfo["trainType"],
+                # 매진이어도 예약대기가 열린 열차는 결과에 포함 (reserve_single_attempt 참고)
+                include_waiting_list=True,
             )
         except NoResultsError:
             return []
@@ -321,3 +356,12 @@ class ReserveHandler:
         except SoldOutError:
             print("예약을 놓쳤습니다. 다음 열차를 찾습니다.")
             return None
+
+    def _try_waitlist(self, train):
+        """좌석이 없는 열차에 일반실 예약대기 신청 (pykorail 이 좌석 없는 열차는 대기로 예약)
+
+        조회 결과의 대기 가능 여부가 일반실 기준이므로 옵션과 관계없이 일반실로 신청한다.
+        """
+        return self.korail_client.reservations.create(
+            train, option=ReserveOption.GENERAL_ONLY
+        )

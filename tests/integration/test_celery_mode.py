@@ -579,6 +579,7 @@ class TestUnreportedSuccessCelery:
         assert launcher.recover_success("task-res") == {
             "train_info": "KTX 101",
             "attempts": 9,
+            "waiting": False,
         }
         mock_redis_client.hset("reservation_task:other", "status", "running")
         assert launcher.recover_success("other") is None

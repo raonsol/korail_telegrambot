@@ -27,6 +27,8 @@ export interface Reservation {
   seat_type_label: string
   attempts: number
   result_text: string | null
+  /** 좌석 대신 예약대기를 신청함 (status === 'success') */
+  waitlisted: boolean
   error: string | null
   created_at: string
   updated_at: string

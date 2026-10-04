@@ -171,6 +171,8 @@ class ReservationOut(BaseModel):
     seat_type_label: str
     attempts: int
     result_text: Optional[str] = None
+    # 좌석 대신 예약대기를 신청함 (status=success)
+    waitlisted: bool = False
     error: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -203,6 +205,7 @@ class ReservationOut(BaseModel):
             seat_type_label=SEAT_TYPE_LABELS.get(r.seat_type, r.seat_type),
             attempts=r.attempts or 0,
             result_text=r.result_text,
+            waitlisted=bool(r.waitlisted),
             error=r.error,
             created_at=r.created_at,
             updated_at=r.updated_at,
@@ -220,6 +223,8 @@ class WorkerEvent(BaseModel):
     attempts: Optional[int] = None
     message: Optional[str] = None
     train_info: Optional[str] = None
+    # success 일 때 좌석이 아니라 예약대기를 신청했는지
+    waiting: bool = False
 
 
 class Owner(BaseModel):

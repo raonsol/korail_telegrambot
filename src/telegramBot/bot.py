@@ -1036,7 +1036,12 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
         r = event.reservation
         status = r.status
         if status == ReservationStatus.SUCCESS:
-            msg = Messages.Info.RESERVE_SUCCESS.format(reserveInfo=r.result_text or "")
+            template = (
+                Messages.Info.WAITLIST_SUCCESS
+                if r.waitlisted
+                else Messages.Info.RESERVE_SUCCESS
+            )
+            msg = template.format(reserveInfo=r.result_text or "")
         elif status == ReservationStatus.FAILED:
             msg = Messages.Error.RESERVE_FAILED
         elif status == ReservationStatus.ERROR:

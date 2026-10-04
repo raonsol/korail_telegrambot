@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base, utcnow
@@ -73,6 +73,10 @@ class Reservation(Base):
     callback_token_hash: Mapped[str] = mapped_column(String(64))
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     result_text: Mapped[Optional[str]] = mapped_column(Text)
+    # 좌석 대신 예약대기를 신청해 성공한 경우 (결제 기한 없음, 좌석 배정 시 코레일이 알림)
+    waitlisted: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
     error: Mapped[Optional[str]] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

@@ -353,6 +353,7 @@ class ReservationService:
                 r.attempts = max(r.attempts or 0, event.attempts)
             if new_status == ReservationStatus.SUCCESS:
                 r.result_text = event.train_info or event.message
+                r.waitlisted = event.waiting
                 r.error = None
                 r.finished_at = r.updated_at
             elif new_status in (ReservationStatus.FAILED, ReservationStatus.ERROR):
@@ -395,12 +396,19 @@ class ReservationService:
                 result = None
             if result:
                 return await self._record_success(
-                    reservation_id, result["train_info"], result.get("attempts")
+                    reservation_id,
+                    result["train_info"],
+                    result.get("attempts"),
+                    waiting=result.get("waiting") is True,
                 )
         return await self._fail_if_active(reservation_id, message)
 
     async def _record_success(
-        self, reservation_id: str, train_info: str, attempts: Optional[int]
+        self,
+        reservation_id: str,
+        train_info: str,
+        attempts: Optional[int],
+        waiting: bool = False,
     ) -> bool:
         with self.db.session() as s:
             r = s.get(Reservation, reservation_id)
@@ -412,6 +420,7 @@ class ReservationService:
             previous = r.status
             r.status = ReservationStatus.SUCCESS.value
             r.result_text = train_info
+            r.waitlisted = waiting
             r.error = None
             if attempts is not None:
                 r.attempts = max(r.attempts or 0, attempts)

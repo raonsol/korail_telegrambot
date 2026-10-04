@@ -198,7 +198,8 @@ export function NewReservationPage() {
             </dl>
             <p className="muted small">
               예약에 성공하면 알림을 보내드립니다. 결제는 예약 후 20분 안에 코레일에서 직접 해야
-              합니다.
+              합니다. 범위 안의 열차가 모두 매진이고 예약대기가 열려 있으면 일반실 예약대기를
+              신청합니다(특실만 예약 제외).
             </p>
             <ErrorBox error={create.error} />
             <div className="sheet-actions">

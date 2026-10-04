@@ -112,6 +112,7 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 - **korail_client.py** (pykorail): `ReserveHandler.login` (bool + `loginError` reason) / `reserve_single_attempt` / `close`
   - `create_korail_client()`: logs Korail server block responses (code -2000)
   - `FATAL_ERRORS` (`StationNotFoundError`, `PastDepartureError`): `reserve_single_attempt` returns `fatal: True` → `core/runner.py` reports `failed` immediately
+  - **Waitlist (예약대기)**: search uses `include_waiting_list=True`. Each attempt first reserves a train with seats (departure order); only if every train in range is sold out does it register a waitlist on the earliest train with `has_waiting_list()` (no seats + flag 9) and return `waiting: True`. Korail's flag is general-class only, so the waitlist is always requested with `GENERAL_ONLY` (also for `special` = SPECIAL_FIRST) and `special_only` never waitlists. pykorail's `create()` registers a waitlist only for trains without any seat
 - **messages.py**, **calendar_keyboard.py**, **time_keyboard.py**, **station_keyboard.py**
 
 #### Web App (`webapp/`)
@@ -156,7 +157,7 @@ flower: Web-based monitoring (OPTIONAL - for debugging)
 # DB (SQLAlchemy, core/models.py) - both modes
 users              # id = account_key (phone digits; admin Korail account may be email/membership no.), is_active, telegram_chat_id, telegram_notify, korail_device_profile, korail_android_id (unique)
 web_sessions       # id = sha256(cookie token), encrypted Korail password, csrf_token, expires_at
-reservations       # id = reservation_id, owner_id, origin, chat_id, status, runner_ref, attempts, ...
+reservations       # id = reservation_id, owner_id, origin, chat_id, status, runner_ref, attempts, waitlisted, ...
 push_subscriptions # Web Push endpoints per user
 
 # In-memory (bot.py) - Telegram conversation only
@@ -165,6 +166,7 @@ subscribes = []    # chats receiving broadcast notifications
 ```
 
 Reservation status: `queued → running → success | failed | error | cancelled`.
+A waitlist registration is `success` with `waitlisted=true` (worker reports `waiting: true`; also kept in the unreported-success result file / Redis state). Notifications and the web UI then say "예약대기 신청" instead of "20분 안에 결제" - check `waitlisted` wherever success is presented.
 On startup, active `subprocess` reservations → `error` (their workers stopped with the previous server). Celery mode: lost-worker check every 60s (see Celery Mode). Housekeeping (every 10 min): RUNNING idle > 30 min or QUEUED > 24 h → `error`; terminal reservations older than `RESERVATION_RETENTION_DAYS` (default **30**) are deleted; expired sessions are deleted.
 
 The DB schema is managed by Alembic (`src/core/migrations`, `alembic.ini` at the repo root). The web server runs `Database.migrate()` on startup:

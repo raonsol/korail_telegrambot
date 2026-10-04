@@ -103,7 +103,10 @@ def push_message(event: ReservationEvent) -> Optional[dict]:
     route = f"{r.src_station} → {r.dst_station}"
     date = f"{r.dep_date[4:6]}/{r.dep_date[6:]}"
     status = r.status
-    if status == ReservationStatus.SUCCESS:
+    if status == ReservationStatus.SUCCESS and r.waitlisted:
+        title = "🕒 예약대기 신청 완료"
+        body = f"{date} {route}\n좌석이 배정되면 코레일이 알려드립니다.".strip()
+    elif status == ReservationStatus.SUCCESS:
         title = "🚄 예약 성공! 20분 안에 결제하세요"
         body = f"{date} {route}\n{r.result_text or ''}".strip()
     elif status == ReservationStatus.FAILED:

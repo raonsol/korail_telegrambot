@@ -8,7 +8,7 @@ from pykorail.device import PROFILES_BY_ID
 from sqlalchemy import create_engine, inspect, text
 
 from core.db import Database
-from core.models import User
+from core.models import Reservation, User
 from core.runner import run_reservation
 from core.schemas import Owner
 from core.users import ADMIN_ACCOUNT_NAME
@@ -203,7 +203,8 @@ class TestKorailClientDevice:
         assert [c.args for c in create.call_args_list] == [(device,), (device,)]
 
 
-LEGACY_USERS_DDL = """
+LEGACY_DDL = [
+    """
 CREATE TABLE users (
     id VARCHAR(20) NOT NULL PRIMARY KEY,
     name VARCHAR(50),
@@ -213,7 +214,45 @@ CREATE TABLE users (
     created_at DATETIME NOT NULL,
     last_login_at DATETIME
 )
-"""
+""",
+    """
+CREATE TABLE reservations (
+    id VARCHAR(32) NOT NULL PRIMARY KEY,
+    owner_id VARCHAR(20) NOT NULL,
+    origin VARCHAR(10) NOT NULL,
+    chat_id BIGINT,
+    korail_id VARCHAR(50) NOT NULL,
+    dep_date VARCHAR(8) NOT NULL,
+    src_station VARCHAR(30) NOT NULL,
+    dst_station VARCHAR(30) NOT NULL,
+    dep_time VARCHAR(4) NOT NULL,
+    max_dep_time VARCHAR(4) NOT NULL,
+    train_type VARCHAR(10) NOT NULL,
+    seat_type VARCHAR(20) NOT NULL,
+    status VARCHAR(12) NOT NULL,
+    runner VARCHAR(12) NOT NULL,
+    runner_ref VARCHAR(64),
+    callback_token_hash VARCHAR(64) NOT NULL,
+    attempts INTEGER NOT NULL,
+    result_text TEXT,
+    error TEXT,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    finished_at DATETIME
+)
+""",
+]
+
+
+def _head_revision():
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    from core.db import MIGRATIONS_DIR
+
+    config = Config()
+    config.set_main_option("script_location", MIGRATIONS_DIR)
+    return ScriptDirectory.from_config(config).get_current_head()
 
 
 class TestMigration:
@@ -227,7 +266,7 @@ class TestMigration:
                     text("SELECT version_num FROM alembic_version")
                 ).scalar()
                 columns = {c["name"] for c in inspect(conn).get_columns("users")}
-            assert version == "0003"
+            assert version == _head_revision()
             assert {"korail_device_profile", "korail_android_id"} <= columns
         finally:
             db.dispose()
@@ -237,11 +276,20 @@ class TestMigration:
         url = f"sqlite:///{tmp_path}/legacy.db"
         engine = create_engine(url)
         with engine.begin() as conn:
-            conn.execute(text(LEGACY_USERS_DDL))
+            for ddl in LEGACY_DDL:
+                conn.execute(text(ddl))
             conn.execute(
                 text(
                     "INSERT INTO users (id, is_active, telegram_notify, created_at) "
                     "VALUES ('01012345678', 1, 1, '2026-01-01 00:00:00')"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO reservations VALUES ('r1', '01012345678', 'web', "
+                    "NULL, '010', '20260101', '서울', '부산', '0900', '1200', 'KTX', "
+                    "'general', 'success', 'subprocess', NULL, 'h', 3, 'KTX 101', "
+                    "NULL, '2026-01-01', '2026-01-01', '2026-01-01')"
                 )
             )
         engine.dispose()
@@ -261,13 +309,14 @@ class TestMigration:
                     for c in inspect(conn).get_columns("users")
                     if c["name"] == "id"
                 )
-            assert version == "0003"
+            assert version == _head_revision()
             assert indexes["ix_users_korail_android_id"]
             assert id_type.length == 50
             with db.session() as s:
                 user = s.get(User, "01012345678")
                 assert user.is_active
                 assert user.korail_android_id is None
+                assert s.get(Reservation, "r1").waitlisted is False
         finally:
             db.dispose()
 
