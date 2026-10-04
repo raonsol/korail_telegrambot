@@ -5,6 +5,7 @@
 주의: 실행할 때마다 로그인 1회로 집계됨 (비밀번호 5회 연속 오류 시 로그인 제한)
 """
 
+import json
 import os
 from telegramBot.korail_client import create_korail_client
 
@@ -21,20 +22,29 @@ print(
 KORAIL_KEYS = ("strResult", "h_msg_cd", "h_msg_txt")
 
 client = create_korail_client()
-payloads = []
-# 서버 응답을 가로채 기록 (pykorail 은 실패 시 원본 응답을 버림)
+responses = []
+# 서버 응답을 가로채 기록 (pykorail 은 실패 시 원본 응답을 버리고, HTTP 4xx·5xx 는 파싱 중 예외를 냄)
 parse = client._api._parse
-client._api._parse = lambda resp: payloads.append(parse(resp)) or payloads[-1]
+client._api._parse = lambda resp: responses.append(resp) or parse(resp)
 try:
     client.login(kid, kpw)
     print("✅ 로그인 성공")
 except Exception as e:
     print(f"❌ 로그인 실패: {e}")
-    p = payloads[-1] if payloads else {}
+    last = responses[-1] if responses else None
+    try:
+        p = json.loads(last.text) if last is not None else {}
+    except ValueError:
+        p = {}
+    if not isinstance(p, dict):
+        p = {}
+    print("HTTP 상태:", getattr(last, "status_code", None))
     if any(k in p for k in KORAIL_KEYS):
         print("서버 응답:", {k: p.get(k) for k in KORAIL_KEYS})
     else:
         # 코레일 API 형식이 아님 (서버 차단 code -2000 등) - 개인정보가 없으므로 전체 출력
-        print("⚠️  코레일 API 형식이 아닌 응답:", p)
+        print(
+            "⚠️  코레일 API 형식이 아닌 응답:", p or (last.text[:200] if last else None)
+        )
 finally:
     client.close()

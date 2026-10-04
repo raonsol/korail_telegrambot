@@ -1,9 +1,11 @@
+import json
 import logging
 import requests
 import sys
 from datetime import datetime, timedelta, timezone
 from pykorail import Korail
 from pykorail import (
+    HttpStatusError,
     KorailError,
     ReserveOption,
     TrainType,
@@ -23,10 +25,11 @@ KST = timezone(timedelta(hours=9))
 FATAL_ERRORS = (StationNotFoundError, PastDepartureError)
 
 # 코레일 서버가 매크로/비정상 환경으로 판단해 요청을 차단할 때 주는 응답 코드
-# 응답 형식이 {"code": -2000, "id": ..., "message": ...} 로 일반 API 응답과 달라 pykorail 이 버림
+# 응답 형식이 {"code": -2000, "id": ..., "message": ...} 로 일반 API 응답과 다름
+# pykorail 0.2.1 부터 HTTP 4xx·5xx(차단은 403)이면 HttpStatusError 로 올라오고 id 는 버려짐
 KORAIL_BLOCKED_CODE = "-2000"
 
-# pykorail(0.2.0) 이 서버 응답에 사유가 없을 때 넣는 기본 로그인 실패 문구
+# pykorail 이 서버 응답에 사유가 없을 때 넣는 기본 로그인 실패 문구
 PYKORAIL_FALLBACK_LOGIN_MSG = "아이디 또는 비밀번호가 올바르지 않습니다"
 
 
@@ -40,27 +43,45 @@ def create_korail_client():
 def _log_korail_blocks(client):
     """코레일 서버 차단 응답(code -2000)을 서버 로그에 남김
 
-    pykorail 은 이 응답을 일반 실패(로그인 실패, 열차 없음 등)로 처리해 원본을 버리므로,
-    모든 응답이 지나가는 파싱 단계에서 확인한다.
+    pykorail 은 차단 응답을 HttpStatusError(403) 또는 일반 실패(로그인 실패, 열차 없음 등)로
+    처리해 원본(요청 id 등)을 버리므로, 모든 응답이 지나가는 파싱 단계에서 확인한다.
     """
     api = client._api
     parse = api._parse
 
     def parse_and_log(response):
-        payload = parse(response)
-        if str(payload.get("code")) == KORAIL_BLOCKED_CODE:
-            # 조회 파라미터(회원번호 등)가 남지 않도록 쿼리스트링은 제외
-            url = str(getattr(response, "url", "") or "").split("?")[0]
-            logger.error(
-                "코레일 서버 차단 응답 (code=%s, id=%s, url=%s): %s",
-                payload.get("code"),
-                payload.get("id"),
-                url or "unknown",
-                payload.get("message"),
-            )
+        try:
+            payload = parse(response)
+        except HttpStatusError:
+            _log_if_blocked(response, _json_body(response))
+            raise
+        _log_if_blocked(response, payload)
         return payload
 
     api._parse = parse_and_log
+
+
+def _json_body(response):
+    try:
+        body = json.loads(response.text)
+    except (TypeError, ValueError):
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _log_if_blocked(response, payload):
+    if str(payload.get("code")) != KORAIL_BLOCKED_CODE:
+        return
+    # 조회 파라미터(회원번호 등)가 남지 않도록 쿼리스트링은 제외
+    url = str(getattr(response, "url", "") or "").split("?")[0]
+    logger.error(
+        "코레일 서버 차단 응답 (status=%s, code=%s, id=%s, url=%s): %s",
+        getattr(response, "status_code", None),
+        payload.get("code"),
+        payload.get("id"),
+        url or "unknown",
+        payload.get("message"),
+    )
 
 
 class ReserveHandler:
@@ -126,6 +147,10 @@ class ReserveHandler:
 
         str(KorailError) 는 "메시지 (코드)" 형식이라 코드가 없으면 "(None)" 이 붙으므로 msg 만 사용
         """
+        if isinstance(error, HttpStatusError):
+            # 자격증명을 보기 전에 서버가 요청을 거절함 (403 이용제한 등) - 비밀번호 문제가 아님
+            reason = error.msg or f"HTTP {error.status_code}"
+            return f"코레일 서버가 요청을 거절했습니다: {reason}"
         if isinstance(error, KorailError) and error.msg:
             # pykorail 은 서버가 사유(h_msg_txt)와 코드 없이 거부하면 이 문구를 대신 넣음
             # 실제 비밀번호 오류는 서버가 사유와 코드(WRR000101 등)를 주므로 구분해서 안내
