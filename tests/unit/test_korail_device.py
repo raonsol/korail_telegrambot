@@ -11,6 +11,7 @@ from core.db import Database
 from core.models import User
 from core.runner import run_reservation
 from core.schemas import Owner
+from core.users import ADMIN_ACCOUNT_NAME
 
 ANDROID_ID = re.compile(r"[0-9a-f]{16}")
 
@@ -50,19 +51,56 @@ class TestUserDevice:
             "android_id": "0123456789abcdef",
         }
 
-    def test_account_outside_user_db_gets_stable_derived_device(self, services):
-        """관리자 코레일 계정 등 사용자 DB에 없는 계정은 비밀값으로 유도 (재시작 후에도 같음)"""
+    def test_unknown_account_has_no_stored_device(self, services):
+        assert services.users.korail_device("01099999999") is None
+        assert services.users.get("01099999999") is None  # 행을 만들지 않음
+
+
+class TestAdminAccount:
+    def test_admin_account_row_is_added_inactive(self, services):
+        """ADMIN_KORAIL_ID(admin_user)는 시작 시 비활성 사용자 행으로 추가됨"""
+        user = services.users.get("admin_user")
+        assert user is not None
+        assert user.name == ADMIN_ACCOUNT_NAME
+        assert not user.is_active  # 로그인 권한은 바뀌지 않음
+        assert not services.users.ensure_admin_account()  # 이미 있으면 그대로
+
+    def test_existing_user_row_is_kept(self, services):
+        from core.users import UserService
+
+        users = UserService(services.db, admin_korail_id="010-1234-5678")
+        assert not users.ensure_admin_account()
+        assert services.users.get("01012345678").is_active
+
+    def test_long_email_account_fits(self, services):
+        from core.users import UserService
+
+        email = "Long.Admin.Account.Name@example.com"  # 20자 초과
+        users = UserService(services.db, admin_korail_id=email)
+        assert users.ensure_admin_account()
+        device = users.korail_device(email)
+        assert _stored(services, email.lower()) == (
+            device["profile_id"],
+            device["android_id"],
+        )
+
+    def test_admin_device_is_stored_and_reused(self, services):
         device = services.users.korail_device("admin_user")
 
         assert ANDROID_ID.fullmatch(device["android_id"])
-        assert device["profile_id"] in PROFILES_BY_ID
+        assert _stored(services, "admin_user") == (
+            device["profile_id"],
+            device["android_id"],
+        )
         assert services.users.korail_device("admin_user") == device
-        assert services.users.korail_device("other@example.com") != device
 
-        from core.users import UserService
+    def test_deleted_admin_row_is_recreated(self, services):
+        services.users.delete("admin_user")
 
-        other_secret = UserService(services.db, device_secret="another-secret")
-        assert other_secret.korail_device("admin_user") != device
+        device = services.users.korail_device("admin_user")
+
+        assert device is not None
+        assert services.users.get("admin_user").name == ADMIN_ACCOUNT_NAME
 
 
 class TestDevicePropagation:
@@ -73,7 +111,7 @@ class TestDevicePropagation:
         assert korail_login.devices == [services.users.korail_device("01012345678")]
 
     @pytest.mark.asyncio
-    async def test_admin_login_uses_derived_device(self, services, korail_login):
+    async def test_admin_login_uses_admin_row_device(self, services, korail_login):
         await services.auth.admin_login("test_admin_password")
 
         assert korail_login.devices == [services.users.korail_device("admin_user")]
@@ -182,7 +220,7 @@ class TestMigration:
                     text("SELECT version_num FROM alembic_version")
                 ).scalar()
                 columns = {c["name"] for c in inspect(conn).get_columns("users")}
-            assert version == "0002"
+            assert version == "0003"
             assert {"korail_device_profile", "korail_android_id"} <= columns
         finally:
             db.dispose()
@@ -211,8 +249,14 @@ class TestMigration:
                 indexes = {
                     i["name"]: i["unique"] for i in inspect(conn).get_indexes("users")
                 }
-            assert version == "0002"
+                id_type = next(
+                    c["type"]
+                    for c in inspect(conn).get_columns("users")
+                    if c["name"] == "id"
+                )
+            assert version == "0003"
             assert indexes["ix_users_korail_android_id"]
+            assert id_type.length == 50
             with db.session() as s:
                 user = s.get(User, "01012345678")
                 assert user.is_active

@@ -23,17 +23,13 @@ KORAIL_KEYS = ("strResult", "h_msg_cd", "h_msg_txt")
 
 
 def admin_device(korail_id):
-    """웹/텔레그램 관리자 로그인과 같은 기기 신원 (없으면 pykorail 이 새 Android ID를 만듦)"""
+    """웹/텔레그램 관리자 로그인과 같은 기기 신원 (users 테이블의 관리자 코레일 계정 행)"""
     try:
         from config import web_settings
         from core.db import Database
-        from core.services import korail_device_secret
         from core.users import UserService
 
-        users = UserService(
-            Database(web_settings.database_url),
-            device_secret=korail_device_secret(web_settings),
-        )
+        users = UserService(Database(web_settings.database_url), admin_korail_id=kid)
         return users.korail_device(korail_id)
     except Exception as e:
         print(f"⚠️  기기 신원을 불러오지 못해 새 Android ID로 접속합니다: {e}")

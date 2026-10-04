@@ -14,8 +14,9 @@ class User(Base):
 
     __tablename__ = "users"
 
-    # 하이픈 없는 전화번호 (코레일 로그인 ID)
-    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    # 코레일 로그인 ID (core.schemas.account_key): 하이픈 없는 전화번호
+    # 관리자 코레일 계정(ADMIN_KORAIL_ID)은 이메일·회원번호일 수 있음
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
     name: Mapped[Optional[str]] = mapped_column(String(50))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     telegram_chat_id: Mapped[Optional[int]] = mapped_column(BigInteger, index=True)

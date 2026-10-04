@@ -8,7 +8,8 @@ from core.errors import Conflict, NotFound, ValidationFailed
 class TestUserService:
     def test_seeded_from_allow_list(self, services):
         ids = [u.id for u in services.users.list()]
-        assert ids == ["01012345678", "01087654321"]
+        # admin_user: ADMIN_KORAIL_ID 행 (기기 신원 저장용, 비활성)
+        assert ids == ["01012345678", "01087654321", "admin_user"]
 
     def test_seed_is_idempotent_and_keeps_existing(self, services):
         services.users.update("01012345678", is_active=False, name="홍길동")

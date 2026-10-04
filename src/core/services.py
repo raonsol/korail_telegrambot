@@ -33,14 +33,10 @@ class Services:
     push: Optional[WebPushChannel] = None
 
     def init_storage(self) -> None:
-        """스키마 마이그레이션 + ALLOW_LIST 시드"""
+        """스키마 마이그레이션 + ALLOW_LIST 시드 + 관리자 코레일 계정 행"""
         self.db.migrate()
         self.users.seed_from_allow_list(self.settings.allow_list)
-
-
-def korail_device_secret(settings) -> str:
-    """관리자 코레일 계정의 기기 ID 유도용 비밀값 (재시작 후에도 같아야 하므로 고정 설정값)"""
-    return settings.webapp_enc_key or settings.admin_password or ""
+        self.users.ensure_admin_account()
 
 
 def build_services(
@@ -53,7 +49,7 @@ def build_services(
 ) -> Services:
     db = db or Database(settings.database_url)
     vault = CredentialVault(settings.webapp_enc_key)
-    users = UserService(db, device_secret=korail_device_secret(settings))
+    users = UserService(db, admin_korail_id=settings.admin_korail_id)
     auth = AuthService(
         db,
         users,

@@ -59,6 +59,14 @@ def is_valid_phone(phone: str) -> bool:
     return len(digits) == 11 and digits.startswith("010")
 
 
+def account_key(korail_id: str) -> str:
+    """코레일 계정 ID → users.id (휴대폰은 숫자만, 이메일은 소문자, 그 밖은 앞뒤 공백 제거)"""
+    text = str(korail_id or "").strip()
+    if is_valid_phone(text):
+        return normalize_phone(text)
+    return text.lower() if "@" in text else text
+
+
 def format_phone(phone: str) -> str:
     """01012345678 -> 010-1234-5678 (코레일 로그인 형식)"""
     d = normalize_phone(phone)
