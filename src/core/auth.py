@@ -18,7 +18,8 @@ from sqlalchemy import delete
 
 from .crypto import CredentialVault, new_token, sha256_hex
 from .db import Database, utcnow
-from .errors import AuthFailed, NotAllowed, RateLimited, ServiceError
+from .egress import EgressPool
+from .errors import AuthFailed, KorailUnavailable, NotAllowed, RateLimited, ServiceError
 from .models import User, WebSession
 from .schemas import ADMIN_USER_ID, Owner, format_phone, is_valid_phone, normalize_phone
 from .users import UserService
@@ -35,15 +36,40 @@ SHORT_SESSION_HOURS = 12
 IP_MAX_FAILURES = 20
 
 
-def default_korail_login(korail_id: str, password: str) -> tuple[bool, str]:
-    from telegramBot.korail_client import ReserveHandler
+def default_korail_login(
+    korail_id: str,
+    password: str,
+    egresses: Optional[EgressPool] = None,
+    handler_cls=None,
+) -> tuple[bool, str]:
+    """코레일 로그인 확인 (그 계정의 예약과 같은 출구로 요청)
 
-    handler = ReserveHandler()
+    Raises:
+        KorailUnavailable: 출구가 코레일 차단으로 쉬는 중이거나 이번 요청이 차단됨
+    """
+    from telegramBot.korail_client import BLOCKED_LOGIN_MESSAGE, ReserveHandler
+
+    ReserveHandler = handler_cls or ReserveHandler
+    egress = egresses.for_account(korail_id) if egresses else None
+    gate = egresses.gate(egress.id) if egress else None
+    if gate is not None and gate.blocked_for() > 0:
+        # 차단 중에 같은 출구로 요청하면 차단이 길어짐
+        raise KorailUnavailable(BLOCKED_LOGIN_MESSAGE)
+
+    handler = (
+        ReserveHandler(proxy_url=egress.proxy_url, egress_id=egress.id)
+        if egress
+        else ReserveHandler()
+    )
     try:
         ok = handler.login(korail_id, password)
-        return ok, handler.loginError
     finally:
         handler.close()
+    if handler.loginBlocked is True:
+        if gate is not None:
+            gate.report_block()
+        raise KorailUnavailable(handler.loginError)
+    return ok, handler.loginError
 
 
 def _login_result(result) -> tuple[bool, str]:

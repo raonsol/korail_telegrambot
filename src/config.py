@@ -104,6 +104,15 @@ class WebSettings(BaseAppSettings):
     reservation_retention_days: int = Field(
         default=30, alias="RESERVATION_RETENTION_DAYS"
     )
+
+    # 코레일 요청 출구 (core/egress.py). 쉼표로 구분한 "ID=프록시 URL" 목록, ID만 쓰면 직접 연결
+    # 비어 있으면 이 서버의 직접 연결 하나 (기존 동작). 같은 계정은 항상 같은 출구를 씀
+    korail_egresses: str = Field(default="", alias="KORAIL_EGRESSES")
+    # 출구별 분당 코레일 검색 횟수 (그 출구의 모든 예약 합계, 0이면 제한 없음)
+    korail_egress_rpm: int = Field(default=60, alias="KORAIL_EGRESS_RPM")
+    # 출구별 동시 예약 수 (0이면 제한 없음, 전체 한도 MAX_CONCURRENT_RESERVATIONS는 별도)
+    korail_egress_max_active: int = Field(default=0, alias="KORAIL_EGRESS_MAX_ACTIVE")
+
     # 워커가 예약 상태를 보고할 URL (비어 있으면 로컬 포트로 자동 설정)
     internal_callback_url: str = Field(default="", alias="INTERNAL_CALLBACK_URL")
 

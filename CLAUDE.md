@@ -88,9 +88,11 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 - **src/config.py**: Environment-based settings (`WebSettings`, `CelerySettings`)
 
 #### Core Domain (`src/core/`)
+- **egress.py**: Korail request egresses (`KORAIL_EGRESSES`, proxies or direct). `EgressPool.for_account` pins each Korail account to one egress (rendezvous hash, not stored in the DB); gates share per-egress pacing (`KORAIL_EGRESS_RPM`) and block backoff (5→15→30→60 min after code -2000): `FileGate` (subprocess, `logs/egress_{id}.json`), `RedisGate` (Celery, `egress_*` keys), `MemoryGate`. A blocked egress pauses; reservations never fail over to another egress (one account from many IPs is itself a macro signal)
 - **reservations.py** `ReservationService`: start / cancel / list / worker events / stale expiry / 30-day purge
   - Issues `reservation_id` (uuid hex) and a per-reservation callback token (only its SHA-256 is stored)
-  - Limits: `MAX_CONCURRENT_RESERVATIONS` (global), `MAX_RESERVATIONS_PER_USER` (admin exempt)
+  - Limits: `MAX_CONCURRENT_RESERVATIONS` (global), `MAX_RESERVATIONS_PER_USER` (admin exempt), `KORAIL_EGRESS_MAX_ACTIVE` (per egress, applies to admin too)
+  - Spec carries `egress_id`, `egress_proxy` (CeleryLauncher encrypts it to `egress_proxy_enc`; a task that cannot decrypt it reports `error` instead of going direct), `egress_rpm`
 - **launchers.py**: `SubprocessLauncher` (forkserver `Process`, sentinel wait thread → `handle_process_exit`; `start()` and exit-code reads share one lock because forkserver exit codes can be read from the pipe only once; cancel = SIGTERM to that PID only, never `killpg` - workers share the web server's process group), `CeleryLauncher` (encrypts Korail password for the broker), `create_launcher()` (falls back to subprocess if Redis is unreachable)
 - **runner.py**: Worker-side loop shared by subprocess and Celery (`CallbackReporter` → `/internal/events`). Must not import DB/web modules.
 - **auth.py** `AuthService`: web login (DB user check → throttle → Korail login), admin login, server-side sessions (token hash in DB, Fernet-encrypted Korail password), CSRF token
@@ -112,6 +114,8 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 - **korail_client.py** (pykorail): `ReserveHandler.login` (bool + `loginError` reason) / `reserve_single_attempt` / `close`
   - `create_korail_client()`: logs Korail server block responses (code -2000)
   - `FATAL_ERRORS` (`StationNotFoundError`, `PastDepartureError`): `reserve_single_attempt` returns `fatal: True` → `core/runner.py` reports `failed` immediately
+  - `create_korail_client(proxy_url, egress_id)` sets the proxy on pykorail's curl_cffi session only and raises `KorailBlockedError` on code -2000; `reserve_single_attempt` returns `blocked: True`, `login()` sets `loginBlocked` → `core/runner.py` reports the block to the egress gate and waits (cancel / max duration checked every 5s, `progress` every 5 min so the 30-min stale rule does not fire)
+  - Web/Telegram login checks use the account's egress (`core.auth.default_korail_login`); a blocked login raises `KorailUnavailable` (503) and is not counted as a password failure
 - **messages.py**, **calendar_keyboard.py**, **time_keyboard.py**, **station_keyboard.py**
 
 #### Web App (`webapp/`)
@@ -409,6 +413,9 @@ VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT   # Web Push (make vapid-ke
 MAX_RESERVATIONS_PER_USER   # default 3 (admin exempt)
 RESERVATION_TIMEOUT         # max seconds one reservation keeps trying (both modes), default 3600
 RESERVATION_RETENTION_DAYS  # default 30
+KORAIL_EGRESSES             # Korail egresses "id=proxy_url,..." (id alone = direct), default: one direct egress
+KORAIL_EGRESS_RPM           # searches per minute per egress (all its reservations), default 60, 0 = unlimited
+KORAIL_EGRESS_MAX_ACTIVE    # concurrent reservations per egress, default 0 = unlimited
 LOGIN_MAX_FAILURES / LOGIN_LOCK_MINUTES   # default 3 per 10 min (Korail locks after 5)
 ```
 
@@ -436,7 +443,7 @@ DATAGOV_API_KEY       # 공공데이터포털 API 서비스키 (역 검색용)
 ### Korail Client (pykorail) Notes
 - pykorail is pinned (`==0.2.0`): `create_korail_client()` and `scripts/check_korail_login.py` wrap its private `client._api._parse`
 - `login()` raises `LoginFailedError` instead of returning `False`; `ReserveHandler.login()` still returns a bool and keeps a user-facing reason in `ReserveHandler.loginError`
-- Korail server block (anti-macro) responses look like `{"code": -2000, "id", "message"}`; pykorail drops them (login fails / search looks like "no trains"), so `create_korail_client()` wraps the response parser and logs them at ERROR (`코레일 서버 차단 응답 ...`, URL without query string). Cloudflare WARP egress (container and host proxy mode) was blocked with -2000 while direct egress worked, so WARP support was removed
+- Korail server block (anti-macro) responses look like `{"code": -2000, "id", "message"}`; pykorail drops them (login fails / search looks like "no trains"), so `create_korail_client()` wraps the response parser, logs them at ERROR (`코레일 서버 차단 응답 ...`, URL without query string, egress id) and raises `KorailBlockedError`. Cloudflare WARP egress (container and host proxy mode) was blocked with -2000 while direct egress worked, so WARP support was removed; use proxies on lines you own (`KORAIL_EGRESSES`)
 - pykorail's fallback "아이디 또는 비밀번호가 올바르지 않습니다" (code `None`) means the server sent no reason - real wrong-password responses carry a code such as `WRR000101`
 - `make korail-login-check` pipes `scripts/check_korail_login.py` into the running web container to diagnose ADMIN_KORAIL_ID/PW (env values as received, raw server response)
 - Station names are validated against Korail's station master before searching (`StationNotFoundError`)

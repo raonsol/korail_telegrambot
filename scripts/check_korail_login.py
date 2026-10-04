@@ -1,12 +1,15 @@
 """관리자 계정(ADMIN_KORAIL_ID/PW)으로 코레일 로그인을 진단
 
 컨테이너가 실제로 받은 ID/PW 상태(비밀번호 자체는 출력하지 않음)와 코레일 서버의 원본 응답을 보여줌.
+예약과 같은 출구(KORAIL_EGRESSES 중 이 계정에 고정된 출구)로 요청한다.
 사용: make korail-login-check  (Docker 컨테이너 안에서 실행됨)
 주의: 실행할 때마다 로그인 1회로 집계됨 (비밀번호 5회 연속 오류 시 로그인 제한)
 """
 
 import os
-from telegramBot.korail_client import create_korail_client
+from config import web_settings
+from core.egress import EgressPool
+from telegramBot.korail_client import KorailBlockedError, create_korail_client
 
 kid = os.environ.get("ADMIN_KORAIL_ID", "")
 kpw = os.environ.get("ADMIN_KORAIL_PW", "")
@@ -20,7 +23,10 @@ print(
 )
 KORAIL_KEYS = ("strResult", "h_msg_cd", "h_msg_txt")
 
-client = create_korail_client()
+egress = EgressPool.from_settings(web_settings).for_account(kid)
+print(f"출구 : {egress.id} ({'직접 연결' if egress.is_direct else '프록시'})")
+
+client = create_korail_client(egress.proxy_url, egress.id)
 payloads = []
 # 서버 응답을 가로채 기록 (pykorail 은 실패 시 원본 응답을 버림)
 parse = client._api._parse
@@ -28,6 +34,8 @@ client._api._parse = lambda resp: payloads.append(parse(resp)) or payloads[-1]
 try:
     client.login(kid, kpw)
     print("✅ 로그인 성공")
+except KorailBlockedError as e:
+    print(f"⛔ 코레일 서버 차단 응답 (출구 {egress.id}): id={e.block_id}, {e.message}")
 except Exception as e:
     print(f"❌ 로그인 실패: {e}")
     p = payloads[-1] if payloads else {}

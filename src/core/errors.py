@@ -45,3 +45,10 @@ class RateLimited(ServiceError):
 class LimitExceeded(ServiceError):
     status_code = 429
     code = "LIMIT_EXCEEDED"
+
+
+class KorailUnavailable(ServiceError):
+    """코레일 서버가 요청을 일시적으로 차단함 (비밀번호 오류가 아니므로 로그인 실패로 세지 않음)"""
+
+    status_code = 503
+    code = "KORAIL_BLOCKED"

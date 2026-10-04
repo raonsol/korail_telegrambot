@@ -14,6 +14,7 @@ from typing import Callable, Optional
 import requests
 from pykorail import ReserveOption, TrainType
 
+from core.egress import EgressGate, NullGate
 from telegramBot.korail_client import ReserveHandler
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,11 @@ MAX_DURATION_MESSAGE = "최대 실행 시간을 초과하여 예약이 중단되
 # 표는 이미 잡혔으므로 사용자가 결제 기한 안에 알아야 함
 SUCCESS_REPORT_WINDOW_SECONDS = 600
 SUCCESS_REPORT_MAX_BACKOFF_SECONDS = 30
+
+# 출구(차단 대기·요청 순서)를 기다리는 동안 취소·최대 실행 시간을 확인하는 간격
+WAIT_STEP_SECONDS = 5.0
+# 차단 대기 중에도 이 간격으로 진행 보고 (웹 서버의 30분 무응답 정리에 걸리지 않도록)
+WAIT_KEEPALIVE_SECONDS = 300.0
 
 # 웹 서버가 이 예약을 받아들이지 않는 응답 (예약 없음 / 토큰 불일치)
 # 서버 재시작 등 일시적인 연결 실패와 달리 다시 보내도 결과가 같다
@@ -149,8 +155,9 @@ def run_reservation(
     progress_every: int = 20,
     relogin_after_errors: int = 10,
     sleep: Callable[[float], None] = time.sleep,
-    handler_factory: Callable[[], ReserveHandler] = ReserveHandler,
+    handler_factory: Optional[Callable[[], ReserveHandler]] = None,
     clock: Callable[[], float] = time.monotonic,
+    gate: Optional[EgressGate] = None,
 ) -> dict:
     """예약이 성공하거나 최대 시도 횟수에 도달할 때까지 반복
 
@@ -163,13 +170,21 @@ def run_reservation(
             (subprocess: 결과 파일, Celery: Redis 상태)
         clock: 경과 시간 측정용. ``spec["max_duration"]``(초)을 넘기면 ``failed``로 끝냄
             (Celery threads 풀은 태스크 시간 제한을 적용하지 않으므로 루프에서 직접 확인)
+        gate: 이 예약의 출구(``spec["egress_id"]``) 상태. 매 시도 전에 차단 대기와
+            출구별 요청 순서를 기다리고, 코레일 차단 응답을 받으면 출구 전체를 쉬게 함
 
     Returns:
         dict: {"status": "success"|"failed"|"error"|"stopped"|"rejected", ...}
             success에는 성공 보고가 전달됐는지 ``reported``가 함께 들어감
             rejected: 웹 서버가 보고를 거부함 (취소·만료됐거나 모르는 예약) → 즉시 종료
     """
-    handler = handler_factory()
+    if handler_factory is None:
+        handler = ReserveHandler(
+            proxy_url=spec.get("egress_proxy") or "",
+            egress_id=spec.get("egress_id") or "",
+        )
+    else:
+        handler = handler_factory()
     try:
         return _run_attempts(
             spec,
@@ -184,6 +199,7 @@ def run_reservation(
             sleep,
             _deadline(spec, clock),
             clock,
+            gate or NullGate(),
         )
     finally:
         # 코레일 HTTP 세션 정리 (pykorail)
@@ -215,6 +231,81 @@ def _report_success(reporter, attempts, train_info, sleep, clock) -> bool:
         backoff = min(backoff * 2, SUCCESS_REPORT_MAX_BACKOFF_SECONDS)
 
 
+def _blocked(handler) -> bool:
+    """마지막 로그인이 코레일 차단 응답으로 실패했는지"""
+    return getattr(handler, "loginBlocked", False) is True
+
+
+def _blocked_message(pause: float) -> str:
+    minutes = max(1, round(pause / 60))
+    return (
+        f"코레일 서버가 요청을 일시적으로 차단해 약 {minutes}분 동안 기다린 뒤 "
+        "다시 시도합니다."
+    )
+
+
+def _report_block(gate, spec, reporter, attempts) -> Optional[dict]:
+    """코레일 차단 응답 기록 (출구 전체가 쉼). 웹 서버가 보고를 거부하면 결과 반환"""
+    pause = gate.report_block()
+    logger.warning(
+        f"Korail blocked egress {spec.get('egress_id') or 'direct'}; "
+        f"pausing it for {pause:.0f}s"
+    )
+    reporter.send("progress", message=_blocked_message(pause), attempts=attempts)
+    if _rejected(reporter):
+        return {"status": "rejected", "attempts": attempts}
+    return None
+
+
+def _wait_for_egress(
+    gate, reporter, should_stop, expired, sleep, clock, attempts
+) -> Optional[dict]:
+    """출구 차단 대기와 요청 순서를 기다림. 그동안 멈춰야 하면 결과를 반환
+
+    대기 중에도 취소(should_stop)와 최대 실행 시간을 확인하고, 오래 기다리면
+    진행 보고를 보내 웹 서버가 무응답 예약으로 정리하지 않게 한다.
+    """
+
+    def interrupted() -> Optional[dict]:
+        if should_stop():
+            return {"status": "stopped", "attempts": attempts}
+        if expired():
+            reporter.send("failed", message=MAX_DURATION_MESSAGE, attempts=attempts)
+            return {"status": "failed", "attempts": attempts, "timed_out": True}
+        return None
+
+    waited = False
+    last_report = None
+    while True:
+        remaining = gate.blocked_for()
+        if remaining <= 0:
+            break
+        stop = interrupted()
+        if stop:
+            return stop
+        waited = True
+        if last_report is None:
+            last_report = clock()
+        elif clock() - last_report >= WAIT_KEEPALIVE_SECONDS:
+            reporter.send("progress", attempts=attempts)
+            if _rejected(reporter):
+                return {"status": "rejected", "attempts": attempts}
+            last_report = clock()
+        sleep(min(remaining, WAIT_STEP_SECONDS))
+
+    delay = gate.reserve_slot()
+    while delay > 0:
+        stop = interrupted()
+        if stop:
+            return stop
+        waited = True
+        step = min(delay, WAIT_STEP_SECONDS)
+        sleep(step)
+        delay -= step
+    # 마지막 대기 중에 취소됐거나 최대 실행 시간이 지났으면 요청하지 않음
+    return interrupted() if waited else None
+
+
 def _login_failure_message(handler) -> str:
     reason = getattr(handler, "loginError", "") or ""
     return f"코레일 로그인에 실패했습니다. {reason}".strip()
@@ -233,16 +324,32 @@ def _run_attempts(
     sleep,
     expired,
     clock,
+    gate,
 ) -> dict:
     korail_id = spec["korail_id"]
     korail_pw = spec["korail_pw"]
     train_type = TRAIN_TYPES.get(spec["train_type"], TrainType.KTX)
     seat_type = SEAT_TYPES.get(spec["seat_type"], ReserveOption.GENERAL_FIRST)
 
-    if not handler.login(korail_id, korail_pw):
-        message = _login_failure_message(handler)
-        reporter.send("error", message=message)
-        return {"status": "error", "message": message}
+    def wait_for_egress(attempts: int) -> Optional[dict]:
+        return _wait_for_egress(
+            gate, reporter, should_stop, expired, sleep, clock, attempts
+        )
+
+    # 로그인도 출구 차단 중에는 하지 않음. 차단 응답이면 차단이 풀릴 때까지 기다렸다 다시 로그인
+    while True:
+        stop = wait_for_egress(0)
+        if stop:
+            return stop
+        if handler.login(korail_id, korail_pw):
+            break
+        if not _blocked(handler):
+            message = _login_failure_message(handler)
+            reporter.send("error", message=message)
+            return {"status": "error", "message": message}
+        stop = _report_block(gate, spec, reporter, 0)
+        if stop:
+            return stop
 
     reporter.send("running", attempts=0)
     if _rejected(reporter):
@@ -255,6 +362,9 @@ def _run_attempts(
         if expired():
             reporter.send("failed", message=MAX_DURATION_MESSAGE, attempts=attempt - 1)
             return {"status": "failed", "attempts": attempt - 1, "timed_out": True}
+        stop = wait_for_egress(attempt - 1)
+        if stop:
+            return stop
 
         try:
             result = handler.reserve_single_attempt(
@@ -284,6 +394,13 @@ def _run_attempts(
             }
 
         error = result.get("error") or ""
+        if result.get("blocked"):
+            # 같은 출구로 계속 요청하면 차단이 길어지므로 출구 전체를 쉬게 함
+            # (다른 출구로 옮기지 않음: 한 계정이 여러 IP에서 보이면 그 자체로 매크로 신호)
+            stop = _report_block(gate, spec, reporter, attempt)
+            if stop:
+                return stop
+            continue
         if result.get("fatal"):
             # 역 이름 오류, 지난 출발일 등은 재시도해도 결과가 같음
             reporter.send("failed", message=error, attempts=attempt)
@@ -298,6 +415,13 @@ def _run_attempts(
             if needs_login or consecutive_errors >= relogin_after_errors:
                 logger.info("Re-logging in to Korail")
                 if not handler.login(korail_id, korail_pw):
+                    if _blocked(handler):
+                        # 다음 시도 전에 차단이 풀릴 때까지 기다림 (연속 오류 수는 유지되므로
+                        # 차단이 풀린 뒤 다음 오류에서 바로 다시 로그인)
+                        stop = _report_block(gate, spec, reporter, attempt)
+                        if stop:
+                            return stop
+                        continue
                     message = "세션 오류로 재로그인에 실패하여 예약이 중단되었습니다."
                     reason = getattr(handler, "loginError", "")
                     if reason:

@@ -50,6 +50,23 @@ class TestCeleryLauncher:
         assert "korail_pw" not in payload
         assert vault.decrypt(payload["korail_pw_enc"]) == "test_password"
 
+    def test_launch_encrypts_egress_proxy(self):
+        """출구 프록시 주소(인증 정보 포함 가능)도 브로커에 평문으로 싣지 않음"""
+        vault = CredentialVault("secret")
+        launcher = CeleryLauncher(Mock(), vault=vault)
+        proxy = "socks5h://user:pw@100.64.0.2:1080"
+
+        with patch("telegramBot.tasks.reservation_task.apply_async") as apply_async:
+            launcher.launch(_spec(egress_id="home1", egress_proxy=proxy))
+            launcher.launch(_spec(egress_id="direct", egress_proxy=""))
+
+        payload = apply_async.call_args_list[0].kwargs["kwargs"]["spec"]
+        assert "egress_proxy" not in payload
+        assert vault.decrypt(payload["egress_proxy_enc"]) == proxy
+        assert payload["egress_id"] == "home1"
+        direct = apply_async.call_args_list[1].kwargs["kwargs"]["spec"]
+        assert "egress_proxy_enc" not in direct
+
     def test_launch_without_persistent_key_keeps_plaintext(self):
         launcher = CeleryLauncher(Mock(), vault=CredentialVault(""))
 
@@ -173,7 +190,7 @@ class TestCeleryTasks:
         ), patch("telegramBot.tasks.run_reservation") as run, patch(
             "telegramBot.tasks.build_reporter"
         ):
-            run.side_effect = lambda spec, reporter, should_stop, on_success: (
+            run.side_effect = lambda spec, reporter, should_stop, on_success, **_: (
                 on_success() or {"status": "success"}
             )
             result = reservation_task.apply(
@@ -187,10 +204,11 @@ class TestCeleryTasks:
         )
 
     def test_reservation_task_decrypts_password(self, mock_redis_client, monkeypatch):
-        from config import web_settings
+        from telegramBot import tasks
         from telegramBot.tasks import reservation_task
 
-        monkeypatch.setattr(web_settings, "webapp_enc_key", "secret")
+        # config가 다른 테스트에서 다시 로드될 수 있으므로 태스크 모듈이 쓰는 설정을 바꿈
+        monkeypatch.setattr(tasks.web_settings, "webapp_enc_key", "secret")
         encrypted = CredentialVault("secret").encrypt("pw-from-broker")
         spec = _spec(korail_pw_enc=encrypted)
         spec.pop("korail_pw")
@@ -225,6 +243,54 @@ class TestCeleryTasks:
         run.assert_not_called()
         assert result["status"] == "error"
         assert reporter.send.call_args[0][0] == "error"
+
+    def test_reservation_task_uses_egress(self, mock_redis_client, monkeypatch):
+        """프록시를 복호화하고, 출구 상태는 Redis로 다른 워커와 공유"""
+        from core.egress import RedisGate
+        from telegramBot import tasks
+        from telegramBot.tasks import reservation_task
+
+        monkeypatch.setattr(tasks.web_settings, "webapp_enc_key", "secret")
+        vault = CredentialVault("secret")
+        spec = _spec(
+            egress_id="home1",
+            egress_rpm=30,
+            egress_proxy_enc=vault.encrypt("socks5h://h:1080"),
+        )
+
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ), patch(
+            "telegramBot.tasks.run_reservation", return_value={"status": "failed"}
+        ) as run, patch(
+            "telegramBot.tasks.build_reporter"
+        ):
+            reservation_task.apply(kwargs={"spec": spec}, task_id="task-egress")
+
+        assert run.call_args[0][0]["egress_proxy"] == "socks5h://h:1080"
+        gate = run.call_args.kwargs["gate"]
+        assert isinstance(gate, RedisGate)
+        assert gate.block_key == "egress_block:home1" and gate.rpm == 30
+
+    def test_reservation_task_undecryptable_proxy_does_not_go_direct(
+        self, mock_redis_client
+    ):
+        """프록시를 모르면 직접 요청하지 않음 (계정이 다른 IP에서 보이게 됨)"""
+        from telegramBot.tasks import reservation_task
+
+        reporter = Mock()
+        with patch(
+            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+        ), patch("telegramBot.tasks.run_reservation") as run, patch(
+            "telegramBot.tasks.build_reporter", return_value=reporter
+        ):
+            result = reservation_task.apply(
+                kwargs={"spec": _spec(egress_id="home1", egress_proxy_enc="garbage")},
+                task_id="task-bad-proxy",
+            ).get()
+
+        run.assert_not_called()
+        assert result["status"] == "error"
 
     def test_reservation_task_skips_completed(self, mock_redis_client):
         from telegramBot.tasks import reservation_task
@@ -267,7 +333,7 @@ class TestCeleryTasks:
 
         seen = {}
 
-        def fake_run(spec, reporter, should_stop, on_success):
+        def fake_run(spec, reporter, should_stop, on_success, **_):
             seen["before"] = should_stop()
             seen["ttl"] = mock_redis_client.ttl("reservation_task:task-r")
             CeleryLauncher(Mock(), mock_redis_client).cancel("task-r")
@@ -309,7 +375,7 @@ class TestCeleryTasks:
             "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
         ), patch(
             "telegramBot.tasks.run_reservation",
-            side_effect=lambda spec, reporter, should_stop, on_success: {
+            side_effect=lambda spec, reporter, should_stop, on_success, **_: {
                 "stopped": should_stop()
             },
         ), patch(
@@ -420,7 +486,7 @@ class TestWorkerLossDetection:
 
         seen = {}
 
-        def fake_run(spec, reporter, should_stop, on_success):
+        def fake_run(spec, reporter, should_stop, on_success, **_):
             seen["ttl"] = mock_redis_client.ttl(heartbeat_key("task-hb"))
             seen["status"] = mock_redis_client.hget(
                 "reservation_task:task-hb", "status"
@@ -467,7 +533,7 @@ class TestWorkerLossDetection:
         reporter = Mock()
         seen = {}
 
-        def fake_run(spec, reporter, should_stop, on_success):
+        def fake_run(spec, reporter, should_stop, on_success, **_):
             seen["before"] = should_stop()
             tasks._on_worker_shutting_down(sig="TERM", how="Warm", exitcode=0)
             seen["after"] = should_stop()
@@ -564,7 +630,7 @@ class TestUnreportedSuccessCelery:
     def test_task_stores_result_before_reporting(self, mock_redis_client):
         from telegramBot.tasks import reservation_task
 
-        def fake_run(spec, reporter, should_stop, on_success):
+        def fake_run(spec, reporter, should_stop, on_success, **_):
             on_success(train_info="KTX 101", attempts=9)
             return {"status": "success", "reported": False}
 
