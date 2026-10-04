@@ -396,7 +396,7 @@ brew install redis
 BOTTOKEN_DEV          # Development Telegram bot token (for local execution)
 WEBHOOK_URL_DEV       # Development webhook URL (for local execution)
 ALLOW_LIST            # Phone numbers seeded into the user DB on startup (DB is the source of truth afterwards)
-                      # ADMIN_KORAIL_ID is also added on startup as an inactive row (device identity storage)
+                      # ADMIN_KORAIL_ID is also added on startup as an active row (device identity storage)
 ADMINPW               # Admin password for privileged access (Telegram + web admin login)
 ```
 
@@ -445,7 +445,7 @@ DATAGOV_API_KEY       # 공공데이터포털 API 서비스키 (역 검색용)
 - Since 0.2.1, every `Korail()` without `device_profile`/`android_id` signs with a freshly generated synthetic Android ID (0.2.0 used one fixed ID for everyone) and the User-Agent is always `korailtalk`
 - **Device identity (Android ID)**: Korail blocks accounts that share an Android ID, and a new ID on every login looks like a new phone. Each Korail account therefore uses one fixed device `{"profile_id", "android_id"}` from `UserService.korail_device(korail_id)`:
   - issued on first use (`random_profile()`) and stored in `users.korail_device_profile` / `users.korail_android_id` (unique; written only while NULL so concurrent first logins agree)
-  - the admin Korail account (`ADMIN_KORAIL_ID`) also gets a `users` row (`ensure_admin_account()`, on startup and whenever its device is needed, so a deleted row is re-added with a new device). It is added **inactive** (name "관리자 코레일 계정") so it grants no user login; an existing row (e.g. the admin's phone is a registered user) is left as is
+  - the admin Korail account (`ADMIN_KORAIL_ID`) also gets a `users` row (`ensure_admin_account()`, on startup and whenever its device is needed, so a deleted row is re-added with a new device). It is added active (name "관리자 코레일 계정"), so a phone-number admin account can also log in as a regular user (per-user limit applies there); an existing row (e.g. the admin's phone is a registered user) is left as is
   - `users.id` is `core.schemas.account_key(korail_id)`: phone → digits, email → lowercase, other ids (membership number) → stripped (up to 50 chars, migration `0003`). `UserService` lookups use `account_key`
   - an account without a row gets `None` (pykorail makes a one-off ID) and a warning is logged
   - used by every login: web/admin login (`AuthService._korail_login`), Telegram login (`ReserveHandler(device)`), and workers (`ReservationService` puts it in `spec["korail_device"]`; `run_reservation` passes it to `handler_factory(device)`, so re-logins keep the same device)

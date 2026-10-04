@@ -57,13 +57,20 @@ class TestUserDevice:
 
 
 class TestAdminAccount:
-    def test_admin_account_row_is_added_inactive(self, services):
-        """ADMIN_KORAIL_ID(admin_user)는 시작 시 비활성 사용자 행으로 추가됨"""
+    def test_admin_account_row_is_added_active(self, services):
+        """ADMIN_KORAIL_ID(admin_user)는 시작 시 활성 사용자 행으로 추가됨"""
         user = services.users.get("admin_user")
         assert user is not None
         assert user.name == ADMIN_ACCOUNT_NAME
-        assert not user.is_active  # 로그인 권한은 바뀌지 않음
+        assert user.is_active
         assert not services.users.ensure_admin_account()  # 이미 있으면 그대로
+
+    def test_admin_phone_can_log_in_as_user(self, services):
+        from core.users import UserService
+
+        users = UserService(services.db, admin_korail_id="010-3333-4444")
+        assert users.ensure_admin_account()
+        assert users.is_allowed("01033334444")
 
     def test_existing_user_row_is_kept(self, services):
         from core.users import UserService

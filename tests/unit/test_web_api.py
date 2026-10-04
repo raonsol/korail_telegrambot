@@ -257,7 +257,7 @@ class TestAdminApi:
         assert [u["phone"] for u in users.json()] == [
             "010-1234-5678",
             "010-8765-4321",
-            "admin_user",  # ADMIN_KORAIL_ID 행 (비활성)
+            "admin_user",  # ADMIN_KORAIL_ID 행
         ]
 
         created = await client.post(

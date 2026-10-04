@@ -146,7 +146,8 @@ class UserService:
     def ensure_admin_account(self) -> bool:
         """ADMIN_KORAIL_ID 사용자 행이 없으면 추가 (기기 신원 저장용)
 
-        로그인 권한은 바꾸지 않도록 비활성으로 추가한다 (이미 있는 행은 그대로).
+        다른 사용자와 같이 활성으로 추가한다 (휴대폰 번호면 일반 사용자 로그인도 가능).
+        이미 있는 행(관리자 번호가 등록 사용자인 경우 등)은 그대로 둔다.
         """
         if not self.admin_key:
             return False
@@ -158,7 +159,7 @@ class UserService:
                     User(
                         id=self.admin_key,
                         name=ADMIN_ACCOUNT_NAME,
-                        is_active=False,
+                        is_active=True,
                         created_at=utcnow(),
                     )
                 )
