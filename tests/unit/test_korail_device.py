@@ -138,14 +138,13 @@ class TestDevicePropagation:
         spec = fake_launcher.launched[-1]
         assert spec["korail_device"] == services.users.korail_device("01012345678")
 
-    def test_runner_creates_handler_with_spec_device(self):
+    def test_runner_creates_handler_with_spec_device_and_egress(self):
         device = {"profile_id": "x", "android_id": "0123456789abcdef"}
         handler = Mock()
         handler.login = Mock(return_value=True)
         handler.reserve_single_attempt = Mock(
             return_value={"success": True, "result": "train", "error": None}
         )
-        factory = Mock(return_value=handler)
 
         spec = {
             "reservation_id": "r1",
@@ -159,10 +158,15 @@ class TestDevicePropagation:
             "train_type": "ALL",
             "seat_type": "general",
             "korail_device": device,
+            "egress_id": "home1",
+            "egress_proxy": "socks5h://h:1080",
         }
-        run_reservation(spec, Mock(), handler_factory=factory, sleep=lambda _: None)
+        with patch("core.runner.ReserveHandler", return_value=handler) as cls:
+            run_reservation(spec, Mock(), sleep=lambda _: None)
 
-        factory.assert_called_once_with(device)
+        cls.assert_called_once_with(
+            proxy_url="socks5h://h:1080", egress_id="home1", device=device
+        )
 
 
 class TestKorailClientDevice:
@@ -171,7 +175,7 @@ class TestKorailClientDevice:
 
         profile_id = next(iter(PROFILES_BY_ID))
         device = {"profile_id": profile_id, "android_id": "0123456789abcdef"}
-        client = create_korail_client(device)
+        client = create_korail_client(device=device)
         try:
             assert client.android_id == "0123456789abcdef"
             assert client.device_profile.id == profile_id
@@ -182,7 +186,7 @@ class TestKorailClientDevice:
         from telegramBot.korail_client import create_korail_client
 
         device = {"profile_id": "removed-model", "android_id": "0123456789abcdef"}
-        client = create_korail_client(device)
+        client = create_korail_client(device=device)
         try:
             assert client.android_id == "0123456789abcdef"
             assert client.device_profile is None
@@ -193,14 +197,14 @@ class TestKorailClientDevice:
         from telegramBot.korail_client import ReserveHandler
 
         device = {"profile_id": "x", "android_id": "0123456789abcdef"}
-        handler = ReserveHandler(device)
+        handler = ReserveHandler(device=device)
         with patch(
             "telegramBot.korail_client.create_korail_client", return_value=Mock()
         ) as create:
             assert handler.login("010-1234-5678", "pw")
             assert handler.login("010-1234-5678", "pw")
 
-        assert [c.args for c in create.call_args_list] == [(device,), (device,)]
+        assert [c.kwargs["device"] for c in create.call_args_list] == [device, device]
 
 
 LEGACY_DDL = [

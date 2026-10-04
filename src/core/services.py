@@ -1,14 +1,23 @@
 """서비스 조립 (app.py와 테스트에서 사용)"""
 
 import asyncio
+import functools
 import logging
+import os
 from dataclasses import dataclass
 from typing import Optional
 
 from .auth import AuthService, KorailLogin, default_korail_login
 from .crypto import CredentialVault
 from .db import Database
-from .launchers import Launcher, create_launcher
+from .egress import EgressPool, FileGate, MemoryGate, RedisGate, file_gate_path
+from .launchers import (
+    LOGS_DIR,
+    CeleryLauncher,
+    Launcher,
+    SubprocessLauncher,
+    create_launcher,
+)
 from .notifier import Notifier, SSEBroker, WebPushChannel
 from .reservations import ReservationService
 from .users import UserService
@@ -30,6 +39,7 @@ class Services:
     notifier: Notifier
     sse: SSEBroker
     reservations: ReservationService
+    egresses: EgressPool
     push: Optional[WebPushChannel] = None
 
     def init_storage(self) -> None:
@@ -50,6 +60,19 @@ def build_services(
     db = db or Database(settings.database_url)
     vault = CredentialVault(settings.webapp_enc_key)
     users = UserService(db, admin_korail_id=settings.admin_korail_id)
+    launcher = launcher or create_launcher(
+        use_celery,
+        settings.redis_url,
+        settings.redis_db,
+        vault,
+        celery_pool=settings.celery_pool,
+    )
+    egresses = EgressPool.from_settings(
+        settings, gate_factory=_gate_factory(launcher, settings.korail_egress_rpm)
+    )
+    logger.info(f"Korail egresses: {egresses.describe()}")
+    if korail_login is default_korail_login:
+        korail_login = functools.partial(default_korail_login, egresses=egresses)
     auth = AuthService(
         db,
         users,
@@ -76,13 +99,6 @@ def build_services(
         )
         notifier.add(push)
 
-    launcher = launcher or create_launcher(
-        use_celery,
-        settings.redis_url,
-        settings.redis_db,
-        vault,
-        celery_pool=settings.celery_pool,
-    )
     reservations = ReservationService(
         db,
         launcher,
@@ -92,6 +108,7 @@ def build_services(
         max_active_per_user=settings.max_reservations_per_user,
         retention_days=settings.reservation_retention_days,
         max_duration=settings.reservation_timeout,
+        egresses=egresses,
         device_for=users.korail_device,
     )
     return Services(
@@ -103,8 +120,23 @@ def build_services(
         notifier=notifier,
         sse=sse,
         reservations=reservations,
+        egresses=egresses,
         push=push,
     )
+
+
+def _gate_factory(launcher: Launcher, rpm: int):
+    """출구 상태를 워커와 같은 곳에 둠 (subprocess: 파일, Celery: Redis)"""
+    if isinstance(launcher, CeleryLauncher) and launcher.redis_client is not None:
+        return lambda egress_id: RedisGate(launcher.redis_client, egress_id, rpm)
+    if isinstance(launcher, SubprocessLauncher):
+
+        def file_gate(egress_id: str) -> FileGate:
+            os.makedirs(LOGS_DIR, exist_ok=True)
+            return FileGate(file_gate_path(LOGS_DIR, egress_id), rpm)
+
+        return file_gate
+    return lambda egress_id: MemoryGate(rpm)
 
 
 async def run_housekeeping(services: Services) -> None:

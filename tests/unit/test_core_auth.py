@@ -93,6 +93,59 @@ class TestLogin:
             await services.auth.admin_login("test_admin_password", ip="9.9.9.9")
 
 
+class TestKorailBlock:
+    """코레일 차단은 비밀번호 오류가 아니므로 로그인 실패 횟수에 넣지 않음"""
+
+    @pytest.mark.asyncio
+    async def test_blocked_login_is_not_counted_as_failure(
+        self, services, korail_login
+    ):
+        from core.errors import KorailUnavailable
+
+        def blocked(korail_id, password, device=None):
+            raise KorailUnavailable("코레일 서버가 요청을 일시적으로 차단했습니다.")
+
+        services.auth.korail_login = blocked
+        for _ in range(5):
+            with pytest.raises(KorailUnavailable) as exc:
+                await services.auth.login("01012345678", "correct")
+            assert exc.value.status_code == 503
+
+        services.auth.korail_login = korail_login
+        await services.auth.login("01012345678", "correct")
+
+    def test_login_uses_account_egress_and_records_block(self):
+        from core.auth import default_korail_login
+        from core.egress import Egress, EgressPool
+        from core.errors import KorailUnavailable
+
+        pool = EgressPool([Egress("home1", "socks5h://h:1080")])
+        created = []
+
+        class Handler:
+            loginError = "차단"
+            loginBlocked = True
+
+            def __init__(self, proxy_url="", egress_id="", *, device=None):
+                created.append((proxy_url, egress_id))
+
+            def login(self, *_):
+                return False
+
+            def close(self):
+                pass
+
+        with pytest.raises(KorailUnavailable):
+            default_korail_login("010-1234-5678", "pw", pool, handler_cls=Handler)
+        assert created == [("socks5h://h:1080", "home1")]
+        assert pool.gate("home1").blocked_for() > 0
+
+        # 차단 대기 중에는 코레일에 요청하지 않음
+        with pytest.raises(KorailUnavailable):
+            default_korail_login("010-1234-5678", "pw", pool, handler_cls=Handler)
+        assert len(created) == 1
+
+
 class TestSessions:
     @pytest.mark.asyncio
     async def test_resolve_and_logout(self, services):
@@ -164,7 +217,7 @@ class TestConnectionUsage:
 
         db = Database(f"sqlite:///{tmp_path}/pool.db")
         svc = build_services(
-            test_settings, db=db, korail_login=lambda i, p, d=None: True
+            test_settings, db=db, korail_login=lambda i, p, device=None: True
         )
         svc.init_storage()
         token, _ = await svc.auth.login("01012345678", "x")

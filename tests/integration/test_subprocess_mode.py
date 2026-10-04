@@ -357,7 +357,7 @@ class TestWorkerEntrypoint:
         spec = {field: "x" for field in worker.REQUIRED_FIELDS}
         path = tmp_path / "result_x.json"
 
-        def fake_run(spec, reporter, on_success):
+        def fake_run(spec, reporter, on_success, **_):
             on_success(train_info="KTX 101", attempts=2)
             assert json.loads(path.read_text()) == {
                 "train_info": "KTX 101",
@@ -372,6 +372,35 @@ class TestWorkerEntrypoint:
             assert worker._run(spec, str(path)) == 0
 
         assert path.exists() is kept
+
+    def test_workers_share_egress_state_through_files(self, tmp_path):
+        """같은 서버의 워커들은 출구별 파일로 요청 순서·차단 대기를 공유"""
+        from core.egress import FileGate, NullGate
+        from telegramBot import worker
+
+        spec = {"egress_id": "home1", "egress_rpm": 60}
+        a = worker.build_gate(spec, str(tmp_path))
+        b = worker.build_gate(spec, str(tmp_path))
+        assert isinstance(a, FileGate) and a.rpm == 60
+        a.report_block()
+        assert b.blocked_for() > 0
+        assert (tmp_path / "egress_home1.json").exists()
+        # 출구가 없는 명세(수동 실행 등)는 제한 없음
+        assert isinstance(worker.build_gate({}, str(tmp_path)), NullGate)
+
+        seen = {}
+
+        def fake_run(spec, reporter, on_success, gate):
+            seen["gate"] = gate
+            return {"status": "failed"}
+
+        full = {field: "x" for field in worker.REQUIRED_FIELDS}
+        full.update(spec)
+        with patch.object(
+            worker, "run_reservation", side_effect=fake_run
+        ), patch.object(worker, "build_reporter"):
+            worker._run(full, str(tmp_path / "result_x.json"), str(tmp_path))
+        assert seen["gate"].path == str(tmp_path / "egress_home1.json")
 
     def test_worker_rejects_incomplete_spec(self):
         from telegramBot import worker

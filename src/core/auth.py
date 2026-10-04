@@ -18,7 +18,8 @@ from sqlalchemy import delete
 
 from .crypto import CredentialVault, new_token, sha256_hex
 from .db import Database, utcnow
-from .errors import AuthFailed, NotAllowed, RateLimited, ServiceError
+from .egress import EgressPool
+from .errors import AuthFailed, KorailUnavailable, NotAllowed, RateLimited, ServiceError
 from .models import User, WebSession
 from .schemas import (
     ADMIN_USER_ID,
@@ -32,8 +33,8 @@ from .users import UserService
 
 logger = logging.getLogger(__name__)
 
-# (코레일 ID, 비밀번호, 기기 신원) -> (성공 여부, 실패 사유) 또는 성공 여부만 반환
-KorailLogin = Callable[[str, str, Optional[dict]], "bool | tuple[bool, str]"]
+# (코레일 ID, 비밀번호, device=기기 신원) -> (성공 여부, 실패 사유) 또는 성공 여부만 반환
+KorailLogin = Callable[..., "bool | tuple[bool, str]"]
 Alert = Callable[[str], Awaitable[None]]
 
 # "로그인 유지"를 끈 경우 세션 수명
@@ -43,16 +44,43 @@ IP_MAX_FAILURES = 20
 
 
 def default_korail_login(
-    korail_id: str, password: str, device: Optional[dict] = None
+    korail_id: str,
+    password: str,
+    egresses: Optional[EgressPool] = None,
+    handler_cls=None,
+    *,
+    device: Optional[dict] = None,
 ) -> tuple[bool, str]:
-    from telegramBot.korail_client import ReserveHandler
+    """코레일 로그인 확인 (그 계정의 예약과 같은 출구·기기로 요청)
 
-    handler = ReserveHandler(device)
+    device: 계정의 고정 기기 신원 (UserService.korail_device)
+
+    Raises:
+        KorailUnavailable: 출구가 코레일 차단으로 쉬는 중이거나 이번 요청이 차단됨
+    """
+    from telegramBot.korail_client import BLOCKED_LOGIN_MESSAGE, ReserveHandler
+
+    ReserveHandler = handler_cls or ReserveHandler
+    egress = egresses.for_account(korail_id) if egresses else None
+    gate = egresses.gate(egress.id) if egress else None
+    if gate is not None and gate.blocked_for() > 0:
+        # 차단 중에 같은 출구로 요청하면 차단이 길어짐
+        raise KorailUnavailable(BLOCKED_LOGIN_MESSAGE)
+
+    handler = (
+        ReserveHandler(proxy_url=egress.proxy_url, egress_id=egress.id, device=device)
+        if egress
+        else ReserveHandler(device=device)
+    )
     try:
         ok = handler.login(korail_id, password)
-        return ok, handler.loginError
     finally:
         handler.close()
+    if handler.loginBlocked is True:
+        if gate is not None:
+            gate.report_block()
+        raise KorailUnavailable(handler.loginError)
+    return ok, handler.loginError
 
 
 def _login_result(result) -> tuple[bool, str]:
@@ -153,7 +181,7 @@ class AuthService:
     def _korail_login(self, korail_id: str, password: str):
         """예약 워커와 같은 기기 신원으로 코레일 로그인 확인 (블로킹)"""
         device = self.users.korail_device(korail_id)
-        return self.korail_login(korail_id, password, device)
+        return self.korail_login(korail_id, password, device=device)
 
     def _check_throttle(self, *keys: str, limits: tuple[int, ...]) -> None:
         for key, limit in zip(keys, limits):

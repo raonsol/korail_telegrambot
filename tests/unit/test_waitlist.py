@@ -189,7 +189,7 @@ def test_runner_reports_waitlist_success():
         SPEC,
         reporter,
         on_success=on_success,
-        handler_factory=lambda _device: handler,
+        handler_factory=lambda: handler,
         sleep=lambda _: None,
     )
 
@@ -210,9 +210,7 @@ def test_runner_passes_disabled_waitlist_by_default():
     )
     spec = {k: v for k, v in SPEC.items() if k != "allow_waitlist"}
 
-    run_reservation(
-        spec, Mock(), handler_factory=lambda _device: handler, sleep=lambda _: None
-    )
+    run_reservation(spec, Mock(), handler_factory=lambda: handler, sleep=lambda _: None)
 
     assert handler.reserve_single_attempt.call_args.kwargs["allowWaitlist"] is False
 

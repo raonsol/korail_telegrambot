@@ -14,6 +14,7 @@ from celery.signals import worker_shutting_down
 
 from config import celery_settings, web_settings
 from core.crypto import CredentialVault
+from core.egress import MemoryGate, NullGate, RedisGate
 from core.runner import MAX_DURATION_MESSAGE, build_reporter, run_reservation
 from core.task_state import (
     HEARTBEAT_INTERVAL_SECONDS,
@@ -159,6 +160,37 @@ def _resolve_password(spec: dict) -> str | None:
     return None
 
 
+def _resolve_proxy(spec: dict) -> str | None:
+    """출구 프록시 주소 (인증 정보가 있을 수 있어 브로커에는 암호화돼 실림)
+
+    복호화하지 못하면 None (직접 요청하면 계정이 다른 IP에서 보이므로 예약하지 않음)
+    """
+    encrypted = spec.get("egress_proxy_enc")
+    if encrypted:
+        return CredentialVault(web_settings.webapp_enc_key).decrypt(encrypted)
+    return spec.get("egress_proxy") or ""
+
+
+# Redis 없이 실행될 때 이 워커 프로세스 안에서만 공유하는 출구 상태
+_local_gates: dict[str, MemoryGate] = {}
+_local_gates_lock = threading.Lock()
+
+
+def _build_gate(spec: dict, redis_client):
+    """출구 상태: 모든 워커 서버가 Redis로 공유 (없으면 이 프로세스 안에서만)"""
+    egress_id = spec.get("egress_id")
+    if not egress_id:
+        return NullGate()
+    rpm = int(spec.get("egress_rpm") or 0)
+    if redis_client is not None:
+        return RedisGate(redis_client, egress_id, rpm)
+    with _local_gates_lock:
+        gate = _local_gates.get(egress_id)
+        if gate is None or gate.rpm != rpm:
+            gate = _local_gates[egress_id] = MemoryGate(rpm)
+        return gate
+
+
 def _max_duration(spec: dict) -> int:
     """웹 서버가 정한 최대 실행 시간. 워커 설정(visibility_timeout 기준)보다 길 수 없음"""
     requested = spec.get("max_duration")
@@ -254,13 +286,23 @@ def _run_task(spec: dict, reporter, redis_client, key: str) -> dict:
     if not password:
         reporter.send("error", message="예약 정보를 복호화할 수 없습니다.")
         return {"status": "error", "message": "missing credentials"}
+    proxy = _resolve_proxy(spec)
+    if proxy is None:
+        reporter.send("error", message="예약 정보를 복호화할 수 없습니다.")
+        return {"status": "error", "message": "missing egress proxy"}
 
     try:
         result = run_reservation(
-            {**spec, "korail_pw": password, "max_duration": _max_duration(spec)},
+            {
+                **spec,
+                "korail_pw": password,
+                "egress_proxy": proxy,
+                "max_duration": _max_duration(spec),
+            },
             reporter,
             should_stop=should_stop,
             on_success=mark_completed,
+            gate=_build_gate(spec, redis_client),
         )
     except SoftTimeLimitExceeded:
         if is_completed():
