@@ -12,12 +12,16 @@ from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from typing import Iterator
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 logger = logging.getLogger(__name__)
+
+MIGRATIONS_DIR = os.path.join(os.path.dirname(__file__), "migrations")
+# Alembic 도입 전 create_all 로 만든 스키마 (migrations/versions/0001_baseline.py)
+BASELINE_REVISION = "0001"
 
 
 class Base(DeclarativeBase):
@@ -81,12 +85,47 @@ class Database:
         )
 
     def create_all(self, retries: int = 10, delay: float = 2.0) -> None:
-        """테이블 생성 (DB 컨테이너가 늦게 뜨는 경우를 위해 재시도)"""
+        """테이블 생성만 (마이그레이션 이력 없음, 테스트용). 앱은 migrate()를 사용"""
         from . import models  # noqa: F401  (모델 등록)
 
+        self._retry(lambda: Base.metadata.create_all(self.engine), retries, delay)
+
+    def migrate(self, retries: int = 10, delay: float = 2.0) -> None:
+        """스키마를 최신 리비전으로 맞춤 (DB 컨테이너가 늦게 뜨는 경우를 위해 재시도)
+
+        - 빈 DB: 현재 모델로 테이블을 만들고 최신 리비전(head)으로 표시
+        - Alembic 도입 전 DB (테이블은 있고 alembic_version 이 없음): baseline 으로 표시 후 업그레이드
+        - 그 밖: 남은 리비전만 적용
+        """
+        self._retry(self._migrate, retries, delay)
+
+    def _migrate(self) -> None:
+        from alembic import command
+        from alembic.config import Config
+
+        from . import models  # noqa: F401  (모델 등록)
+
+        config = Config()
+        config.set_main_option("script_location", MIGRATIONS_DIR)
+        with self._shared_connection_lock or nullcontext():
+            with self.engine.begin() as connection:
+                config.attributes["connection"] = connection
+                tables = set(inspect(connection).get_table_names())
+                if "users" not in tables:
+                    Base.metadata.create_all(connection)
+                    command.stamp(config, "head", purge=True)
+                    logger.info("Database schema created")
+                    return
+                if "alembic_version" not in tables:
+                    command.stamp(config, BASELINE_REVISION)
+                    logger.info("Existing database stamped as migration baseline")
+                command.upgrade(config, "head")
+
+    @staticmethod
+    def _retry(action, retries: int, delay: float) -> None:
         for attempt in range(1, retries + 1):
             try:
-                Base.metadata.create_all(self.engine)
+                action()
                 return
             except Exception as e:
                 if attempt == retries:

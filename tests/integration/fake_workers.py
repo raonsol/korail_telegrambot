@@ -33,6 +33,9 @@ def run_with_no_trains(spec, log_path):
     import core.runner as runner
 
     class NoTrains:
+        def __init__(self, device=None):
+            self.device = device
+
         def login(self, *a):
             return True
 

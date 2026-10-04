@@ -10,8 +10,8 @@ KTX (Korean train) reservation automation with **two channels** — a Telegram b
 
 - **FastAPI**: Telegram webhook, web app REST API, worker callbacks, PWA static files
 - **python-telegram-bot**: Telegram Bot API interactions
-- **pykorail** (`==0.2.0`): KTX reservation API client library (코레일톡 앱 API, curl_cffi 기반)
-- **SQLAlchemy**: Users, web sessions, reservations (+30-day history), push subscriptions
+- **pykorail** (`==0.2.1`): KTX reservation API client library (코레일톡 앱 API, curl_cffi 기반)
+- **SQLAlchemy + Alembic**: Users, web sessions, reservations (+30-day history), push subscriptions; schema migrations run on web startup
   - SQLite (local / subprocess mode), PostgreSQL (Docker Celery mode)
 - **Redis + Celery**: Optional distributed task processing system (MQ pattern)
 - **React + Vite + vite-plugin-pwa** (`webapp/`): Installable PWA with offline shell and Web Push
@@ -84,7 +84,7 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 
 #### Application Assembly
 - **src/app.py**: Builds `Services`, the optional `TelegramBot`, and the FastAPI app (`web/factory.py::create_app`)
-- **src/web/factory.py**: Lifespan (DB `create_all` + ALLOW_LIST seed, housekeeping loop, webhook), router mounting
+- **src/web/factory.py**: Lifespan (DB `migrate()` + ALLOW_LIST seed, housekeeping loop, webhook), router mounting
 - **src/config.py**: Environment-based settings (`WebSettings`, `CelerySettings`)
 
 #### Core Domain (`src/core/`)
@@ -114,14 +114,16 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 - **korail_client.py** (pykorail): `ReserveHandler.login` (bool + `loginError` reason) / `reserve_single_attempt` / `close`
   - `create_korail_client()`: logs Korail server block responses (code -2000)
   - `FATAL_ERRORS` (`StationNotFoundError`, `PastDepartureError`): `reserve_single_attempt` returns `fatal: True` → `core/runner.py` reports `failed` immediately
-  - `create_korail_client(proxy_url, egress_id)` sets the proxy on pykorail's curl_cffi session only and raises `KorailBlockedError` on code -2000; `reserve_single_attempt` returns `blocked: True`, `login()` sets `loginBlocked` → `core/runner.py` reports the block to the egress gate and waits (cancel / max duration checked every 5s, `progress` every 5 min so the 30-min stale rule does not fire)
+  - `create_korail_client(proxy_url, egress_id, *, device=)` sets the proxy on pykorail's curl_cffi session only and raises `KorailBlockedError` on code -2000; `reserve_single_attempt` returns `blocked: True`, `login()` sets `loginBlocked` → `core/runner.py` reports the block to the egress gate and waits (cancel / max duration checked every 5s, `progress` every 5 min so the 30-min stale rule does not fire)
   - Web/Telegram login checks use the account's egress (`core.auth.default_korail_login`); a blocked login raises `KorailUnavailable` (503) and is not counted as a password failure
+  - **Waitlist (예약대기)** is opt-in per reservation: `ReservationRequest.allow_waitlist` (default false; forced false for `special_only`, see `WAITLIST_SEAT_TYPES`) → `reservations.allow_waitlist` (migration `0005`) → `spec["allow_waitlist"]` → `reserve_single_attempt(allowWaitlist=)`. Telegram asks it in state 13 (between seat type 10 and confirm 11, callbacks `waitlist_on/off`, skipped for `special_only`); the web form has a checkbox with a "예약대기란?" explanation. When enabled, search uses `include_waiting_list=True`. Each attempt first reserves a train with seats (departure order); only if every train in range is sold out does it register a waitlist on the earliest train with `has_waiting_list()` (no seats + flag 9) and return `waiting: True`. Korail's flag is general-class only, so the waitlist is always requested with `GENERAL_ONLY` (also for `special` = SPECIAL_FIRST) and `special_only` never waitlists. pykorail's `create()` registers a waitlist only for trains without any seat
 - **messages.py**, **calendar_keyboard.py**, **time_keyboard.py**, **station_keyboard.py**
 
 #### Web App (`webapp/`)
 - Vite + React + TypeScript, TanStack Query, react-router (basename `/app`)
 - `src/sw.ts`: Workbox precache (offline shell), push + notificationclick handlers (`injectManifest`)
 - Screens: login (user/admin), home (active + 30-day history), new reservation, detail, settings (push/Telegram notify/install), admin (users, all reservations)
+- Seat choice (`components/SeatPicker.tsx`): 일반실/특실 toggles + a priority choice when both are on; `format.ts` `seatSelectionFrom` / `toSeatType` map it to the same four `seat_type` values the API and Telegram use (both → `general`/`special`, one → `*_only`, none → blocked in the form)
 - Dates/times are validated in **KST** on both client and server
 - Icons: `npm run generate-icons` from `public/icon.svg`
 
@@ -158,9 +160,9 @@ flower: Web-based monitoring (OPTIONAL - for debugging)
 
 ```python
 # DB (SQLAlchemy, core/models.py) - both modes
-users              # id = phone digits, is_active, telegram_chat_id, telegram_notify
+users              # id = account_key (phone digits; admin Korail account may be email/membership no.), is_active, telegram_chat_id, telegram_notify, korail_device_profile, korail_android_id (unique)
 web_sessions       # id = sha256(cookie token), encrypted Korail password, csrf_token, expires_at
-reservations       # id = reservation_id, owner_id, origin, chat_id, status, runner_ref, attempts, ...
+reservations       # id = reservation_id, owner_id, origin, chat_id, status, runner_ref, attempts, allow_waitlist, waitlisted, ...
 push_subscriptions # Web Push endpoints per user
 
 # In-memory (bot.py) - Telegram conversation only
@@ -169,9 +171,15 @@ subscribes = []    # chats receiving broadcast notifications
 ```
 
 Reservation status: `queued → running → success | failed | error | cancelled`.
+A waitlist registration is `success` with `waitlisted=true` (worker reports `waiting: true`; also kept in the unreported-success result file / Redis state). Notifications and the web UI then say "예약대기 신청" instead of "20분 안에 결제" - check `waitlisted` wherever success is presented.
 On startup, active `subprocess` reservations → `error` (their workers stopped with the previous server). Celery mode: lost-worker check every 60s (see Celery Mode). Housekeeping (every 10 min): RUNNING idle > 30 min or QUEUED > 24 h → `error`; terminal reservations older than `RESERVATION_RETENTION_DAYS` (default **30**) are deleted; expired sessions are deleted.
 
-The DB schema is created with `create_all` (no migrations yet). Add Alembic before changing existing columns.
+The DB schema is managed by Alembic (`src/core/migrations`, `alembic.ini` at the repo root). The web server runs `Database.migrate()` on startup:
+- empty DB → `create_all` from the current models + stamp `head`
+- pre-Alembic DB (tables but no `alembic_version`) → stamp baseline `0001`, then upgrade
+- otherwise → upgrade to `head`
+
+Any model change needs a revision in `src/core/migrations/versions/` (`DATABASE_URL=... pipenv run alembic revision --autogenerate -m "..."`, then review it; `alembic check` must report nothing). Keep fresh (`create_all`) and migrated schemas identical - e.g. declare indexes with `index=True` so names match `ix_<table>_<column>`. `env.py` uses `render_as_batch=True` for SQLite. Workers never touch the DB, so only the web server migrates.
 
 ### Multiple Reservation Support (Important!)
 
@@ -240,7 +248,7 @@ User types new text → searches again (lastAction stays at 5 until selection)
 
 1. **User Authentication**: Phone number must be an active user in the DB
 2. **Korail Login**: Account credential validation (links `telegram_chat_id` to the user)
-3. **Interactive Selection**: date, stations, time range, train type (`KTX`/`ALL`), seat type (`general`/`general_only`/`special`/`special_only`)
+3. **Interactive Selection**: date, stations, time range, train type (`KTX`/`ALL`), seat type (`general`/`general_only`/`special`/`special_only`), waitlist on/off (not asked for `special_only`)
 4. **Reservation Execution**: `ReservationService.start(..., origin="telegram", chat_id=...)`
 5. **Status Updates**: worker → `/internal/events` → `Notifier` (Telegram/SSE/Web Push)
 6. **Completion Handling**: `TelegramBot.deliver()` sends the result and resets `userDict` if no reservation remains
@@ -395,6 +403,7 @@ brew install redis
 BOTTOKEN_DEV          # Development Telegram bot token (for local execution)
 WEBHOOK_URL_DEV       # Development webhook URL (for local execution)
 ALLOW_LIST            # Phone numbers seeded into the user DB on startup (DB is the source of truth afterwards)
+                      # ADMIN_KORAIL_ID is also added on startup as an active row (device identity storage)
 ADMINPW               # Admin password for privileged access (Telegram + web admin login)
 ```
 
@@ -441,9 +450,19 @@ DATAGOV_API_KEY       # 공공데이터포털 API 서비스키 (역 검색용)
 ```
 
 ### Korail Client (pykorail) Notes
-- pykorail is pinned (`==0.2.0`): `create_korail_client()` and `scripts/check_korail_login.py` wrap its private `client._api._parse`
+- pykorail is pinned (`==0.2.1`): `create_korail_client()` and `scripts/check_korail_login.py` wrap its private `client._api._parse`
+- Since 0.2.1, a non-Korail HTTP 4xx/5xx body (e.g. the 403 `-2000` block) raises `HttpStatusError` (a `TransportError`, not `KorailError`) from `_parse`; `ReserveHandler.loginError` shows it as "코레일 서버가 요청을 거절했습니다: ...", not as a password error
+- Since 0.2.1, every `Korail()` without `device_profile`/`android_id` signs with a freshly generated synthetic Android ID (0.2.0 used one fixed ID for everyone) and the User-Agent is always `korailtalk`
+- **Device identity (Android ID)**: Korail blocks accounts that share an Android ID, and a new ID on every login looks like a new phone. Each Korail account therefore uses one fixed device `{"profile_id", "android_id"}` from `UserService.korail_device(korail_id)`:
+  - issued on first use (`random_profile()`) and stored in `users.korail_device_profile` / `users.korail_android_id` (unique; written only while NULL so concurrent first logins agree)
+  - the admin Korail account (`ADMIN_KORAIL_ID`) also gets a `users` row (`ensure_admin_account()`, on startup and whenever its device is needed, so a deleted row is re-added with a new device). It is added active (name "관리자 코레일 계정"), so a phone-number admin account can also log in as a regular user (per-user limit applies there); an existing row (e.g. the admin's phone is a registered user) is left as is
+  - `users.id` is `core.schemas.account_key(korail_id)`: phone → digits, email → lowercase, other ids (membership number) → stripped (up to 50 chars, migration `0003`). `UserService` lookups use `account_key`
+  - an account without a row gets `None` (pykorail makes a one-off ID) and a warning is logged
+  - used by every login: web/admin login (`AuthService._korail_login`), Telegram login (`default_korail_login(..., device=)` → `ReserveHandler(..., device=)`), and workers (`ReservationService` puts it in `spec["korail_device"]`; `run_reservation` builds `ReserveHandler(proxy_url, egress_id, device=)`, so re-logins keep the same egress and device)
+  - never call `create_korail_client()` / `ReserveHandler()` without the device in production code
+- Phone numbers are accepted with or without hyphens (also spaces/dots) everywhere (`is_valid_phone`, `PHONE_FORMAT_HINT`); user ids are stored as digits, and Korail receives `010-1234-5678` (pykorail 0.2.1 strips the hyphens and sends the phone login flag)
 - `login()` raises `LoginFailedError` instead of returning `False`; `ReserveHandler.login()` still returns a bool and keeps a user-facing reason in `ReserveHandler.loginError`
-- Korail server block (anti-macro) responses look like `{"code": -2000, "id", "message"}`; pykorail drops them (login fails / search looks like "no trains"), so `create_korail_client()` wraps the response parser, logs them at ERROR (`코레일 서버 차단 응답 ...`, URL without query string, egress id) and raises `KorailBlockedError`. Cloudflare WARP egress (container and host proxy mode) was blocked with -2000 while direct egress worked, so WARP support was removed; use proxies on lines you own (`KORAIL_EGRESSES`)
+- Korail server block (anti-macro) responses look like `{"code": -2000, "id", "message"}`; pykorail drops them (login fails / search looks like "no trains"), so `create_korail_client()` wraps the response parser, logs them at ERROR (`코레일 서버 차단 응답 ...`, URL without query string, egress id) and raises `KorailBlockedError` (also when pykorail 0.2.1 already raised `HttpStatusError` for the 403 block body). Cloudflare WARP egress (container and host proxy mode) was blocked with -2000 while direct egress worked, so WARP support was removed; use proxies on lines you own (`KORAIL_EGRESSES`)
 - pykorail's fallback "아이디 또는 비밀번호가 올바르지 않습니다" (code `None`) means the server sent no reason - real wrong-password responses carry a code such as `WRR000101`
 - `make korail-login-check` pipes `scripts/check_korail_login.py` into the running web container to diagnose ADMIN_KORAIL_ID/PW (env values as received, raw server response)
 - Station names are validated against Korail's station master before searching (`StationNotFoundError`)
@@ -511,6 +530,8 @@ ADMIN_KORAIL_PW       # Default Korail password for admin quick-login
 - Immediate revocation on logout / user deactivation
 
 Always run `make lint` before committing changes to maintain code formatting consistency.
+
+Write pull request titles and descriptions in Korean, ending sentences in noun form (명사형 종결, e.g. "~추가", "~변경", "~확인", "~함"), not polite verb endings ("~합니다", "~한다").
 
 ## Service Optimization Recommendations
 

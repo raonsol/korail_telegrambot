@@ -254,7 +254,11 @@ class TestAdminApi:
         await _admin_login(client)
 
         users = await client.get("/api/admin/users")
-        assert [u["phone"] for u in users.json()] == ["010-1234-5678", "010-8765-4321"]
+        assert [u["phone"] for u in users.json()] == [
+            "010-1234-5678",
+            "010-8765-4321",
+            "admin_user",  # ADMIN_KORAIL_ID 행
+        ]
 
         created = await client.post(
             "/api/admin/users", json={"phone": "010-5555-6666", "name": "김철수"}

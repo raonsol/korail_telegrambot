@@ -42,6 +42,13 @@ class TestLogin:
         assert "010-9999-9999" in alerts[0]
 
     @pytest.mark.asyncio
+    async def test_login_accepts_phone_without_hyphens(self, services, korail_login):
+        _, session = await services.auth.login("01012345678", "correct")
+
+        assert korail_login.calls == [("010-1234-5678", "correct")]
+        assert session.user_id == "01012345678"
+
+    @pytest.mark.asyncio
     async def test_invalid_phone(self, services):
         with pytest.raises(AuthFailed) as exc:
             await services.auth.login("hello", "correct")
@@ -95,7 +102,7 @@ class TestKorailBlock:
     ):
         from core.errors import KorailUnavailable
 
-        def blocked(korail_id, password):
+        def blocked(korail_id, password, device=None):
             raise KorailUnavailable("코레일 서버가 요청을 일시적으로 차단했습니다.")
 
         services.auth.korail_login = blocked
@@ -119,7 +126,7 @@ class TestKorailBlock:
             loginError = "차단"
             loginBlocked = True
 
-            def __init__(self, proxy_url="", egress_id=""):
+            def __init__(self, proxy_url="", egress_id="", *, device=None):
                 created.append((proxy_url, egress_id))
 
             def login(self, *_):
@@ -209,7 +216,9 @@ class TestConnectionUsage:
         from core.services import build_services
 
         db = Database(f"sqlite:///{tmp_path}/pool.db")
-        svc = build_services(test_settings, db=db, korail_login=lambda i, p: True)
+        svc = build_services(
+            test_settings, db=db, korail_login=lambda i, p, device=None: True
+        )
         svc.init_storage()
         token, _ = await svc.auth.login("01012345678", "x")
 

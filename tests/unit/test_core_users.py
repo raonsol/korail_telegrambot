@@ -8,7 +8,8 @@ from core.errors import Conflict, NotFound, ValidationFailed
 class TestUserService:
     def test_seeded_from_allow_list(self, services):
         ids = [u.id for u in services.users.list()]
-        assert ids == ["01012345678", "01087654321"]
+        # admin_user: ADMIN_KORAIL_ID 행 (기기 신원 저장용)
+        assert ids == ["01012345678", "01087654321", "admin_user"]
 
     def test_seed_is_idempotent_and_keeps_existing(self, services):
         services.users.update("01012345678", is_active=False, name="홍길동")
@@ -32,6 +33,10 @@ class TestUserService:
     def test_create_duplicate(self, services):
         with pytest.raises(Conflict):
             services.users.create("01012345678")
+
+    def test_create_with_or_without_hyphens(self, services):
+        assert services.users.create("010-5555-6666").id == "01055556666"
+        assert services.users.create("01077778888").id == "01077778888"
 
     def test_create_invalid_phone(self, services):
         with pytest.raises(ValidationFailed):

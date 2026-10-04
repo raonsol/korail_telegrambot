@@ -43,9 +43,10 @@ class Services:
     push: Optional[WebPushChannel] = None
 
     def init_storage(self) -> None:
-        """테이블 생성 + ALLOW_LIST 시드"""
-        self.db.create_all()
+        """스키마 마이그레이션 + ALLOW_LIST 시드 + 관리자 코레일 계정 행"""
+        self.db.migrate()
         self.users.seed_from_allow_list(self.settings.allow_list)
+        self.users.ensure_admin_account()
 
 
 def build_services(
@@ -58,7 +59,7 @@ def build_services(
 ) -> Services:
     db = db or Database(settings.database_url)
     vault = CredentialVault(settings.webapp_enc_key)
-    users = UserService(db)
+    users = UserService(db, admin_korail_id=settings.admin_korail_id)
     launcher = launcher or create_launcher(
         use_celery,
         settings.redis_url,
@@ -108,6 +109,7 @@ def build_services(
         retention_days=settings.reservation_retention_days,
         max_duration=settings.reservation_timeout,
         egresses=egresses,
+        device_for=users.korail_device,
     )
     return Services(
         settings=settings,

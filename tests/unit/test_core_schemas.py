@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from core.schemas import (
     ReservationRequest,
     format_phone,
+    account_key,
     is_valid_phone,
     normalize_phone,
     now_kst,
@@ -84,6 +85,11 @@ class TestPhoneHelpers:
         [
             ("010-1234-5678", True),
             ("01012345678", True),
+            ("010 1234 5678", True),
+            ("010.1234.5678", True),
+            (" 01012345678 ", True),
+            ("010-1234-5678a", False),
+            ("tel:01012345678", False),
             ("0101234567", False),
             ("02012345678", False),
             ("", False),
@@ -91,3 +97,9 @@ class TestPhoneHelpers:
     )
     def test_is_valid_phone(self, phone, valid):
         assert is_valid_phone(phone) is valid
+
+    def test_account_key(self):
+        assert account_key("010-1234-5678") == "01012345678"
+        assert account_key(" 01012345678 ") == "01012345678"
+        assert account_key("Admin@Example.com") == "admin@example.com"
+        assert account_key(" 1234567890 ") == "1234567890"

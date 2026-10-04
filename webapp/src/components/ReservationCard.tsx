@@ -18,7 +18,7 @@ export function ReservationCard({
           <span className="route-arrow">→</span>
           {r.dst_station}
         </span>
-        <StatusBadge status={r.status} />
+        <StatusBadge status={r.status} waitlisted={r.waitlisted} />
       </div>
       <div className="card-meta">
         <span>{formatDate(r.dep_date)}</span>

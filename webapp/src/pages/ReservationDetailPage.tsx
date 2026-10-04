@@ -42,7 +42,7 @@ export function ReservationDetailPage() {
       ) : (
         <>
           <section className={`hero status-${r.status}`}>
-            <StatusBadge status={r.status} />
+            <StatusBadge status={r.status} waitlisted={r.waitlisted} />
             <div className="hero-route">
               <span>{r.src_station}</span>
               <Icon name="arrow" size={22} />
@@ -62,7 +62,22 @@ export function ReservationDetailPage() {
 
           {justCreated && r.is_active && <PushPrompt />}
 
-          {r.status === 'success' && (
+          {r.status === 'success' && r.waitlisted && (
+            <section className="card success-card">
+              <h2>예약대기를 신청했습니다</h2>
+              {r.result_text && <p className="result-text">{r.result_text}</p>}
+              <p>
+                <strong>아직 좌석이 확보된 것은 아닙니다.</strong> 좌석이 배정되면 코레일이
+                알려주며, 안내받은 기한 안에 결제해야 합니다.
+              </p>
+              <p className="muted small">
+                신청 내역 확인/취소: 코레일톡 앱 오른쪽 상단 메뉴 → 승차권 예매 → 예약 승차권
+                조회/취소
+              </p>
+            </section>
+          )}
+
+          {r.status === 'success' && !r.waitlisted && (
             <section className="card success-card">
               <h2>예약에 성공했습니다 🎉</h2>
               {r.result_text && <p className="result-text">{r.result_text}</p>}
@@ -90,6 +105,8 @@ export function ReservationDetailPage() {
               <dd>{r.train_type_label}</dd>
               <dt>좌석</dt>
               <dd>{r.seat_type_label}</dd>
+              <dt>예약대기</dt>
+              <dd>{r.allow_waitlist ? '사용' : '사용 안 함'}</dd>
               <dt>시도 횟수</dt>
               <dd>{r.attempts.toLocaleString()}회</dd>
               <dt>시작</dt>

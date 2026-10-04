@@ -16,7 +16,7 @@ import logging
 import threading
 import uuid
 from datetime import timedelta
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy import delete, func, or_, select
 
@@ -68,8 +68,11 @@ class ReservationService:
         retention_days: int = 30,
         max_duration: Optional[int] = None,
         egresses: Optional[EgressPool] = None,
+        device_for: Optional[Callable[[str], Optional[dict]]] = None,
     ):
         self.db = db
+        # 코레일 계정의 기기 신원 (UserService.korail_device) - 워커가 같은 기기로 로그인하도록 spec에 포함
+        self.device_for = device_for
         self.launcher = launcher
         self.notifier = notifier
         self.callback_url = callback_url
@@ -248,6 +251,7 @@ class ReservationService:
                         max_dep_time=request.max_dep_time,
                         train_type=request.train_type,
                         seat_type=request.seat_type,
+                        allow_waitlist=request.allow_waitlist,
                         status=ReservationStatus.QUEUED.value,
                         runner=self.launcher.name,
                         callback_token_hash=sha256_hex(token),
@@ -270,11 +274,14 @@ class ReservationService:
             "max_dep_time": request.max_dep_time,
             "train_type": request.train_type,
             "seat_type": request.seat_type,
+            "allow_waitlist": request.allow_waitlist,
         }
         spec.update(self._egress_spec(egress))
         if self.max_duration:
             spec["max_duration"] = self.max_duration
         try:
+            if self.device_for:
+                spec["korail_device"] = self.device_for(korail_id)
             runner_ref = self.launcher.launch(spec)
         except Exception as e:
             logger.exception("Failed to launch reservation")
@@ -382,6 +389,7 @@ class ReservationService:
                 r.attempts = max(r.attempts or 0, event.attempts)
             if new_status == ReservationStatus.SUCCESS:
                 r.result_text = event.train_info or event.message
+                r.waitlisted = event.waiting
                 r.error = None
                 r.finished_at = r.updated_at
             elif new_status in (ReservationStatus.FAILED, ReservationStatus.ERROR):
@@ -424,12 +432,19 @@ class ReservationService:
                 result = None
             if result:
                 return await self._record_success(
-                    reservation_id, result["train_info"], result.get("attempts")
+                    reservation_id,
+                    result["train_info"],
+                    result.get("attempts"),
+                    waiting=result.get("waiting") is True,
                 )
         return await self._fail_if_active(reservation_id, message)
 
     async def _record_success(
-        self, reservation_id: str, train_info: str, attempts: Optional[int]
+        self,
+        reservation_id: str,
+        train_info: str,
+        attempts: Optional[int],
+        waiting: bool = False,
     ) -> bool:
         with self.db.session() as s:
             r = s.get(Reservation, reservation_id)
@@ -441,6 +456,7 @@ class ReservationService:
             previous = r.status
             r.status = ReservationStatus.SUCCESS.value
             r.result_text = train_info
+            r.waitlisted = waiting
             r.error = None
             if attempts is not None:
                 r.attempts = max(r.attempts or 0, attempts)

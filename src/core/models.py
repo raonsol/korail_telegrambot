@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base, utcnow
@@ -14,14 +14,21 @@ class User(Base):
 
     __tablename__ = "users"
 
-    # 하이픈 없는 전화번호 (코레일 로그인 ID)
-    id: Mapped[str] = mapped_column(String(20), primary_key=True)
+    # 코레일 로그인 ID (core.schemas.account_key): 하이픈 없는 전화번호
+    # 관리자 코레일 계정(ADMIN_KORAIL_ID)은 이메일·회원번호일 수 있음
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
     name: Mapped[Optional[str]] = mapped_column(String(50))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     telegram_chat_id: Mapped[Optional[int]] = mapped_column(BigInteger, index=True)
     telegram_notify: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # 코레일 접속에 쓰는 기기 신원 (pykorail 기기 프로파일 id + 합성 Android ID)
+    # 처음 코레일 로그인할 때 발급해 계속 재사용. 여러 계정이 같은 Android ID를 쓰면 코레일이 차단함
+    korail_device_profile: Mapped[Optional[str]] = mapped_column(String(40))
+    korail_android_id: Mapped[Optional[str]] = mapped_column(
+        String(16), unique=True, index=True
+    )
 
 
 class WebSession(Base):
@@ -59,6 +66,10 @@ class Reservation(Base):
     max_dep_time: Mapped[str] = mapped_column(String(4))  # HHMM
     train_type: Mapped[str] = mapped_column(String(10))
     seat_type: Mapped[str] = mapped_column(String(20))
+    # 모두 매진이면 예약대기를 신청할지 (사용자 선택)
+    allow_waitlist: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
 
     status: Mapped[str] = mapped_column(String(12), index=True)
     runner: Mapped[str] = mapped_column(String(12))  # subprocess | celery
@@ -66,6 +77,10 @@ class Reservation(Base):
     callback_token_hash: Mapped[str] = mapped_column(String(64))
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     result_text: Mapped[Optional[str]] = mapped_column(Text)
+    # 좌석 대신 예약대기를 신청해 성공한 경우 (결제 기한 없음, 좌석 배정 시 코레일이 알림)
+    waitlisted: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
     error: Mapped[Optional[str]] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)

@@ -362,6 +362,7 @@ class TestWorkerEntrypoint:
             assert json.loads(path.read_text()) == {
                 "train_info": "KTX 101",
                 "attempts": 2,
+                "waiting": False,
             }
             return {"status": "success", "reported": reported}
 

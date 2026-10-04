@@ -95,9 +95,11 @@ class KorailLoginStub:
     def __init__(self, passwords=("correct", "admin_pass")):
         self.passwords = passwords
         self.calls = []
+        self.devices = []
 
-    def __call__(self, korail_id, password):
+    def __call__(self, korail_id, password, device=None):
         self.calls.append((korail_id, password))
+        self.devices.append(device)
         return password in self.passwords
 
 

@@ -25,8 +25,12 @@ export interface Reservation {
   seat_type: SeatType
   train_type_label: string
   seat_type_label: string
+  /** 예약 생성 시 고른 예약대기 사용 여부 */
+  allow_waitlist: boolean
   attempts: number
   result_text: string | null
+  /** 좌석 대신 예약대기를 신청함 (status === 'success') */
+  waitlisted: boolean
   error: string | null
   created_at: string
   updated_at: string
@@ -42,6 +46,7 @@ export interface ReservationInput {
   max_dep_time: string
   train_type: TrainType
   seat_type: SeatType
+  allow_waitlist: boolean
 }
 
 export interface Me {

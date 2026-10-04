@@ -6,6 +6,7 @@
 주의: 실행할 때마다 로그인 1회로 집계됨 (비밀번호 5회 연속 오류 시 로그인 제한)
 """
 
+import json
 import os
 from config import web_settings
 from core.egress import EgressPool
@@ -23,14 +24,32 @@ print(
 )
 KORAIL_KEYS = ("strResult", "h_msg_cd", "h_msg_txt")
 
+
+def admin_device(korail_id):
+    """웹/텔레그램 관리자 로그인과 같은 기기 신원 (users 테이블의 관리자 코레일 계정 행)"""
+    try:
+        from core.db import Database
+        from core.users import UserService
+
+        users = UserService(Database(web_settings.database_url), admin_korail_id=kid)
+        return users.korail_device(korail_id)
+    except Exception as e:
+        print(f"⚠️  기기 신원을 불러오지 못해 새 Android ID로 접속합니다: {e}")
+        return None
+
+
 egress = EgressPool.from_settings(web_settings).for_account(kid)
 print(f"출구 : {egress.id} ({'직접 연결' if egress.is_direct else '프록시'})")
+device = admin_device(kid)
+print(
+    f"기기 : {device['profile_id'] if device else '-'} / Android ID {device['android_id'] if device else '(새로 생성)'}"
+)
 
-client = create_korail_client(egress.proxy_url, egress.id)
-payloads = []
-# 서버 응답을 가로채 기록 (pykorail 은 실패 시 원본 응답을 버림)
+client = create_korail_client(egress.proxy_url, egress.id, device=device)
+responses = []
+# 서버 응답을 가로채 기록 (pykorail 은 실패 시 원본 응답을 버리고, HTTP 4xx·5xx 는 파싱 중 예외를 냄)
 parse = client._api._parse
-client._api._parse = lambda resp: payloads.append(parse(resp)) or payloads[-1]
+client._api._parse = lambda resp: responses.append(resp) or parse(resp)
 try:
     client.login(kid, kpw)
     print("✅ 로그인 성공")
@@ -38,11 +57,20 @@ except KorailBlockedError as e:
     print(f"⛔ 코레일 서버 차단 응답 (출구 {egress.id}): id={e.block_id}, {e.message}")
 except Exception as e:
     print(f"❌ 로그인 실패: {e}")
-    p = payloads[-1] if payloads else {}
+    last = responses[-1] if responses else None
+    try:
+        p = json.loads(last.text) if last is not None else {}
+    except ValueError:
+        p = {}
+    if not isinstance(p, dict):
+        p = {}
+    print("HTTP 상태:", getattr(last, "status_code", None))
     if any(k in p for k in KORAIL_KEYS):
         print("서버 응답:", {k: p.get(k) for k in KORAIL_KEYS})
     else:
         # 코레일 API 형식이 아님 (서버 차단 code -2000 등) - 개인정보가 없으므로 전체 출력
-        print("⚠️  코레일 API 형식이 아닌 응답:", p)
+        print(
+            "⚠️  코레일 API 형식이 아닌 응답:", p or (last.text[:200] if last else None)
+        )
 finally:
     client.close()

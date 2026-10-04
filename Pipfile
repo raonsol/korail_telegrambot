@@ -13,11 +13,12 @@ redis = "*"
 celery = "*"
 flower = "*"
 sqlalchemy = "*"
+alembic = "*"
 httpx = "*"
 pywebpush = "*"
 psycopg = {extras = ["binary"], version = "*"}
 cryptography = "*"
-pykorail = "==0.2.0"
+pykorail = "==0.2.1"
 
 [dev-packages]
 black = "*"

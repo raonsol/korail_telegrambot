@@ -30,6 +30,13 @@ SEAT_TYPES = {
 # reserve_single_attempt가 돌려주는 '정상적인 실패' (재로그인 불필요)
 EXPECTED_MISSES = ("No trains available", "All trains sold out")
 
+DUPLICATE_RESERVATION_MESSAGE = (
+    "이미 동일한 예약이 존재합니다. 장바구니를 확인해주세요."
+)
+DUPLICATE_WAITLIST_MESSAGE = (
+    "이미 같은 열차에 예약대기를 신청해 두었습니다. 예약 승차권 조회에서 확인해주세요."
+)
+
 MAX_ATTEMPTS_MESSAGE = "최대 시도 횟수를 초과하여 예약이 중단되었습니다."
 MAX_DURATION_MESSAGE = "최대 실행 시간을 초과하여 예약이 중단되었습니다."
 
@@ -66,6 +73,7 @@ class CallbackReporter:
         message: Optional[str] = None,
         attempts: Optional[int] = None,
         train_info: Optional[str] = None,
+        waiting: bool = False,
         retries: int = 3,
     ) -> bool:
         payload = {
@@ -79,6 +87,8 @@ class CallbackReporter:
             payload["attempts"] = attempts
         if train_info is not None:
             payload["train_info"] = train_info
+        if waiting:
+            payload["waiting"] = True
 
         for attempt in range(retries):
             try:
@@ -123,10 +133,14 @@ def result_file(directory: str, reservation_id: str) -> str:
     return os.path.join(directory, f"result_{reservation_id}.json")
 
 
-def write_result_file(path: str, train_info: str, attempts: int) -> None:
+def write_result_file(
+    path: str, train_info: str, attempts: int, waiting: bool = False
+) -> None:
     tmp = f"{path}.tmp"
     with open(tmp, "w") as f:
-        json.dump({"train_info": train_info, "attempts": attempts}, f)
+        json.dump(
+            {"train_info": train_info, "attempts": attempts, "waiting": waiting}, f
+        )
     os.replace(tmp, path)  # 웹 서버가 쓰다 만 파일을 읽지 않도록
 
 
@@ -165,7 +179,8 @@ def run_reservation(
         spec: 예약 명세 (ReservationService._build_spec 참고)
         reporter: 상태 보고 객체
         should_stop: True를 반환하면 즉시 종료 (Celery 중복 실행 방지용)
-        on_success: 성공 직후, 보고 전에 ``on_success(train_info=..., attempts=...)`` 호출.
+        on_success: 성공 직후, 보고 전에 ``on_success(train_info=..., attempts=..., waiting=...)`` 호출
+            (waiting: 좌석 대신 예약대기를 신청함).
             보고가 끝내 전달되지 않아도 웹 서버가 결과를 복구할 수 있도록 기록하는 용도
             (subprocess: 결과 파일, Celery: Redis 상태)
         clock: 경과 시간 측정용. ``spec["max_duration"]``(초)을 넘기면 ``failed``로 끝냄
@@ -182,6 +197,8 @@ def run_reservation(
         handler = ReserveHandler(
             proxy_url=spec.get("egress_proxy") or "",
             egress_id=spec.get("egress_id") or "",
+            # 웹 서버가 발급한 기기 신원 (재로그인해도 같은 기기로 접속)
+            device=spec.get("korail_device"),
         )
     else:
         handler = handler_factory()
@@ -217,12 +234,13 @@ def _deadline(spec: dict, clock: Callable[[], float]) -> Callable[[], bool]:
     return lambda: clock() - started >= max_duration
 
 
-def _report_success(reporter, attempts, train_info, sleep, clock) -> bool:
+def _report_success(reporter, attempts, train_info, waiting, sleep, clock) -> bool:
     """성공 보고가 전달되거나 거부될 때까지 간격을 늘려 가며 다시 보냄"""
     deadline = clock() + SUCCESS_REPORT_WINDOW_SECONDS
     backoff = 2.0
+    extra = {"waiting": True} if waiting else {}
     while True:
-        if reporter.send("success", attempts=attempts, train_info=train_info):
+        if reporter.send("success", attempts=attempts, train_info=train_info, **extra):
             return True
         if _rejected(reporter) or clock() >= deadline:
             logger.error("Success report was not delivered; left for server recovery")
@@ -375,21 +393,30 @@ def _run_attempts(
                 trainType=train_type,
                 special=seat_type,
                 maxDepTime=spec["max_dep_time"],
+                allowWaitlist=spec.get("allow_waitlist") is True,
             )
         except Exception as e:  # reserve_single_attempt는 보통 예외를 삼키지만 방어
             result = {"success": False, "result": None, "error": str(e)}
 
         if result["success"]:
+            waiting = result.get("waiting") is True
             if result["result"] == "duplicate_reservation":
-                train_info = "이미 동일한 예약이 존재합니다. 장바구니를 확인해주세요."
+                train_info = (
+                    DUPLICATE_WAITLIST_MESSAGE
+                    if waiting
+                    else DUPLICATE_RESERVATION_MESSAGE
+                )
             else:
                 train_info = str(result["result"])
-            on_success(train_info=train_info, attempts=attempt)
-            reported = _report_success(reporter, attempt, train_info, sleep, clock)
+            on_success(train_info=train_info, attempts=attempt, waiting=waiting)
+            reported = _report_success(
+                reporter, attempt, train_info, waiting, sleep, clock
+            )
             return {
                 "status": "success",
                 "attempts": attempt,
                 "train_info": train_info,
+                "waiting": waiting,
                 "reported": reported,
             }
 

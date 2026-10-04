@@ -1,5 +1,6 @@
 """API/서비스 계층에서 사용하는 Pydantic 스키마"""
 
+import re
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from typing import Literal, Optional
@@ -30,6 +31,9 @@ SEAT_TYPE_LABELS = {
     "special_only": "특실만 예약",
 }
 
+# 예약대기를 신청할 수 있는 좌석 옵션 (코레일의 예약대기 가능 여부는 일반실 기준)
+WAITLIST_SEAT_TYPES = ("general", "general_only", "special")
+
 TrainTypeKey = Literal["KTX", "ALL"]
 SeatTypeKey = Literal["general", "general_only", "special", "special_only"]
 
@@ -38,14 +42,32 @@ def now_kst() -> datetime:
     return datetime.now(KST)
 
 
+# 휴대폰 번호 입력 안내 (하이픈은 있어도 없어도 됨)
+PHONE_FORMAT_HINT = "010-1234-5678 또는 01012345678"
+# 숫자 사이 구분자로 허용하는 문자 (하이픈, 공백, 점)
+_PHONE_CHARS = re.compile(r"[0-9\s.\-]+")
+
+
 def normalize_phone(phone: str) -> str:
     """전화번호에서 하이픈/공백 제거"""
     return "".join(ch for ch in str(phone) if ch.isdigit())
 
 
 def is_valid_phone(phone: str) -> bool:
-    digits = normalize_phone(phone)
+    """010 휴대폰 번호인지 (010-1234-5678, 01012345678, 010 1234 5678 모두 허용)"""
+    text = str(phone).strip()
+    if not _PHONE_CHARS.fullmatch(text):
+        return False
+    digits = normalize_phone(text)
     return len(digits) == 11 and digits.startswith("010")
+
+
+def account_key(korail_id: str) -> str:
+    """코레일 계정 ID → users.id (휴대폰은 숫자만, 이메일은 소문자, 그 밖은 앞뒤 공백 제거)"""
+    text = str(korail_id or "").strip()
+    if is_valid_phone(text):
+        return normalize_phone(text)
+    return text.lower() if "@" in text else text
 
 
 def format_phone(phone: str) -> str:
@@ -94,6 +116,8 @@ class ReservationRequest(BaseModel):
     max_dep_time: str  # HHMM
     train_type: TrainTypeKey = "KTX"
     seat_type: SeatTypeKey = "general"
+    # 범위 안의 열차가 모두 매진이면 (일반실) 예약대기 신청. 특실만 예약에는 적용하지 않음
+    allow_waitlist: bool = False
 
     @field_validator("dep_date", mode="before")
     @classmethod
@@ -129,6 +153,9 @@ class ReservationRequest(BaseModel):
             raise ValueError("출발 시각이 현재 시각보다 이전입니다.")
         if int(self.max_dep_time) < int(self.dep_time):
             raise ValueError("최대 출발 시각이 출발 시각보다 이전입니다.")
+        if self.seat_type not in WAITLIST_SEAT_TYPES:
+            # 코레일의 예약대기 가능 여부는 일반실 기준이라 특실만 예약에는 쓸 수 없음
+            self.allow_waitlist = False
         return self
 
     @property
@@ -150,8 +177,11 @@ class ReservationOut(BaseModel):
     seat_type: str
     train_type_label: str
     seat_type_label: str
+    allow_waitlist: bool = False
     attempts: int
     result_text: Optional[str] = None
+    # 좌석 대신 예약대기를 신청함 (status=success)
+    waitlisted: bool = False
     error: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -182,8 +212,10 @@ class ReservationOut(BaseModel):
             seat_type=r.seat_type,
             train_type_label=TRAIN_TYPE_LABELS.get(r.train_type, r.train_type),
             seat_type_label=SEAT_TYPE_LABELS.get(r.seat_type, r.seat_type),
+            allow_waitlist=bool(r.allow_waitlist),
             attempts=r.attempts or 0,
             result_text=r.result_text,
+            waitlisted=bool(r.waitlisted),
             error=r.error,
             created_at=r.created_at,
             updated_at=r.updated_at,
@@ -201,6 +233,8 @@ class WorkerEvent(BaseModel):
     attempts: Optional[int] = None
     message: Optional[str] = None
     train_info: Optional[str] = None
+    # success 일 때 좌석이 아니라 예약대기를 신청했는지
+    waiting: bool = False
 
 
 class Owner(BaseModel):

@@ -58,12 +58,15 @@ class TestRunReservation:
             "status": "success",
             "attempts": 3,
             "train_info": "KTX 101",
+            "waiting": False,
             "reported": True,
         }
         assert statuses == ["running", "success"]
         assert reporter.send.call_args.kwargs["train_info"] == "KTX 101"
         # 보고 전에 결과를 남길 수 있도록 결과와 함께 호출
-        on_success.assert_called_once_with(train_info="KTX 101", attempts=3)
+        on_success.assert_called_once_with(
+            train_info="KTX 101", attempts=3, waiting=False
+        )
         kwargs = handler.reserve_single_attempt.call_args.kwargs
         assert kwargs["depTime"] == "090000"
         assert kwargs["maxDepTime"] == "1200"
@@ -282,7 +285,10 @@ class TestRunReservation:
 
         reporter.send.side_effect = send
         result = run_reservation(
-            SPEC, reporter, handler_factory=lambda: handler, sleep=lambda _: None
+            SPEC,
+            reporter,
+            handler_factory=lambda: handler,
+            sleep=lambda _: None,
         )
         assert result == {"status": "rejected", "attempts": 0}
         handler.reserve_single_attempt.assert_not_called()
@@ -485,7 +491,7 @@ class TestEgress:
         created = {}
 
         class Handler:
-            def __init__(self, proxy_url="", egress_id=""):
+            def __init__(self, proxy_url="", egress_id="", *, device=None):
                 created.update(proxy_url=proxy_url, egress_id=egress_id)
 
             def login(self, *_):

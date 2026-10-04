@@ -21,13 +21,20 @@ from .db import Database, utcnow
 from .egress import EgressPool
 from .errors import AuthFailed, KorailUnavailable, NotAllowed, RateLimited, ServiceError
 from .models import User, WebSession
-from .schemas import ADMIN_USER_ID, Owner, format_phone, is_valid_phone, normalize_phone
+from .schemas import (
+    ADMIN_USER_ID,
+    PHONE_FORMAT_HINT,
+    Owner,
+    format_phone,
+    is_valid_phone,
+    normalize_phone,
+)
 from .users import UserService
 
 logger = logging.getLogger(__name__)
 
-# (성공 여부, 실패 사유) 또는 성공 여부만 반환
-KorailLogin = Callable[[str, str], "bool | tuple[bool, str]"]
+# (코레일 ID, 비밀번호, device=기기 신원) -> (성공 여부, 실패 사유) 또는 성공 여부만 반환
+KorailLogin = Callable[..., "bool | tuple[bool, str]"]
 Alert = Callable[[str], Awaitable[None]]
 
 # "로그인 유지"를 끈 경우 세션 수명
@@ -41,8 +48,12 @@ def default_korail_login(
     password: str,
     egresses: Optional[EgressPool] = None,
     handler_cls=None,
+    *,
+    device: Optional[dict] = None,
 ) -> tuple[bool, str]:
-    """코레일 로그인 확인 (그 계정의 예약과 같은 출구로 요청)
+    """코레일 로그인 확인 (그 계정의 예약과 같은 출구·기기로 요청)
+
+    device: 계정의 고정 기기 신원 (UserService.korail_device)
 
     Raises:
         KorailUnavailable: 출구가 코레일 차단으로 쉬는 중이거나 이번 요청이 차단됨
@@ -57,9 +68,9 @@ def default_korail_login(
         raise KorailUnavailable(BLOCKED_LOGIN_MESSAGE)
 
     handler = (
-        ReserveHandler(proxy_url=egress.proxy_url, egress_id=egress.id)
+        ReserveHandler(proxy_url=egress.proxy_url, egress_id=egress.id, device=device)
         if egress
-        else ReserveHandler()
+        else ReserveHandler(device=device)
     )
     try:
         ok = handler.login(korail_id, password)
@@ -167,6 +178,11 @@ class AuthService:
 
     # ------------------------------------------------------------------ 로그인
 
+    def _korail_login(self, korail_id: str, password: str):
+        """예약 워커와 같은 기기 신원으로 코레일 로그인 확인 (블로킹)"""
+        device = self.users.korail_device(korail_id)
+        return self.korail_login(korail_id, password, device=device)
+
     def _check_throttle(self, *keys: str, limits: tuple[int, ...]) -> None:
         for key, limit in zip(keys, limits):
             if self.throttle.count(key) >= limit:
@@ -180,7 +196,7 @@ class AuthService:
     ) -> tuple[str, SessionInfo]:
         if not is_valid_phone(phone):
             raise AuthFailed(
-                "올바른 전화번호 형식을 입력해주세요. (010-xxxx-xxxx)",
+                f"올바른 전화번호 형식을 입력해주세요. ({PHONE_FORMAT_HINT})",
                 code="INVALID_PHONE",
             )
         user_id = normalize_phone(phone)
@@ -199,7 +215,7 @@ class AuthService:
 
         korail_id = format_phone(user_id)
         ok, reason = _login_result(
-            await asyncio.to_thread(self.korail_login, korail_id, password)
+            await asyncio.to_thread(self._korail_login, korail_id, password)
         )
         if not ok:
             failures = self.throttle.fail(phone_key)
@@ -231,7 +247,7 @@ class AuthService:
             )
         ok, reason = _login_result(
             await asyncio.to_thread(
-                self.korail_login, self.admin_korail_id, self.admin_korail_pw
+                self._korail_login, self.admin_korail_id, self.admin_korail_pw
             )
         )
         if not ok:

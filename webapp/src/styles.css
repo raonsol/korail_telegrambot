@@ -683,6 +683,44 @@ input:focus {
   color: var(--brand);
 }
 
+.seat-toggle > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.seat-check {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--border);
+  border-radius: 5px;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.seat-toggle.selected .seat-check {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: var(--surface);
+}
+
+.seat-priority {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.seat-priority .label {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.field-error {
+  color: var(--danger);
+}
+
 .checkbox {
   display: flex;
   align-items: center;
@@ -694,6 +732,36 @@ input:focus {
   width: 18px;
   height: 18px;
   accent-color: var(--brand);
+}
+
+.checkbox:has(input:disabled) {
+  opacity: 0.55;
+}
+
+.help {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.help summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.help p,
+.help ol,
+.help ul {
+  margin: 8px 0 0;
+}
+
+.help ol,
+.help ul {
+  padding-left: 20px;
 }
 
 .row {
