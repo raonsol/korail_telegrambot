@@ -165,8 +165,12 @@ class CeleryLauncher:
 
         payload = dict(spec)
         # 브로커(Redis)에 평문 비밀번호가 남지 않도록 암호화 (키가 고정된 경우만 가능)
+        # 출구 프록시 주소도 인증 정보가 있을 수 있어 함께 암호화
         if self.vault and self.vault.persistent:
             payload["korail_pw_enc"] = self.vault.encrypt(payload.pop("korail_pw"))
+            proxy = payload.pop("egress_proxy", "")
+            if proxy:
+                payload["egress_proxy_enc"] = self.vault.encrypt(proxy)
         else:
             logger.warning(
                 "WEBAPP_ENC_KEY is not set; Korail password is sent to the broker in plaintext"

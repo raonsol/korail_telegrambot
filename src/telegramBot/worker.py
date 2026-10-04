@@ -18,6 +18,7 @@ import sys
 from contextlib import suppress
 from datetime import datetime
 
+from core.egress import FileGate, NullGate, file_gate_path
 from core.runner import (
     build_reporter,
     result_file,
@@ -72,7 +73,17 @@ def _setup_logging(handlers, force: bool = False) -> None:
     signal.signal(signal.SIGINT, _handle_termination)
 
 
-def _run(spec: dict, result_path: str | None = None) -> int:
+def build_gate(spec: dict, state_dir: str):
+    """이 서버의 다른 워커와 공유하는 출구 상태 (출구별 파일)"""
+    egress_id = spec.get("egress_id")
+    if not egress_id:
+        return NullGate()
+    return FileGate(
+        file_gate_path(state_dir, egress_id), rpm=int(spec.get("egress_rpm") or 0)
+    )
+
+
+def _run(spec: dict, result_path: str | None = None, state_dir: str = logs_dir) -> int:
     reporter = build_reporter(spec)
 
     def save_result(train_info: str, attempts: int) -> None:
@@ -85,7 +96,9 @@ def _run(spec: dict, result_path: str | None = None) -> int:
                 logger.error(f"Failed to save reservation result: {e}")
 
     try:
-        result = run_reservation(spec, reporter, on_success=save_result)
+        result = run_reservation(
+            spec, reporter, on_success=save_result, gate=build_gate(spec, state_dir)
+        )
         logger.info(f"Reservation {spec['reservation_id']} finished: {result}")
         if result.get("reported") and result_path:
             with suppress(OSError):
@@ -111,7 +124,7 @@ def run_process(spec: dict, log_path: str) -> None:
         logger.error(f"Invalid reservation spec: Missing fields: {missing}")
         sys.exit(2)
     results_dir = os.path.dirname(os.path.abspath(log_path))
-    sys.exit(_run(spec, result_file(results_dir, spec["reservation_id"])))
+    sys.exit(_run(spec, result_file(results_dir, spec["reservation_id"]), results_dir))
 
 
 def main() -> int:

@@ -22,6 +22,7 @@ from sqlalchemy import delete, func, or_, select
 
 from .crypto import new_token, sha256_hex
 from .db import Database, utcnow
+from .egress import Egress, EgressPool, parse_egresses
 from .errors import LimitExceeded, NotAllowed, NotFound, ServiceError
 from .launchers import Launcher, SubprocessLauncher
 from .models import Reservation
@@ -66,6 +67,7 @@ class ReservationService:
         max_active_per_user: int = 3,
         retention_days: int = 30,
         max_duration: Optional[int] = None,
+        egresses: Optional[EgressPool] = None,
     ):
         self.db = db
         self.launcher = launcher
@@ -76,6 +78,8 @@ class ReservationService:
         self.retention_days = retention_days
         # 워커가 예약을 시도하는 최대 시간(초). 워커 루프가 직접 확인 (core/runner.py)
         self.max_duration = max_duration
+        # 코레일 요청 출구 (계정마다 고정). 없으면 이 서버의 직접 연결 하나
+        self.egresses = egresses or EgressPool(parse_egresses(""))
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._admission_lock = threading.Lock()
 
@@ -149,6 +153,17 @@ class ReservationService:
                 raise NotFound("예약을 찾을 수 없습니다.")
             return ReservationOut.from_model(r)
 
+    def count_active_on_egress(self, egress_id: str) -> int:
+        """이 출구를 쓰는 진행 중 예약 수 (출구는 코레일 계정으로 정해지므로 DB에 두지 않음)"""
+        stmt = select(Reservation.korail_id).where(
+            Reservation.status.in_(ACTIVE_STATUSES)
+        )
+        with self.db.session() as s:
+            korail_ids = list(s.scalars(stmt))
+        return sum(
+            1 for k in korail_ids if self.egresses.for_account(k).id == egress_id
+        )
+
     def count_active(self, owner_id: Optional[str] = None) -> int:
         stmt = select(func.count()).where(Reservation.status.in_(ACTIVE_STATUSES))
         if owner_id:
@@ -206,6 +221,16 @@ class ReservationService:
                 raise LimitExceeded(
                     f"동시에 진행할 수 있는 예약은 최대 {self.max_active_per_user}개입니다."
                 )
+            # 출구는 계정마다 고정 (꽉 차도 다른 출구로 옮기지 않음)
+            egress = self.egresses.for_account(korail_id)
+            if (
+                self.egresses.max_active
+                and self.count_active_on_egress(egress.id) >= self.egresses.max_active
+            ):
+                raise LimitExceeded(
+                    "이 계정이 쓰는 코레일 연결에 진행 중인 예약이 많습니다. "
+                    "잠시 후 다시 시도해주세요."
+                )
 
             now = utcnow()
             with self.db.session() as s:
@@ -246,6 +271,7 @@ class ReservationService:
             "train_type": request.train_type,
             "seat_type": request.seat_type,
         }
+        spec.update(self._egress_spec(egress))
         if self.max_duration:
             spec["max_duration"] = self.max_duration
         try:
@@ -264,9 +290,17 @@ class ReservationService:
 
         logger.info(
             f"Started reservation {reservation_id} ({self.launcher.name}:{runner_ref}) "
-            f"for {owner.user_id} via {origin}"
+            f"for {owner.user_id} via {origin}, egress {egress.id}"
         )
         return out
+
+    def _egress_spec(self, egress: Egress) -> dict:
+        """워커가 쓸 출구 (프록시 주소는 Celery 브로커에 실릴 때 암호화됨)"""
+        return {
+            "egress_id": egress.id,
+            "egress_proxy": egress.proxy_url,
+            "egress_rpm": self.egresses.rpm,
+        }
 
     async def cancel(
         self,

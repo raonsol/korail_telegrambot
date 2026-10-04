@@ -85,6 +85,56 @@ class TestStart:
         assert r.status.value == "error"
 
 
+class TestEgress:
+    """코레일 출구: 계정마다 고정, 출구별 동시 예약 한도"""
+
+    @pytest.mark.asyncio
+    async def test_spec_carries_account_egress(
+        self, services, fake_launcher, valid_request
+    ):
+        from core.egress import Egress, EgressPool
+
+        pool = EgressPool(
+            [Egress("a", "socks5h://a:1080"), Egress("b", "socks5h://b:1080")],
+            rpm=30,
+        )
+        services.reservations.egresses = pool
+
+        await _start(services, request=valid_request)
+        await _start(services, request=valid_request)
+
+        first, second = fake_launcher.launched
+        egress = pool.for_account("010")
+        assert first["egress_id"] == second["egress_id"] == egress.id
+        assert first["egress_proxy"] == egress.proxy_url
+        assert first["egress_rpm"] == 30
+
+    @pytest.mark.asyncio
+    async def test_default_is_single_direct_egress(
+        self, services, fake_launcher, valid_request
+    ):
+        await _start(services, request=valid_request)
+        spec = fake_launcher.launched[0]
+        assert spec["egress_id"] == "direct"
+        assert spec["egress_proxy"] == ""
+
+    @pytest.mark.asyncio
+    async def test_per_egress_limit_applies_to_everyone(
+        self, services, fake_launcher, valid_request
+    ):
+        from core.egress import Egress, EgressPool
+
+        services.reservations.egresses = EgressPool(
+            [Egress("home1", "socks5h://h:1080")], max_active=1
+        )
+        await _start(services, request=valid_request)
+        # 출구가 꽉 차면 다른 사용자·관리자도 다른 출구로 옮기지 않고 거절
+        for owner in (OTHER, ADMIN):
+            with pytest.raises(LimitExceeded, match="코레일 연결"):
+                await _start(services, owner=owner, request=valid_request)
+        assert len(fake_launcher.launched) == 1
+
+
 class TestStartConcurrency:
     @pytest.mark.asyncio
     async def test_start_does_not_block_event_loop(

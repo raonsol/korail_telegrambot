@@ -29,16 +29,43 @@ KORAIL_BLOCKED_CODE = "-2000"
 # pykorail(0.2.0) 이 서버 응답에 사유가 없을 때 넣는 기본 로그인 실패 문구
 PYKORAIL_FALLBACK_LOGIN_MSG = "아이디 또는 비밀번호가 올바르지 않습니다"
 
+BLOCKED_LOGIN_MESSAGE = (
+    "코레일 서버가 요청을 일시적으로 차단했습니다. 잠시 후 다시 시도해주세요."
+)
 
-def create_korail_client():
-    """pykorail 클라이언트 생성 (코레일 서버 차단 응답을 로그로 남기도록 설정)"""
+
+class KorailBlockedError(Exception):
+    """코레일 서버 차단 응답(code -2000)
+
+    pykorail 예외(KorailError)와 따로 두어 일반 실패(로그인 실패, 열차 없음)와 구분한다.
+    차단 중에 같은 출구로 계속 요청하면 차단이 길어지므로 호출 측은 출구를 쉬게 해야 한다.
+    """
+
+    def __init__(self, block_id=None, message=None):
+        super().__init__(f"코레일 서버 차단 응답 (id={block_id}): {message}")
+        self.block_id = block_id
+        self.message = message
+
+
+def create_korail_client(proxy_url="", egress_id=""):
+    """pykorail 클라이언트 생성
+
+    Args:
+        proxy_url: 코레일 요청을 보낼 프록시 (비어 있으면 직접 요청). 코레일 요청에만 적용되고
+            텔레그램·내부 콜백 요청은 프록시를 거치지 않음
+        egress_id: 로그에 남길 출구 이름 (프록시 주소는 인증 정보가 있을 수 있어 남기지 않음)
+    """
     client = Korail()
-    _log_korail_blocks(client)
+    if proxy_url:
+        # pykorail 은 프록시 옵션을 제공하지 않으므로 내부 HTTP 세션(curl_cffi)에 직접 지정.
+        # pykorail 의 모든 코레일 요청은 이 세션을 거침 (client._api.get/post)
+        client._api._session.proxies = {"http": proxy_url, "https": proxy_url}
+    _raise_on_korail_blocks(client, egress_id or "direct")
     return client
 
 
-def _log_korail_blocks(client):
-    """코레일 서버 차단 응답(code -2000)을 서버 로그에 남김
+def _raise_on_korail_blocks(client, egress_id):
+    """코레일 서버 차단 응답(code -2000)을 서버 로그에 남기고 KorailBlockedError 발생
 
     pykorail 은 이 응답을 일반 실패(로그인 실패, 열차 없음 등)로 처리해 원본을 버리므로,
     모든 응답이 지나가는 파싱 단계에서 확인한다.
@@ -46,25 +73,30 @@ def _log_korail_blocks(client):
     api = client._api
     parse = api._parse
 
-    def parse_and_log(response):
+    def parse_and_check(response):
         payload = parse(response)
         if str(payload.get("code")) == KORAIL_BLOCKED_CODE:
             # 조회 파라미터(회원번호 등)가 남지 않도록 쿼리스트링은 제외
             url = str(getattr(response, "url", "") or "").split("?")[0]
             logger.error(
-                "코레일 서버 차단 응답 (code=%s, id=%s, url=%s): %s",
+                "코레일 서버 차단 응답 (code=%s, id=%s, url=%s, 출구=%s): %s",
                 payload.get("code"),
                 payload.get("id"),
                 url or "unknown",
+                egress_id,
                 payload.get("message"),
             )
+            raise KorailBlockedError(payload.get("id"), payload.get("message"))
         return payload
 
-    api._parse = parse_and_log
+    api._parse = parse_and_check
 
 
 class ReserveHandler:
-    def __init__(self):
+    def __init__(self, proxy_url="", egress_id=""):
+        # 코레일 요청 출구 (core.egress). 같은 계정은 항상 같은 출구를 씀
+        self.proxy_url = proxy_url
+        self.egress_id = egress_id
         self.korail_client = None
         self.username = ""
         self.password = ""
@@ -80,6 +112,7 @@ class ReserveHandler:
         self.interval = 1  # sec 분당 100회 이상이면 이상탐지에 걸림
         self.loginSuc = False
         self.loginError = ""  # 사용자에게 보여줄 마지막 로그인 실패 사유
+        self.loginBlocked = False  # 마지막 로그인이 코레일 차단 응답으로 실패했는지
         self.txtGoHour = "000000"
         self.specialVal = ""
 
@@ -99,10 +132,18 @@ class ReserveHandler:
 
     def login(self, username, password):
         client = None
+        self.loginBlocked = False
         try:
-            client = create_korail_client()
+            client = create_korail_client(self.proxy_url, self.egress_id)
             # pykorail 은 로그인 실패 시 LoginFailedError 를 발생시킴
             client.login(username, password)
+        except KorailBlockedError:
+            if client is not None:
+                client.close()
+            self.loginSuc = False
+            self.loginBlocked = True
+            self.loginError = BLOCKED_LOGIN_MESSAGE
+            return False
         except Exception as e:
             print(f"Login failed with exception: {e}")
             if client is not None:
@@ -166,7 +207,8 @@ class ReserveHandler:
 
         Returns:
             dict: {'success': bool, 'result': reservation_object_or_none, 'error': str_or_none}
-                재시도가 무의미한 오류(역 이름 오류, 지난 날짜)이면 'fatal': True 가 추가됨
+                재시도가 무의미한 오류(역 이름 오류, 지난 날짜)이면 'fatal': True,
+                코레일 서버 차단 응답이면 'blocked': True 가 추가됨
         """
         self._update_reserve_info(
             depDate, srcLocate, dstLocate, depTime, trainType, special, maxDepTime
@@ -211,6 +253,8 @@ class ReserveHandler:
 
             return {"success": False, "result": None, "error": "All trains sold out"}
 
+        except KorailBlockedError as e:
+            return {"success": False, "result": None, "error": str(e), "blocked": True}
         except FATAL_ERRORS as e:
             return {"success": False, "result": None, "error": str(e), "fatal": True}
         except Exception as e:

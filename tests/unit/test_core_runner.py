@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 
+from core.egress import BLOCK_BACKOFF_SECONDS, MemoryGate
 from core.runner import MAX_DURATION_MESSAGE, CallbackReporter, run_reservation
 
 SPEC = {
@@ -323,6 +324,166 @@ class TestRunReservation:
         )
         assert result["status"] == "failed"
         assert handler.reserve_single_attempt.call_count == 10
+
+
+BLOCKED = {"success": False, "result": None, "error": "blocked", "blocked": True}
+
+
+class FakeTime:
+    """sleep이 시계를 진행시키는 가짜 시간 (출구 상태와 실행 시간이 같은 시계를 씀)"""
+
+    def __init__(self):
+        self.now = 1000.0
+        self.slept = []
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+class TestEgress:
+    """출구 차단 대기와 출구별 요청 간격"""
+
+    def _run(self, handler, gate=None, spec=SPEC, **kwargs):
+        fake = FakeTime()
+        gate = gate or MemoryGate(clock=fake.clock)
+        reporter = Mock()
+        reporter.rejected = False
+        result = run_reservation(
+            spec,
+            reporter,
+            handler_factory=lambda: handler,
+            sleep=fake.sleep,
+            clock=fake.clock,
+            gate=gate,
+            **kwargs,
+        )
+        return result, reporter, gate, fake
+
+    def test_block_pauses_egress_and_retries_after_it(self):
+        handler = _handler(
+            [MISS, BLOCKED, {"success": True, "result": "KTX 101", "error": None}]
+        )
+        result, reporter, gate, fake = self._run(handler, interval=2.0)
+
+        assert result["status"] == "success"
+        assert result["attempts"] == 3
+        # 차단 보고 후 대기 시간이 지날 때까지 다음 시도를 하지 않음
+        assert sum(fake.slept) >= BLOCK_BACKOFF_SECONDS[0]
+        progress = [c for c in reporter.send.call_args_list if c.args[0] == "progress"]
+        assert "차단" in progress[0].kwargs["message"]
+        # 차단은 오류가 아니므로 재로그인하지 않음
+        assert handler.login.call_count == 1
+
+    def test_waits_for_existing_block_before_login(self):
+        fake_gate = MemoryGate()
+        fake_gate.blocked_for = Mock(side_effect=[30.0, 0.0, 0.0])
+        handler = _handler([{"success": True, "result": "KTX 1", "error": None}])
+        result, _, _, fake = self._run(handler, gate=fake_gate)
+
+        assert result["status"] == "success"
+        assert fake.slept[0] == 5.0  # 취소 확인 간격으로 나눠 기다림
+        assert fake_gate.blocked_for.call_count == 3
+
+    def test_blocked_login_waits_and_logs_in_again(self):
+        handler = _handler([{"success": True, "result": "KTX 1", "error": None}])
+        handler.login = Mock(side_effect=[False, True])
+        handler.loginBlocked = True
+        result, reporter, _, fake = self._run(handler)
+
+        assert result["status"] == "success"
+        assert handler.login.call_count == 2
+        assert sum(fake.slept) >= BLOCK_BACKOFF_SECONDS[0]
+        assert [c.args[0] for c in reporter.send.call_args_list][0] == "progress"
+
+    def test_wrong_password_is_not_treated_as_block(self):
+        handler = _handler([], login=False)
+        handler.loginBlocked = False
+        result, _, _, fake = self._run(handler)
+        assert result["status"] == "error"
+        assert fake.slept == []
+
+    def test_blocked_relogin_waits_instead_of_failing(self):
+        session_error = {"success": False, "result": None, "error": "session expired"}
+        handler = _handler(
+            [session_error, MISS, {"success": True, "result": "KTX 1", "error": None}]
+        )
+        handler.login = Mock(side_effect=[True, False])
+        handler.loginBlocked = True
+        result, _, _, fake = self._run(handler)
+
+        assert result["status"] == "success"
+        assert sum(fake.slept) >= BLOCK_BACKOFF_SECONDS[0]
+
+    def test_cancel_during_block_wait(self):
+        handler = _handler([BLOCKED, MISS])
+        stops = iter([False, False] + [True] * 10)
+        result, _, _, fake = self._run(handler, should_stop=lambda: next(stops))
+
+        assert result["status"] == "stopped"
+        assert sum(fake.slept) < BLOCK_BACKOFF_SECONDS[0]
+
+    def test_max_duration_during_block_wait(self):
+        handler = _handler([BLOCKED, MISS])
+        spec = {**SPEC, "max_duration": 60}
+        result, reporter, _, _ = self._run(handler, spec=spec)
+
+        assert result["status"] == "failed"
+        assert result["timed_out"] is True
+        assert reporter.send.call_args.kwargs["message"] == MAX_DURATION_MESSAGE
+
+    def test_long_block_keeps_reservation_alive(self):
+        """30분 무응답 정리에 걸리지 않도록 대기 중에도 진행 보고"""
+        handler = _handler([BLOCKED] * 5 + [MISS])
+        result, reporter, _, _ = self._run(handler, max_attempts=6)
+
+        progress = [c for c in reporter.send.call_args_list if c.args[0] == "progress"]
+        assert len(progress) > 5  # 차단 보고 5번 + 대기 중 보고
+        assert result["status"] == "failed"
+
+    def test_requests_follow_egress_pacing(self):
+        fake = FakeTime()
+        gate = MemoryGate(rpm=6, clock=fake.clock)  # 출구 전체 10초에 1번
+        gate.reserve_slot()  # 다른 예약이 방금 순서를 잡음
+        handler = _handler([MISS, MISS, MISS])
+        reporter = Mock()
+        reporter.rejected = False
+        run_reservation(
+            SPEC,
+            reporter,
+            handler_factory=lambda: handler,
+            sleep=fake.sleep,
+            clock=fake.clock,
+            gate=gate,
+            max_attempts=3,
+            interval=2.0,
+        )
+        # 첫 시도는 10초 기다림, 이후에도 간격 10초를 지킴 (예약 간격 2초보다 김)
+        assert fake.now - 1000.0 >= 30.0
+
+    def test_default_handler_uses_spec_egress(self, monkeypatch):
+        created = {}
+
+        class Handler:
+            def __init__(self, proxy_url="", egress_id=""):
+                created.update(proxy_url=proxy_url, egress_id=egress_id)
+
+            def login(self, *_):
+                return False
+
+            loginError = "x"
+            loginBlocked = False
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("core.runner.ReserveHandler", Handler)
+        spec = {**SPEC, "egress_id": "home1", "egress_proxy": "socks5h://h:1"}
+        run_reservation(spec, Mock(rejected=False), sleep=lambda _: None)
+        assert created == {"proxy_url": "socks5h://h:1", "egress_id": "home1"}
 
 
 class TestCallbackReporter:

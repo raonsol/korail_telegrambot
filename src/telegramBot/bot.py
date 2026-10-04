@@ -24,7 +24,8 @@ from .time_keyboard import (
 )
 from .station_keyboard import search_stations, create_station_keyboard
 from config import settings
-from core.errors import ServiceError
+from core.auth import default_korail_login
+from core.errors import KorailUnavailable, ServiceError
 from core.notifier import ReservationEvent
 from core.schemas import (
     ADMIN_USER_ID,
@@ -389,9 +390,7 @@ class TelegramBot:
                 }
             )
 
-            reserve_handler = ReserveHandler()
-            loginSuc = reserve_handler.login(username, password)
-            reserve_handler.close()
+            loginSuc, loginError = self._korail_login(username, password)
             if loginSuc:
                 msg = Messages.Info.INPUT_DATE
                 self.userDict[chat_id]["lastAction"] = 4
@@ -399,7 +398,7 @@ class TelegramBot:
             else:
                 self._reset_user_state(chat_id)
                 msg = f"""관리자 계정으로 로그인에 실패하였습니다.
-사유 : {reserve_handler.loginError}
+사유 : {loginError}
 
 ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
                 await self.send_message(chat_id, msg)
@@ -413,6 +412,15 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
 
         await self.send_message(chat_id, msg)
         return None
+
+    def _korail_login(self, username, password):
+        """코레일 로그인 확인 (그 계정의 예약과 같은 출구로). (성공 여부, 실패 사유)"""
+        try:
+            return default_korail_login(
+                username, password, self.services.egresses, handler_cls=ReserveHandler
+            )
+        except KorailUnavailable as e:
+            return False, e.message
 
     async def _input_id(self, chat_id, data):
         normalized_data = normalize_phone(data)
@@ -444,9 +452,7 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
         self.userDict[chat_id]["userInfo"]["korailPw"] = data
         username = self.userDict[chat_id]["userInfo"]["korailId"]
         password = self.userDict[chat_id]["userInfo"]["korailPw"]
-        reserve_handler = ReserveHandler()
-        loginSuc = reserve_handler.login(username, password)
-        reserve_handler.close()
+        loginSuc, loginError = self._korail_login(username, password)
         if loginSuc:
             owner_id = self.userDict[chat_id]["userInfo"].get("ownerId")
             if owner_id:
@@ -458,7 +464,7 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
         else:
             # 로그인 실패 시 비밀번호 재입력 또는 뒤로가기 선택지 제공
             msg = f"""로그인에 실패하였습니다.
-사유 : {reserve_handler.loginError}
+사유 : {loginError}
 
 로그인에 사용한 정보는 다음과 같습니다.
 ==============
