@@ -112,7 +112,7 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 - **korail_client.py** (pykorail): `ReserveHandler.login` (bool + `loginError` reason) / `reserve_single_attempt` / `close`
   - `create_korail_client()`: logs Korail server block responses (code -2000)
   - `FATAL_ERRORS` (`StationNotFoundError`, `PastDepartureError`): `reserve_single_attempt` returns `fatal: True` → `core/runner.py` reports `failed` immediately
-  - **Waitlist (예약대기)**: search uses `include_waiting_list=True`. Each attempt first reserves a train with seats (departure order); only if every train in range is sold out does it register a waitlist on the earliest train with `has_waiting_list()` (no seats + flag 9) and return `waiting: True`. Korail's flag is general-class only, so the waitlist is always requested with `GENERAL_ONLY` (also for `special` = SPECIAL_FIRST) and `special_only` never waitlists. pykorail's `create()` registers a waitlist only for trains without any seat
+  - **Waitlist (예약대기)** is opt-in per reservation: `ReservationRequest.allow_waitlist` (default false; forced false for `special_only`, see `WAITLIST_SEAT_TYPES`) → `reservations.allow_waitlist` (migration `0005`) → `spec["allow_waitlist"]` → `reserve_single_attempt(allowWaitlist=)`. Telegram asks it in state 13 (between seat type 10 and confirm 11, callbacks `waitlist_on/off`, skipped for `special_only`); the web form has a checkbox with a "예약대기란?" explanation. When enabled, search uses `include_waiting_list=True`. Each attempt first reserves a train with seats (departure order); only if every train in range is sold out does it register a waitlist on the earliest train with `has_waiting_list()` (no seats + flag 9) and return `waiting: True`. Korail's flag is general-class only, so the waitlist is always requested with `GENERAL_ONLY` (also for `special` = SPECIAL_FIRST) and `special_only` never waitlists. pykorail's `create()` registers a waitlist only for trains without any seat
 - **messages.py**, **calendar_keyboard.py**, **time_keyboard.py**, **station_keyboard.py**
 
 #### Web App (`webapp/`)
@@ -157,7 +157,7 @@ flower: Web-based monitoring (OPTIONAL - for debugging)
 # DB (SQLAlchemy, core/models.py) - both modes
 users              # id = account_key (phone digits; admin Korail account may be email/membership no.), is_active, telegram_chat_id, telegram_notify, korail_device_profile, korail_android_id (unique)
 web_sessions       # id = sha256(cookie token), encrypted Korail password, csrf_token, expires_at
-reservations       # id = reservation_id, owner_id, origin, chat_id, status, runner_ref, attempts, waitlisted, ...
+reservations       # id = reservation_id, owner_id, origin, chat_id, status, runner_ref, attempts, allow_waitlist, waitlisted, ...
 push_subscriptions # Web Push endpoints per user
 
 # In-memory (bot.py) - Telegram conversation only
@@ -243,7 +243,7 @@ User types new text → searches again (lastAction stays at 5 until selection)
 
 1. **User Authentication**: Phone number must be an active user in the DB
 2. **Korail Login**: Account credential validation (links `telegram_chat_id` to the user)
-3. **Interactive Selection**: date, stations, time range, train type (`KTX`/`ALL`), seat type (`general`/`general_only`/`special`/`special_only`)
+3. **Interactive Selection**: date, stations, time range, train type (`KTX`/`ALL`), seat type (`general`/`general_only`/`special`/`special_only`), waitlist on/off (not asked for `special_only`)
 4. **Reservation Execution**: `ReservationService.start(..., origin="telegram", chat_id=...)`
 5. **Status Updates**: worker → `/internal/events` → `Notifier` (Telegram/SSE/Web Push)
 6. **Completion Handling**: `TelegramBot.deliver()` sends the result and resets `userDict` if no reservation remains

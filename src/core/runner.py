@@ -275,6 +275,7 @@ def _run_attempts(
                 trainType=train_type,
                 special=seat_type,
                 maxDepTime=spec["max_dep_time"],
+                allowWaitlist=spec.get("allow_waitlist") is True,
             )
         except Exception as e:  # reserve_single_attempt는 보통 예외를 삼키지만 방어
             result = {"success": False, "result": None, "error": str(e)}

@@ -204,6 +204,7 @@ class ReserveHandler:
         trainType=TrainType.KTX,
         special=ReserveOption.GENERAL_FIRST,
         maxDepTime="2400",
+        allowWaitlist=False,
     ):
         """Single reservation attempt (재시도 루프는 core.runner.run_reservation 담당)
 
@@ -215,9 +216,10 @@ class ReserveHandler:
             trainType (TrainType, optional): 예약할 기차 유형. 기본값은 TrainType.KTX.
             special (ReserveOption, optional): 예약 옵션. 기본값은 ReserveOption.GENERAL_FIRST.
             maxDepTime (str, optional): 최대 출발 시간, 형식은 'HHMM'. 기본값은 "2400".
+            allowWaitlist (bool, optional): 모두 매진일 때 예약대기 신청 여부. 기본값은 False.
 
-        좌석이 있는 열차를 먼저 예약하고, 범위 안의 열차가 모두 매진이면 예약대기가 열린
-        가장 이른 열차에 (일반실) 예약대기를 신청한다 (특실만 예약 옵션 제외).
+        좌석이 있는 열차를 먼저 예약하고, allowWaitlist 이고 범위 안의 열차가 모두 매진이면
+        예약대기가 열린 가장 이른 열차에 (일반실) 예약대기를 신청한다 (특실만 예약 옵션 제외).
 
         Returns:
             dict: {'success': bool, 'result': reservation_object_or_none, 'error': str_or_none}
@@ -227,6 +229,8 @@ class ReserveHandler:
         self._update_reserve_info(
             depDate, srcLocate, dstLocate, depTime, trainType, special, maxDepTime
         )
+        waitlist = allowWaitlist and special in WAITLIST_OPTIONS
+        self.reserveInfo["waitlist"] = waitlist
 
         try:
             # Search for available trains
@@ -246,7 +250,7 @@ class ReserveHandler:
                     return result
 
             # 모두 매진이면 예약대기가 열린 열차에 대기 신청
-            if self.reserveInfo["special"] in WAITLIST_OPTIONS:
+            if waitlist:
                 for train in (t for t in trains if self._waitlist_open(t)):
                     print(f"예약대기 가능 : {train} <- 에 예약대기를 신청합니다.")
                     result = self._attempt(train, self._try_waitlist)
@@ -323,8 +327,8 @@ class ReserveHandler:
                 self.reserveInfo["dstLocate"],
                 depart_after=self._depart_after(),
                 train_type=self.reserveInfo["trainType"],
-                # 매진이어도 예약대기가 열린 열차는 결과에 포함 (reserve_single_attempt 참고)
-                include_waiting_list=True,
+                # 예약대기를 쓰면 매진이어도 대기가 열린 열차를 결과에 포함
+                include_waiting_list=self.reserveInfo.get("waitlist", False),
             )
         except NoResultsError:
             return []

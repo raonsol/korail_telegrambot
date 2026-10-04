@@ -226,6 +226,7 @@ class ReservationService:
                         max_dep_time=request.max_dep_time,
                         train_type=request.train_type,
                         seat_type=request.seat_type,
+                        allow_waitlist=request.allow_waitlist,
                         status=ReservationStatus.QUEUED.value,
                         runner=self.launcher.name,
                         callback_token_hash=sha256_hex(token),
@@ -248,6 +249,7 @@ class ReservationService:
             "max_dep_time": request.max_dep_time,
             "train_type": request.train_type,
             "seat_type": request.seat_type,
+            "allow_waitlist": request.allow_waitlist,
         }
         if self.max_duration:
             spec["max_duration"] = self.max_duration

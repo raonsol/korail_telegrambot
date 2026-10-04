@@ -31,6 +31,7 @@ from core.schemas import (
     PHONE_FORMAT_HINT,
     SEAT_TYPE_LABELS,
     TRAIN_TYPE_LABELS,
+    WAITLIST_SEAT_TYPES,
     Owner,
     ReservationRequest,
     ReservationStatus,
@@ -177,6 +178,7 @@ class TelegramBot:
             8: self._input_max_dep_time,
             9: self._input_train_type,
             10: self._input_seat_type,
+            13: self._input_waitlist,
             11: self._start_reserve,
         }
 
@@ -226,6 +228,8 @@ class TelegramBot:
             await self._input_train_type(chat_id, query.data)
         elif query.data.startswith("seat_type_"):
             await self._input_seat_type(chat_id, query.data)
+        elif query.data.startswith("waitlist_"):
+            await self._input_waitlist(chat_id, query.data)
         elif query.data.startswith("confirm_"):
             await self._start_reserve(chat_id, query.data)
         elif query.data.startswith("calendar_"):
@@ -657,12 +661,60 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
             specialInfo, specialInfoShow = special_options[data]
             self.userDict[chat_id]["trainInfo"]["specialInfo"] = specialInfo
             self.userDict[chat_id]["trainInfo"]["specialInfoShow"] = specialInfoShow
-            self.userDict[chat_id]["lastAction"] = 11
-            await self._send_confirm_reserve(chat_id)
+            if specialInfo in WAITLIST_SEAT_TYPES:
+                # 예약대기 사용 여부 선택 (13) 후 확인 (11)
+                self.userDict[chat_id]["lastAction"] = 13
+                await self._send_waitlist_options(chat_id)
+            else:
+                # 특실만 예약은 예약대기를 쓸 수 없음 (코레일 대기 여부가 일반실 기준)
+                self._set_waitlist(chat_id, False)
+                self.userDict[chat_id]["lastAction"] = 11
+                await self._send_confirm_reserve(chat_id)
         else:
             # 잘못된 응답이면 키보드 다시 표시
             await self._send_seat_type_options(chat_id)
 
+        return None
+
+    async def _send_waitlist_options(self, chat_id):
+        """예약대기 사용 여부 선택 (설명 포함)"""
+        keyboard = [
+            [
+                InlineKeyboardButton("예약대기 사용", callback_data="waitlist_on"),
+                InlineKeyboardButton("사용 안 함", callback_data="waitlist_off"),
+            ],
+        ]
+        await self.send_message(
+            chat_id=chat_id,
+            text=Messages.Info.INPUT_WAITLIST,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    def _set_waitlist(self, chat_id, enabled: bool):
+        train_info = self.userDict[chat_id]["trainInfo"]
+        train_info["allowWaitlist"] = enabled
+        if enabled:
+            train_info["waitlistShow"] = "사용 (모두 매진이면 일반실 예약대기 신청)"
+        elif train_info.get("specialInfo") in WAITLIST_SEAT_TYPES:
+            train_info["waitlistShow"] = "사용 안 함"
+        else:
+            train_info["waitlistShow"] = "사용 안 함 (특실만 예약)"
+
+    async def _input_waitlist(self, chat_id, data):
+        if self.userDict.get(chat_id, {}).get("lastAction") not in (13, 11):
+            return None  # 이전 단계의 버튼 (예약 진행 중 등) - 무시
+        if data == "waitlist_on" or is_affirmative(data):
+            enabled = True
+        elif data == "waitlist_off" or is_negative(data):
+            enabled = False
+        else:
+            # 잘못된 응답이면 키보드 다시 표시
+            await self._send_waitlist_options(chat_id)
+            return None
+
+        self._set_waitlist(chat_id, enabled)
+        self.userDict[chat_id]["lastAction"] = 11
+        await self._send_confirm_reserve(chat_id)
         return None
 
     async def _send_confirm_reserve(self, chat_id):
@@ -676,6 +728,7 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
             maxDepTime=train_info["maxDepTime"],
             trainTypeShow=train_info["trainTypeShow"],
             specialInfoShow=train_info["specialInfoShow"],
+            waitlistShow=train_info.get("waitlistShow", "사용 안 함"),
         )
 
         keyboard = [
@@ -733,6 +786,7 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
                     max_dep_time=train_info["maxDepTime"],
                     train_type=train_info["trainType"],
                     seat_type=train_info["specialInfo"],
+                    allow_waitlist=train_info.get("allowWaitlist", False),
                 )
                 reservation = await self.reservations.start(
                     owner,

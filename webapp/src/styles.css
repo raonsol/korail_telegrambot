@@ -696,6 +696,36 @@ input:focus {
   accent-color: var(--brand);
 }
 
+.checkbox:has(input:disabled) {
+  opacity: 0.55;
+}
+
+.help {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.help summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.help p,
+.help ol,
+.help ul {
+  margin: 8px 0 0;
+}
+
+.help ol,
+.help ul {
+  padding-left: 20px;
+}
+
 .row {
   display: grid;
   grid-template-columns: 1fr 1fr;

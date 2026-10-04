@@ -66,6 +66,10 @@ class Reservation(Base):
     max_dep_time: Mapped[str] = mapped_column(String(4))  # HHMM
     train_type: Mapped[str] = mapped_column(String(10))
     seat_type: Mapped[str] = mapped_column(String(20))
+    # 모두 매진이면 예약대기를 신청할지 (사용자 선택)
+    allow_waitlist: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
 
     status: Mapped[str] = mapped_column(String(12), index=True)
     runner: Mapped[str] = mapped_column(String(12))  # subprocess | celery

@@ -105,6 +105,8 @@ export function ReservationDetailPage() {
               <dd>{r.train_type_label}</dd>
               <dt>좌석</dt>
               <dd>{r.seat_type_label}</dd>
+              <dt>예약대기</dt>
+              <dd>{r.allow_waitlist ? '사용' : '사용 안 함'}</dd>
               <dt>시도 횟수</dt>
               <dd>{r.attempts.toLocaleString()}회</dd>
               <dt>시작</dt>

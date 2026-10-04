@@ -31,6 +31,9 @@ SEAT_TYPE_LABELS = {
     "special_only": "특실만 예약",
 }
 
+# 예약대기를 신청할 수 있는 좌석 옵션 (코레일의 예약대기 가능 여부는 일반실 기준)
+WAITLIST_SEAT_TYPES = ("general", "general_only", "special")
+
 TrainTypeKey = Literal["KTX", "ALL"]
 SeatTypeKey = Literal["general", "general_only", "special", "special_only"]
 
@@ -113,6 +116,8 @@ class ReservationRequest(BaseModel):
     max_dep_time: str  # HHMM
     train_type: TrainTypeKey = "KTX"
     seat_type: SeatTypeKey = "general"
+    # 범위 안의 열차가 모두 매진이면 (일반실) 예약대기 신청. 특실만 예약에는 적용하지 않음
+    allow_waitlist: bool = False
 
     @field_validator("dep_date", mode="before")
     @classmethod
@@ -148,6 +153,9 @@ class ReservationRequest(BaseModel):
             raise ValueError("출발 시각이 현재 시각보다 이전입니다.")
         if int(self.max_dep_time) < int(self.dep_time):
             raise ValueError("최대 출발 시각이 출발 시각보다 이전입니다.")
+        if self.seat_type not in WAITLIST_SEAT_TYPES:
+            # 코레일의 예약대기 가능 여부는 일반실 기준이라 특실만 예약에는 쓸 수 없음
+            self.allow_waitlist = False
         return self
 
     @property
@@ -169,6 +177,7 @@ class ReservationOut(BaseModel):
     seat_type: str
     train_type_label: str
     seat_type_label: str
+    allow_waitlist: bool = False
     attempts: int
     result_text: Optional[str] = None
     # 좌석 대신 예약대기를 신청함 (status=success)
@@ -203,6 +212,7 @@ class ReservationOut(BaseModel):
             seat_type=r.seat_type,
             train_type_label=TRAIN_TYPE_LABELS.get(r.train_type, r.train_type),
             seat_type_label=SEAT_TYPE_LABELS.get(r.seat_type, r.seat_type),
+            allow_waitlist=bool(r.allow_waitlist),
             attempts=r.attempts or 0,
             result_text=r.result_text,
             waitlisted=bool(r.waitlisted),
