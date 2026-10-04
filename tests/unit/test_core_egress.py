@@ -179,6 +179,10 @@ class TestRedisGate:
         assert b.blocked_for() == pytest.approx(BLOCK_BACKOFF_SECONDS[0], abs=1)
         assert b.report_block() == pytest.approx(BLOCK_BACKOFF_SECONDS[0], abs=1)
         assert client.get("egress_block_level:home1") == "1"
+        # 연속 차단 단계는 차단 시작부터 2시간 (MemoryGate/FileGate와 같은 기준)
+        assert client.ttl("egress_block_level:home1") == pytest.approx(
+            BLOCK_LEVEL_RESET_SECONDS, abs=2
+        )
 
         client.delete("egress_block:home1")  # 대기 시간이 지남
         assert b.report_block() == BLOCK_BACKOFF_SECONDS[1]

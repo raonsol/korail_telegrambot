@@ -274,6 +274,7 @@ def _wait_for_egress(
             return {"status": "failed", "attempts": attempts, "timed_out": True}
         return None
 
+    waited = False
     last_report = None
     while True:
         remaining = gate.blocked_for()
@@ -282,6 +283,7 @@ def _wait_for_egress(
         stop = interrupted()
         if stop:
             return stop
+        waited = True
         if last_report is None:
             last_report = clock()
         elif clock() - last_report >= WAIT_KEEPALIVE_SECONDS:
@@ -296,10 +298,12 @@ def _wait_for_egress(
         stop = interrupted()
         if stop:
             return stop
+        waited = True
         step = min(delay, WAIT_STEP_SECONDS)
         sleep(step)
         delay -= step
-    return None
+    # 마지막 대기 중에 취소됐거나 최대 실행 시간이 지났으면 요청하지 않음
+    return interrupted() if waited else None
 
 
 def _login_failure_message(handler) -> str:

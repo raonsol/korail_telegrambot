@@ -435,6 +435,23 @@ class TestEgress:
         assert result["timed_out"] is True
         assert reporter.send.call_args.kwargs["message"] == MAX_DURATION_MESSAGE
 
+    @pytest.mark.parametrize("wait", ["block", "slot"])
+    def test_deadline_is_rechecked_after_the_last_wait(self, wait):
+        """마지막 대기 중에 최대 실행 시간이 지나면 로그인·검색을 시작하지 않음"""
+        gate = MemoryGate()
+        if wait == "block":
+            gate.blocked_for = Mock(side_effect=[5.0, 0.0])
+        else:
+            gate.reserve_slot = Mock(return_value=5.0)
+        handler = _handler([MISS])
+        spec = {**SPEC, "max_duration": 3}
+        result, reporter, _, _ = self._run(handler, gate=gate, spec=spec)
+
+        assert result["status"] == "failed"
+        assert result["timed_out"] is True
+        handler.login.assert_not_called()
+        assert reporter.send.call_args.kwargs["message"] == MAX_DURATION_MESSAGE
+
     def test_long_block_keeps_reservation_alive(self):
         """30분 무응답 정리에 걸리지 않도록 대기 중에도 진행 보고"""
         handler = _handler([BLOCKED] * 5 + [MISS])
