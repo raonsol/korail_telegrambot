@@ -13,6 +13,7 @@ redis = "*"
 celery = "*"
 flower = "*"
 sqlalchemy = "*"
+alembic = "*"
 httpx = "*"
 pywebpush = "*"
 psycopg = {extras = ["binary"], version = "*"}

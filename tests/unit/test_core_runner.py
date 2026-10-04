@@ -39,7 +39,9 @@ def _handler(results, login=True):
 def _run(handler, **kwargs):
     reporter = Mock()
     kwargs.setdefault("sleep", lambda _: None)
-    result = run_reservation(SPEC, reporter, handler_factory=lambda: handler, **kwargs)
+    result = run_reservation(
+        SPEC, reporter, handler_factory=lambda _device: handler, **kwargs
+    )
     statuses = [c.args[0] for c in reporter.send.call_args_list]
     return result, reporter, statuses
 
@@ -137,7 +139,7 @@ class TestRunReservation:
         slept = []
 
         result = run_reservation(
-            SPEC, reporter, handler_factory=lambda: handler, sleep=slept.append
+            SPEC, reporter, handler_factory=lambda _device: handler, sleep=slept.append
         )
 
         assert result["status"] == "success"
@@ -160,7 +162,7 @@ class TestRunReservation:
         result = run_reservation(
             SPEC,
             reporter,
-            handler_factory=lambda: handler,
+            handler_factory=lambda _device: handler,
             sleep=sleep,
             clock=lambda: now[0],
         )
@@ -182,7 +184,7 @@ class TestRunReservation:
 
         reporter.send.side_effect = send
         result = run_reservation(
-            SPEC, reporter, handler_factory=lambda: handler, sleep=Mock()
+            SPEC, reporter, handler_factory=lambda _device: handler, sleep=Mock()
         )
         assert result["reported"] is False
         assert [c.args[0] for c in reporter.send.call_args_list] == [
@@ -202,7 +204,7 @@ class TestRunReservation:
         result = run_reservation(
             {**SPEC, "max_duration": 10},
             reporter,
-            handler_factory=lambda: handler,
+            handler_factory=lambda _device: handler,
             sleep=sleep,
             interval=2.0,
             clock=lambda: now[0],
@@ -252,7 +254,7 @@ class TestRunReservation:
         run_reservation(
             {**SPEC, "seat_type": seat_type},
             reporter,
-            handler_factory=lambda: handler,
+            handler_factory=lambda _device: handler,
             sleep=lambda _: None,
         )
         assert handler.reserve_single_attempt.call_args.kwargs["special"] == option
@@ -281,7 +283,10 @@ class TestRunReservation:
 
         reporter.send.side_effect = send
         result = run_reservation(
-            SPEC, reporter, handler_factory=lambda: handler, sleep=lambda _: None
+            SPEC,
+            reporter,
+            handler_factory=lambda _device: handler,
+            sleep=lambda _: None,
         )
         assert result == {"status": "rejected", "attempts": 0}
         handler.reserve_single_attempt.assert_not_called()
@@ -301,7 +306,7 @@ class TestRunReservation:
         result = run_reservation(
             SPEC,
             reporter,
-            handler_factory=lambda: handler,
+            handler_factory=lambda _device: handler,
             sleep=lambda _: None,
             progress_every=5,
         )
@@ -316,7 +321,7 @@ class TestRunReservation:
         result = run_reservation(
             SPEC,
             reporter,
-            handler_factory=lambda: handler,
+            handler_factory=lambda _device: handler,
             sleep=lambda _: None,
             max_attempts=10,
             progress_every=2,

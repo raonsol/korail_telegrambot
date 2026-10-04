@@ -16,7 +16,7 @@ import logging
 import threading
 import uuid
 from datetime import timedelta
-from typing import Optional
+from typing import Callable, Optional
 
 from sqlalchemy import delete, func, or_, select
 
@@ -66,8 +66,11 @@ class ReservationService:
         max_active_per_user: int = 3,
         retention_days: int = 30,
         max_duration: Optional[int] = None,
+        device_for: Optional[Callable[[str], Optional[dict]]] = None,
     ):
         self.db = db
+        # 코레일 계정의 기기 신원 (UserService.korail_device) - 워커가 같은 기기로 로그인하도록 spec에 포함
+        self.device_for = device_for
         self.launcher = launcher
         self.notifier = notifier
         self.callback_url = callback_url
@@ -249,6 +252,8 @@ class ReservationService:
         if self.max_duration:
             spec["max_duration"] = self.max_duration
         try:
+            if self.device_for:
+                spec["korail_device"] = self.device_for(korail_id)
             runner_ref = self.launcher.launch(spec)
         except Exception as e:
             logger.exception("Failed to launch reservation")

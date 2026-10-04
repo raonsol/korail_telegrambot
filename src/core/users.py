@@ -6,23 +6,28 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 from typing import Optional
 
-from sqlalchemy import delete, select
+from pykorail.device import DEVICE_PROFILES, random_profile
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from .db import Database, utcnow
 from .errors import Conflict, NotFound, ValidationFailed
 from .models import PushSubscription, User
-from .schemas import is_valid_phone, normalize_phone
+from .schemas import PHONE_FORMAT_HINT, is_valid_phone, normalize_phone
 
 logger = logging.getLogger(__name__)
 
 
 class UserService:
-    def __init__(self, db: Database):
+    def __init__(self, db: Database, device_secret: str = ""):
         self.db = db
+        # 사용자 DB에 없는 코레일 계정(관리자 계정)의 기기 신원을 유도하는 비밀값
+        self._device_secret = device_secret.encode()
 
     def seed_from_allow_list(self, allow_list: str) -> int:
         """ALLOW_LIST에 있는데 DB에 없는 번호만 추가 (기존 사용자는 건드리지 않음)"""
@@ -53,7 +58,9 @@ class UserService:
 
     def create(self, phone: str, name: Optional[str] = None) -> User:
         if not is_valid_phone(phone):
-            raise ValidationFailed("올바른 전화번호 형식이 아닙니다. (010xxxxxxxx)")
+            raise ValidationFailed(
+                f"올바른 전화번호 형식이 아닙니다. ({PHONE_FORMAT_HINT})"
+            )
         user = User(
             id=normalize_phone(phone),
             name=(name or "").strip() or None,
@@ -131,3 +138,53 @@ class UserService:
             return s.scalar(
                 select(User.id).where(User.telegram_chat_id == chat_id).limit(1)
             )
+
+    # ------------------------------------------------------------ 코레일 기기
+
+    def korail_device(self, korail_id: str) -> dict:
+        """코레일 계정이 접속할 때 쓰는 기기 신원 ``{"profile_id", "android_id"}``
+
+        실제 앱처럼 계정마다 같은 기기로 보이도록 사용자에게 한 번 발급해 계속 재사용한다
+        (예약 워커에는 spec["korail_device"]로 전달). 여러 계정이 같은 Android ID를 쓰면
+        코레일이 차단하므로 사용자마다 따로 발급한다. 사용자 DB에 없는 계정(관리자 코레일
+        계정)은 비밀값과 계정 ID로 유도해 재시작 후에도 같은 값을 쓴다.
+        """
+        user_id = normalize_phone(korail_id) if is_valid_phone(korail_id) else ""
+        if user_id:
+            device = self._user_device(user_id)
+            if device:
+                return device
+        return self._derived_device(user_id or str(korail_id).strip())
+
+    def _user_device(self, user_id: str) -> Optional[dict]:
+        for _ in range(3):
+            profile = random_profile()
+            try:
+                with self.db.session() as s:
+                    # 동시에 처음 로그인해도 먼저 저장된 값 하나만 쓰도록 비어 있을 때만 기록
+                    s.execute(
+                        update(User)
+                        .where(User.id == user_id, User.korail_android_id.is_(None))
+                        .values(
+                            korail_device_profile=profile.id,
+                            korail_android_id=profile.android_id,
+                        )
+                    )
+                    row = s.execute(
+                        select(
+                            User.korail_device_profile, User.korail_android_id
+                        ).where(User.id == user_id)
+                    ).first()
+            except IntegrityError:
+                continue  # 다른 사용자와 Android ID가 겹침 (사실상 없음) - 새로 발급
+            if row is None:
+                return None
+            return {"profile_id": row[0], "android_id": row[1]}
+        raise RuntimeError("코레일 기기 ID를 발급하지 못했습니다.")
+
+    def _derived_device(self, account: str) -> dict:
+        digest = hmac.new(
+            self._device_secret, f"korail-device:{account}".encode(), hashlib.sha256
+        ).hexdigest()
+        profile = DEVICE_PROFILES[int(digest[16:24], 16) % len(DEVICE_PROFILES)]
+        return {"profile_id": profile.id, "android_id": digest[:16]}

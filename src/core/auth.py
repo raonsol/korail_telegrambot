@@ -20,13 +20,20 @@ from .crypto import CredentialVault, new_token, sha256_hex
 from .db import Database, utcnow
 from .errors import AuthFailed, NotAllowed, RateLimited, ServiceError
 from .models import User, WebSession
-from .schemas import ADMIN_USER_ID, Owner, format_phone, is_valid_phone, normalize_phone
+from .schemas import (
+    ADMIN_USER_ID,
+    PHONE_FORMAT_HINT,
+    Owner,
+    format_phone,
+    is_valid_phone,
+    normalize_phone,
+)
 from .users import UserService
 
 logger = logging.getLogger(__name__)
 
-# (성공 여부, 실패 사유) 또는 성공 여부만 반환
-KorailLogin = Callable[[str, str], "bool | tuple[bool, str]"]
+# (코레일 ID, 비밀번호, 기기 신원) -> (성공 여부, 실패 사유) 또는 성공 여부만 반환
+KorailLogin = Callable[[str, str, Optional[dict]], "bool | tuple[bool, str]"]
 Alert = Callable[[str], Awaitable[None]]
 
 # "로그인 유지"를 끈 경우 세션 수명
@@ -35,10 +42,12 @@ SHORT_SESSION_HOURS = 12
 IP_MAX_FAILURES = 20
 
 
-def default_korail_login(korail_id: str, password: str) -> tuple[bool, str]:
+def default_korail_login(
+    korail_id: str, password: str, device: Optional[dict] = None
+) -> tuple[bool, str]:
     from telegramBot.korail_client import ReserveHandler
 
-    handler = ReserveHandler()
+    handler = ReserveHandler(device)
     try:
         ok = handler.login(korail_id, password)
         return ok, handler.loginError
@@ -141,6 +150,11 @@ class AuthService:
 
     # ------------------------------------------------------------------ 로그인
 
+    def _korail_login(self, korail_id: str, password: str):
+        """예약 워커와 같은 기기 신원으로 코레일 로그인 확인 (블로킹)"""
+        device = self.users.korail_device(korail_id)
+        return self.korail_login(korail_id, password, device)
+
     def _check_throttle(self, *keys: str, limits: tuple[int, ...]) -> None:
         for key, limit in zip(keys, limits):
             if self.throttle.count(key) >= limit:
@@ -154,7 +168,7 @@ class AuthService:
     ) -> tuple[str, SessionInfo]:
         if not is_valid_phone(phone):
             raise AuthFailed(
-                "올바른 전화번호 형식을 입력해주세요. (010-xxxx-xxxx)",
+                f"올바른 전화번호 형식을 입력해주세요. ({PHONE_FORMAT_HINT})",
                 code="INVALID_PHONE",
             )
         user_id = normalize_phone(phone)
@@ -173,7 +187,7 @@ class AuthService:
 
         korail_id = format_phone(user_id)
         ok, reason = _login_result(
-            await asyncio.to_thread(self.korail_login, korail_id, password)
+            await asyncio.to_thread(self._korail_login, korail_id, password)
         )
         if not ok:
             failures = self.throttle.fail(phone_key)
@@ -205,7 +219,7 @@ class AuthService:
             )
         ok, reason = _login_result(
             await asyncio.to_thread(
-                self.korail_login, self.admin_korail_id, self.admin_korail_pw
+                self._korail_login, self.admin_korail_id, self.admin_korail_pw
             )
         )
         if not ok:

@@ -210,6 +210,23 @@ class TestTelegramBot:
         assert bot_instance.userDict[chat_id]["lastAction"] == 3
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("phone", ["01012345678", "010 1234 5678"])
+    async def test_input_id_accepts_phone_without_hyphens(self, bot_instance, phone):
+        """Phone numbers are accepted with or without hyphens"""
+        chat_id = 123456
+        bot_instance._create_user(chat_id)
+        bot_instance.userDict[chat_id]["inProgress"] = True
+        bot_instance.userDict[chat_id]["lastAction"] = 2
+        bot_instance.send_message = AsyncMock()
+
+        await bot_instance._input_id(chat_id, phone)
+
+        user_info = bot_instance.userDict[chat_id]["userInfo"]
+        assert user_info["korailId"] == "010-1234-5678"
+        assert user_info["ownerId"] == "01012345678"
+        assert bot_instance.userDict[chat_id]["lastAction"] == 3
+
+    @pytest.mark.asyncio
     async def test_input_id_invalid_phone(self, bot_instance):
         """Test _input_id with invalid phone number format"""
         chat_id = 123456

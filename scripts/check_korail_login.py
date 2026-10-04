@@ -21,7 +21,30 @@ print(
 )
 KORAIL_KEYS = ("strResult", "h_msg_cd", "h_msg_txt")
 
-client = create_korail_client()
+
+def admin_device(korail_id):
+    """웹/텔레그램 관리자 로그인과 같은 기기 신원 (없으면 pykorail 이 새 Android ID를 만듦)"""
+    try:
+        from config import web_settings
+        from core.db import Database
+        from core.services import korail_device_secret
+        from core.users import UserService
+
+        users = UserService(
+            Database(web_settings.database_url),
+            device_secret=korail_device_secret(web_settings),
+        )
+        return users.korail_device(korail_id)
+    except Exception as e:
+        print(f"⚠️  기기 신원을 불러오지 못해 새 Android ID로 접속합니다: {e}")
+        return None
+
+
+device = admin_device(kid)
+print(
+    f"기기 : {device['profile_id'] if device else '-'} / Android ID {device['android_id'] if device else '(새로 생성)'}"
+)
+client = create_korail_client(device)
 responses = []
 # 서버 응답을 가로채 기록 (pykorail 은 실패 시 원본 응답을 버리고, HTTP 4xx·5xx 는 파싱 중 예외를 냄)
 parse = client._api._parse

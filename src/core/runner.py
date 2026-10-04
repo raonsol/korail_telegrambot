@@ -149,7 +149,7 @@ def run_reservation(
     progress_every: int = 20,
     relogin_after_errors: int = 10,
     sleep: Callable[[float], None] = time.sleep,
-    handler_factory: Callable[[], ReserveHandler] = ReserveHandler,
+    handler_factory: Callable[[Optional[dict]], ReserveHandler] = ReserveHandler,
     clock: Callable[[], float] = time.monotonic,
 ) -> dict:
     """예약이 성공하거나 최대 시도 횟수에 도달할 때까지 반복
@@ -169,7 +169,8 @@ def run_reservation(
             success에는 성공 보고가 전달됐는지 ``reported``가 함께 들어감
             rejected: 웹 서버가 보고를 거부함 (취소·만료됐거나 모르는 예약) → 즉시 종료
     """
-    handler = handler_factory()
+    # 웹 서버가 발급한 기기 신원 (재로그인해도 같은 기기로 접속)
+    handler = handler_factory(spec.get("korail_device"))
     try:
         return _run_attempts(
             spec,

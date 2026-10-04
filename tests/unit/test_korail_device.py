@@ -1,0 +1,229 @@
+"""코레일 기기 신원(Android ID) 발급·전달과 DB 마이그레이션"""
+
+import re
+from unittest.mock import Mock, patch
+
+import pytest
+from pykorail.device import PROFILES_BY_ID
+from sqlalchemy import create_engine, inspect, text
+
+from core.db import Database
+from core.models import User
+from core.runner import run_reservation
+from core.schemas import Owner
+
+ANDROID_ID = re.compile(r"[0-9a-f]{16}")
+
+
+def _stored(services, user_id):
+    with services.db.session() as s:
+        user = s.get(User, user_id)
+        return user.korail_device_profile, user.korail_android_id
+
+
+class TestUserDevice:
+    def test_registered_user_gets_persistent_device(self, services):
+        device = services.users.korail_device("010-1234-5678")
+
+        assert ANDROID_ID.fullmatch(device["android_id"])
+        assert device["profile_id"] in PROFILES_BY_ID
+        assert _stored(services, "01012345678") == (
+            device["profile_id"],
+            device["android_id"],
+        )
+        # 하이픈 유무와 관계없이 같은 계정 = 같은 기기
+        assert services.users.korail_device("01012345678") == device
+
+    def test_each_user_gets_a_different_android_id(self, services):
+        a = services.users.korail_device("01012345678")
+        b = services.users.korail_device("01087654321")
+        assert a["android_id"] != b["android_id"]
+
+    def test_existing_device_is_not_replaced(self, services):
+        with services.db.session() as s:
+            user = s.get(User, "01012345678")
+            user.korail_device_profile = "unknown-model"
+            user.korail_android_id = "0123456789abcdef"
+
+        assert services.users.korail_device("01012345678") == {
+            "profile_id": "unknown-model",
+            "android_id": "0123456789abcdef",
+        }
+
+    def test_account_outside_user_db_gets_stable_derived_device(self, services):
+        """관리자 코레일 계정 등 사용자 DB에 없는 계정은 비밀값으로 유도 (재시작 후에도 같음)"""
+        device = services.users.korail_device("admin_user")
+
+        assert ANDROID_ID.fullmatch(device["android_id"])
+        assert device["profile_id"] in PROFILES_BY_ID
+        assert services.users.korail_device("admin_user") == device
+        assert services.users.korail_device("other@example.com") != device
+
+        from core.users import UserService
+
+        other_secret = UserService(services.db, device_secret="another-secret")
+        assert other_secret.korail_device("admin_user") != device
+
+
+class TestDevicePropagation:
+    @pytest.mark.asyncio
+    async def test_web_login_uses_user_device(self, services, korail_login):
+        await services.auth.login("01012345678", "correct")
+
+        assert korail_login.devices == [services.users.korail_device("01012345678")]
+
+    @pytest.mark.asyncio
+    async def test_admin_login_uses_derived_device(self, services, korail_login):
+        await services.auth.admin_login("test_admin_password")
+
+        assert korail_login.devices == [services.users.korail_device("admin_user")]
+
+    @pytest.mark.asyncio
+    async def test_reservation_spec_carries_device(
+        self, services, fake_launcher, valid_request
+    ):
+        await services.reservations.start(
+            Owner(user_id="01012345678"),
+            valid_request,
+            "010-1234-5678",
+            "pw",
+            origin="web",
+        )
+
+        spec = fake_launcher.launched[-1]
+        assert spec["korail_device"] == services.users.korail_device("01012345678")
+
+    def test_runner_creates_handler_with_spec_device(self):
+        device = {"profile_id": "x", "android_id": "0123456789abcdef"}
+        handler = Mock()
+        handler.login = Mock(return_value=True)
+        handler.reserve_single_attempt = Mock(
+            return_value={"success": True, "result": "train", "error": None}
+        )
+        factory = Mock(return_value=handler)
+
+        spec = {
+            "reservation_id": "r1",
+            "korail_id": "010-1234-5678",
+            "korail_pw": "pw",
+            "dep_date": "20250115",
+            "src_station": "서울",
+            "dst_station": "부산",
+            "dep_time": "0900",
+            "max_dep_time": "1200",
+            "train_type": "ALL",
+            "seat_type": "general",
+            "korail_device": device,
+        }
+        run_reservation(spec, Mock(), handler_factory=factory, sleep=lambda _: None)
+
+        factory.assert_called_once_with(device)
+
+
+class TestKorailClientDevice:
+    def test_client_uses_given_profile_and_android_id(self):
+        from telegramBot.korail_client import create_korail_client
+
+        profile_id = next(iter(PROFILES_BY_ID))
+        device = {"profile_id": profile_id, "android_id": "0123456789abcdef"}
+        client = create_korail_client(device)
+        try:
+            assert client.android_id == "0123456789abcdef"
+            assert client.device_profile.id == profile_id
+        finally:
+            client.close()
+
+    def test_unknown_profile_keeps_android_id(self):
+        from telegramBot.korail_client import create_korail_client
+
+        device = {"profile_id": "removed-model", "android_id": "0123456789abcdef"}
+        client = create_korail_client(device)
+        try:
+            assert client.android_id == "0123456789abcdef"
+            assert client.device_profile is None
+        finally:
+            client.close()
+
+    def test_relogin_keeps_the_same_device(self):
+        from telegramBot.korail_client import ReserveHandler
+
+        device = {"profile_id": "x", "android_id": "0123456789abcdef"}
+        handler = ReserveHandler(device)
+        with patch(
+            "telegramBot.korail_client.create_korail_client", return_value=Mock()
+        ) as create:
+            assert handler.login("010-1234-5678", "pw")
+            assert handler.login("010-1234-5678", "pw")
+
+        assert [c.args for c in create.call_args_list] == [(device,), (device,)]
+
+
+LEGACY_USERS_DDL = """
+CREATE TABLE users (
+    id VARCHAR(20) NOT NULL PRIMARY KEY,
+    name VARCHAR(50),
+    is_active BOOLEAN NOT NULL,
+    telegram_chat_id BIGINT,
+    telegram_notify BOOLEAN NOT NULL,
+    created_at DATETIME NOT NULL,
+    last_login_at DATETIME
+)
+"""
+
+
+class TestMigration:
+    def test_fresh_database_is_created_at_head(self, tmp_path):
+        db = Database(f"sqlite:///{tmp_path}/fresh.db")
+        try:
+            db.migrate()
+            db.migrate()  # 두 번 실행해도 안전
+            with db.engine.connect() as conn:
+                version = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar()
+                columns = {c["name"] for c in inspect(conn).get_columns("users")}
+            assert version == "0002"
+            assert {"korail_device_profile", "korail_android_id"} <= columns
+        finally:
+            db.dispose()
+
+    def test_legacy_database_gets_device_columns(self, tmp_path):
+        """Alembic 도입 전(create_all) DB: 데이터는 유지하고 컬럼만 추가"""
+        url = f"sqlite:///{tmp_path}/legacy.db"
+        engine = create_engine(url)
+        with engine.begin() as conn:
+            conn.execute(text(LEGACY_USERS_DDL))
+            conn.execute(
+                text(
+                    "INSERT INTO users (id, is_active, telegram_notify, created_at) "
+                    "VALUES ('01012345678', 1, 1, '2026-01-01 00:00:00')"
+                )
+            )
+        engine.dispose()
+
+        db = Database(url)
+        try:
+            db.migrate()
+            with db.engine.connect() as conn:
+                version = conn.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar()
+                indexes = {
+                    i["name"]: i["unique"] for i in inspect(conn).get_indexes("users")
+                }
+            assert version == "0002"
+            assert indexes["ix_users_korail_android_id"]
+            with db.session() as s:
+                user = s.get(User, "01012345678")
+                assert user.is_active
+                assert user.korail_android_id is None
+        finally:
+            db.dispose()
+
+    def test_android_id_is_unique(self, services):
+        from sqlalchemy.exc import IntegrityError
+
+        with pytest.raises(IntegrityError):
+            with services.db.session() as s:
+                for user_id in ("01012345678", "01087654321"):
+                    s.get(User, user_id).korail_android_id = "0123456789abcdef"

@@ -1,5 +1,6 @@
 """API/서비스 계층에서 사용하는 Pydantic 스키마"""
 
+import re
 from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from typing import Literal, Optional
@@ -38,13 +39,23 @@ def now_kst() -> datetime:
     return datetime.now(KST)
 
 
+# 휴대폰 번호 입력 안내 (하이픈은 있어도 없어도 됨)
+PHONE_FORMAT_HINT = "010-1234-5678 또는 01012345678"
+# 숫자 사이 구분자로 허용하는 문자 (하이픈, 공백, 점)
+_PHONE_CHARS = re.compile(r"[0-9\s.\-]+")
+
+
 def normalize_phone(phone: str) -> str:
     """전화번호에서 하이픈/공백 제거"""
     return "".join(ch for ch in str(phone) if ch.isdigit())
 
 
 def is_valid_phone(phone: str) -> bool:
-    digits = normalize_phone(phone)
+    """010 휴대폰 번호인지 (010-1234-5678, 01012345678, 010 1234 5678 모두 허용)"""
+    text = str(phone).strip()
+    if not _PHONE_CHARS.fullmatch(text):
+        return False
+    digits = normalize_phone(text)
     return len(digits) == 11 and digits.startswith("010")
 
 

@@ -457,5 +457,5 @@ LOGIN_MAX_FAILURES=3
 - 오프라인에서도 마지막 사용자 정보로 앱 셸 표시, 날짜/시각은 클라이언트·서버 모두 KST 기준으로 검증
 
 남은 과제:
-- DB 마이그레이션 도구(Alembic) 도입 — 현재는 `create_all`로 테이블 생성만 수행
+- ~~DB 마이그레이션 도구(Alembic) 도입~~ — 2026-10-04 도입 (`src/core/migrations`, 시작 시 `Database.migrate()`)
 - 웹 인스턴스를 여러 대로 늘릴 경우 SSE용 Redis Pub/Sub, 로그인 실패 카운터의 공유 저장소

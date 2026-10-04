@@ -33,6 +33,10 @@ class TestUserService:
         with pytest.raises(Conflict):
             services.users.create("01012345678")
 
+    def test_create_with_or_without_hyphens(self, services):
+        assert services.users.create("010-5555-6666").id == "01055556666"
+        assert services.users.create("01077778888").id == "01077778888"
+
     def test_create_invalid_phone(self, services):
         with pytest.raises(ValidationFailed):
             services.users.create("12345")

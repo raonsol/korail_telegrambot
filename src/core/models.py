@@ -22,6 +22,12 @@ class User(Base):
     telegram_notify: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # 코레일 접속에 쓰는 기기 신원 (pykorail 기기 프로파일 id + 합성 Android ID)
+    # 처음 코레일 로그인할 때 발급해 계속 재사용. 여러 계정이 같은 Android ID를 쓰면 코레일이 차단함
+    korail_device_profile: Mapped[Optional[str]] = mapped_column(String(40))
+    korail_android_id: Mapped[Optional[str]] = mapped_column(
+        String(16), unique=True, index=True
+    )
 
 
 class WebSession(Base):

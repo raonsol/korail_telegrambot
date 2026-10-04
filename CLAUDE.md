@@ -11,7 +11,7 @@ KTX (Korean train) reservation automation with **two channels** — a Telegram b
 - **FastAPI**: Telegram webhook, web app REST API, worker callbacks, PWA static files
 - **python-telegram-bot**: Telegram Bot API interactions
 - **pykorail** (`==0.2.1`): KTX reservation API client library (코레일톡 앱 API, curl_cffi 기반)
-- **SQLAlchemy**: Users, web sessions, reservations (+30-day history), push subscriptions
+- **SQLAlchemy + Alembic**: Users, web sessions, reservations (+30-day history), push subscriptions; schema migrations run on web startup
   - SQLite (local / subprocess mode), PostgreSQL (Docker Celery mode)
 - **Redis + Celery**: Optional distributed task processing system (MQ pattern)
 - **React + Vite + vite-plugin-pwa** (`webapp/`): Installable PWA with offline shell and Web Push
@@ -84,7 +84,7 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 
 #### Application Assembly
 - **src/app.py**: Builds `Services`, the optional `TelegramBot`, and the FastAPI app (`web/factory.py::create_app`)
-- **src/web/factory.py**: Lifespan (DB `create_all` + ALLOW_LIST seed, housekeeping loop, webhook), router mounting
+- **src/web/factory.py**: Lifespan (DB `migrate()` + ALLOW_LIST seed, housekeeping loop, webhook), router mounting
 - **src/config.py**: Environment-based settings (`WebSettings`, `CelerySettings`)
 
 #### Core Domain (`src/core/`)
@@ -154,7 +154,7 @@ flower: Web-based monitoring (OPTIONAL - for debugging)
 
 ```python
 # DB (SQLAlchemy, core/models.py) - both modes
-users              # id = phone digits, is_active, telegram_chat_id, telegram_notify
+users              # id = phone digits, is_active, telegram_chat_id, telegram_notify, korail_device_profile, korail_android_id (unique)
 web_sessions       # id = sha256(cookie token), encrypted Korail password, csrf_token, expires_at
 reservations       # id = reservation_id, owner_id, origin, chat_id, status, runner_ref, attempts, ...
 push_subscriptions # Web Push endpoints per user
@@ -167,7 +167,12 @@ subscribes = []    # chats receiving broadcast notifications
 Reservation status: `queued → running → success | failed | error | cancelled`.
 On startup, active `subprocess` reservations → `error` (their workers stopped with the previous server). Celery mode: lost-worker check every 60s (see Celery Mode). Housekeeping (every 10 min): RUNNING idle > 30 min or QUEUED > 24 h → `error`; terminal reservations older than `RESERVATION_RETENTION_DAYS` (default **30**) are deleted; expired sessions are deleted.
 
-The DB schema is created with `create_all` (no migrations yet). Add Alembic before changing existing columns.
+The DB schema is managed by Alembic (`src/core/migrations`, `alembic.ini` at the repo root). The web server runs `Database.migrate()` on startup:
+- empty DB → `create_all` from the current models + stamp `head`
+- pre-Alembic DB (tables but no `alembic_version`) → stamp baseline `0001`, then upgrade
+- otherwise → upgrade to `head`
+
+Any model change needs a revision in `src/core/migrations/versions/` (`DATABASE_URL=... pipenv run alembic revision --autogenerate -m "..."`, then review it; `alembic check` must report nothing). Keep fresh (`create_all`) and migrated schemas identical - e.g. declare indexes with `index=True` so names match `ix_<table>_<column>`. `env.py` uses `render_as_batch=True` for SQLite. Workers never touch the DB, so only the web server migrates.
 
 ### Multiple Reservation Support (Important!)
 
@@ -436,7 +441,13 @@ DATAGOV_API_KEY       # 공공데이터포털 API 서비스키 (역 검색용)
 ### Korail Client (pykorail) Notes
 - pykorail is pinned (`==0.2.1`): `create_korail_client()` and `scripts/check_korail_login.py` wrap its private `client._api._parse`
 - Since 0.2.1, a non-Korail HTTP 4xx/5xx body (e.g. the 403 `-2000` block) raises `HttpStatusError` (a `TransportError`, not `KorailError`) from `_parse`; `ReserveHandler.loginError` shows it as "코레일 서버가 요청을 거절했습니다: ...", not as a password error
-- Since 0.2.1, every `Korail()` without `device_profile`/`android_id` signs with a freshly generated synthetic Android ID (0.2.0 used one fixed ID for everyone) and the User-Agent is always `korailtalk`. `create_korail_client()` does not pin a device yet, so each login (web/Telegram check, worker start, worker re-login) looks like a new device
+- Since 0.2.1, every `Korail()` without `device_profile`/`android_id` signs with a freshly generated synthetic Android ID (0.2.0 used one fixed ID for everyone) and the User-Agent is always `korailtalk`
+- **Device identity (Android ID)**: Korail blocks accounts that share an Android ID, and a new ID on every login looks like a new phone. Each Korail account therefore uses one fixed device `{"profile_id", "android_id"}` from `UserService.korail_device(korail_id)`:
+  - registered users: issued on first use (`random_profile()`) and stored in `users.korail_device_profile` / `users.korail_android_id` (unique; written only while NULL so concurrent first logins agree)
+  - accounts outside the user DB (admin Korail account): derived with HMAC from `WEBAPP_ENC_KEY` (or `ADMINPW`) + account id, so it is stable across restarts
+  - used by every login: web/admin login (`AuthService._korail_login`), Telegram login (`ReserveHandler(device)`), and workers (`ReservationService` puts it in `spec["korail_device"]`; `run_reservation` passes it to `handler_factory(device)`, so re-logins keep the same device)
+  - never call `create_korail_client()` / `ReserveHandler()` without the device in production code
+- Phone numbers are accepted with or without hyphens (also spaces/dots) everywhere (`is_valid_phone`, `PHONE_FORMAT_HINT`); user ids are stored as digits, and Korail receives `010-1234-5678` (pykorail 0.2.1 strips the hyphens and sends the phone login flag)
 - `login()` raises `LoginFailedError` instead of returning `False`; `ReserveHandler.login()` still returns a bool and keeps a user-facing reason in `ReserveHandler.loginError`
 - Korail server block (anti-macro) responses look like `{"code": -2000, "id", "message"}`; pykorail drops them (login fails / search looks like "no trains"), so `create_korail_client()` wraps the response parser and logs them at ERROR (`코레일 서버 차단 응답 ...`, HTTP status, URL without query string) before re-raising. Cloudflare WARP egress (container and host proxy mode) was blocked with -2000 while direct egress worked, so WARP support was removed
 - pykorail's fallback "아이디 또는 비밀번호가 올바르지 않습니다" (code `None`) means the server sent no reason - real wrong-password responses carry a code such as `WRR000101`

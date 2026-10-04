@@ -4,6 +4,7 @@ import requests
 import sys
 from datetime import datetime, timedelta, timezone
 from pykorail import Korail
+from pykorail.device import profile_by_id
 from pykorail import (
     HttpStatusError,
     KorailError,
@@ -33,11 +34,26 @@ KORAIL_BLOCKED_CODE = "-2000"
 PYKORAIL_FALLBACK_LOGIN_MSG = "아이디 또는 비밀번호가 올바르지 않습니다"
 
 
-def create_korail_client():
-    """pykorail 클라이언트 생성 (코레일 서버 차단 응답을 로그로 남기도록 설정)"""
-    client = Korail()
+def create_korail_client(device=None):
+    """pykorail 클라이언트 생성 (코레일 서버 차단 응답을 로그로 남기도록 설정)
+
+    device: ``{"profile_id", "android_id"}`` (UserService.korail_device). 없으면 pykorail 이
+    클라이언트마다 새 Android ID를 만들어 로그인할 때마다 다른 기기로 보이므로 항상 넘긴다.
+    """
+    client = Korail(**_device_kwargs(device))
     _log_korail_blocks(client)
     return client
+
+
+def _device_kwargs(device):
+    if not device or not device.get("android_id"):
+        return {}
+    android_id = device["android_id"]
+    profile = profile_by_id(device.get("profile_id"), android_id=android_id)
+    if profile is None:
+        # pykorail 카탈로그에서 사라진 모델 - Android ID만 유지 (모델은 pykorail 기본값)
+        return {"android_id": android_id}
+    return {"device_profile": profile}
 
 
 def _log_korail_blocks(client):
@@ -85,7 +101,9 @@ def _log_if_blocked(response, payload):
 
 
 class ReserveHandler:
-    def __init__(self):
+    def __init__(self, device=None):
+        # 코레일 접속 기기 신원 - 재로그인해도 같은 기기로 접속 (create_korail_client 참고)
+        self.device = device
         self.korail_client = None
         self.username = ""
         self.password = ""
@@ -121,7 +139,7 @@ class ReserveHandler:
     def login(self, username, password):
         client = None
         try:
-            client = create_korail_client()
+            client = create_korail_client(self.device)
             # pykorail 은 로그인 실패 시 LoginFailedError 를 발생시킴
             client.login(username, password)
         except Exception as e:

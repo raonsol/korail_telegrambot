@@ -28,6 +28,7 @@ from core.errors import ServiceError
 from core.notifier import ReservationEvent
 from core.schemas import (
     ADMIN_USER_ID,
+    PHONE_FORMAT_HINT,
     SEAT_TYPE_LABELS,
     TRAIN_TYPE_LABELS,
     Owner,
@@ -389,7 +390,7 @@ class TelegramBot:
                 }
             )
 
-            reserve_handler = ReserveHandler()
+            reserve_handler = ReserveHandler(self.users.korail_device(username))
             loginSuc = reserve_handler.login(username, password)
             reserve_handler.close()
             if loginSuc:
@@ -417,11 +418,9 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
     async def _input_id(self, chat_id, data):
         normalized_data = normalize_phone(data)
 
-        # Validate phone number format (010xxxxxxxx - 11 digits starting with 010)
-        if not (is_valid_phone(data) and data.replace("-", "").isdigit()):
-            msg = (
-                "올바른 전화번호 형식을 입력해주세요. (010-xxxx-xxxx 또는 010xxxxxxxx)"
-            )
+        # 하이픈 유무와 관계없이 010 휴대폰 번호면 허용
+        if not is_valid_phone(data):
+            msg = f"올바른 전화번호 형식을 입력해주세요. ({PHONE_FORMAT_HINT})"
         elif not self.users.is_allowed(normalized_data):
             msgToSubscribers = f"{data}는 등록되지 않은 사용자입니다."
             await self.broadcast_message(msgToSubscribers)
@@ -444,7 +443,7 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
         self.userDict[chat_id]["userInfo"]["korailPw"] = data
         username = self.userDict[chat_id]["userInfo"]["korailId"]
         password = self.userDict[chat_id]["userInfo"]["korailPw"]
-        reserve_handler = ReserveHandler()
+        reserve_handler = ReserveHandler(self.users.korail_device(username))
         loginSuc = reserve_handler.login(username, password)
         reserve_handler.close()
         if loginSuc:
