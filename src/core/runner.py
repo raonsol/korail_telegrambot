@@ -30,6 +30,13 @@ SEAT_TYPES = {
 # reserve_single_attempt가 돌려주는 '정상적인 실패' (재로그인 불필요)
 EXPECTED_MISSES = ("No trains available", "All trains sold out")
 
+DUPLICATE_RESERVATION_MESSAGE = (
+    "이미 동일한 예약이 존재합니다. 장바구니를 확인해주세요."
+)
+DUPLICATE_WAITLIST_MESSAGE = (
+    "이미 같은 열차에 예약대기를 신청해 두었습니다. 예약 승차권 조회에서 확인해주세요."
+)
+
 MAX_ATTEMPTS_MESSAGE = "최대 시도 횟수를 초과하여 예약이 중단되었습니다."
 MAX_DURATION_MESSAGE = "최대 실행 시간을 초과하여 예약이 중단되었습니다."
 
@@ -392,11 +399,15 @@ def _run_attempts(
             result = {"success": False, "result": None, "error": str(e)}
 
         if result["success"]:
+            waiting = result.get("waiting") is True
             if result["result"] == "duplicate_reservation":
-                train_info = "이미 동일한 예약이 존재합니다. 장바구니를 확인해주세요."
+                train_info = (
+                    DUPLICATE_WAITLIST_MESSAGE
+                    if waiting
+                    else DUPLICATE_RESERVATION_MESSAGE
+                )
             else:
                 train_info = str(result["result"])
-            waiting = result.get("waiting") is True
             on_success(train_info=train_info, attempts=attempt, waiting=waiting)
             reported = _report_success(
                 reporter, attempt, train_info, waiting, sleep, clock

@@ -116,10 +116,15 @@ class TestCompleteReservationFlow:
         assert bot.userDict[chat_id]["lastAction"] == 10
         assert bot.userDict[chat_id]["trainInfo"]["trainType"] == "KTX"
 
-        # Step 11: Select seat type
+        # Step 11: Select seat type → asks whether to use the waitlist (state 13)
         await bot._input_seat_type(chat_id, "seat_type_3")
-        assert bot.userDict[chat_id]["lastAction"] == 11
+        assert bot.userDict[chat_id]["lastAction"] == 13
         assert bot.userDict[chat_id]["trainInfo"]["specialInfo"] == "special"
+
+        # Step 11-1: Turn on the waitlist → confirm (state 11)
+        await bot._input_waitlist(chat_id, "waitlist_on")
+        assert bot.userDict[chat_id]["lastAction"] == 11
+        assert bot.userDict[chat_id]["trainInfo"]["allowWaitlist"] is True
 
         # Step 12: Confirm and start reservation
         await bot._start_reserve(chat_id, "confirm_yes")
@@ -127,6 +132,7 @@ class TestCompleteReservationFlow:
         spec = fake_launcher.launched[0]
         assert spec["korail_id"] == "010-1234-5678"
         assert spec["seat_type"] == "special"
+        assert spec["allow_waitlist"] is True
         [reservation] = bot._active_reservations(chat_id)
 
         # Step 13: Worker reports success → user is notified and state resets

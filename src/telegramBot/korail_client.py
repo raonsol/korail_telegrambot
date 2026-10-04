@@ -302,7 +302,7 @@ class ReserveHandler:
             if waitlist:
                 for train in (t for t in trains if self._waitlist_open(t)):
                     print(f"예약대기 가능 : {train} <- 에 예약대기를 신청합니다.")
-                    result = self._attempt(train, self._try_waitlist)
+                    result = self._attempt(train, self._try_waitlist, waiting=True)
                     if result:
                         return result
 
@@ -324,8 +324,12 @@ class ReserveHandler:
                 }
             return {"success": False, "result": None, "error": error_str}
 
-    def _attempt(self, train, reserve):
-        """열차 하나 예약 시도. 성공하면 결과 dict, 매진이면 None"""
+    def _attempt(self, train, reserve, waiting=False):
+        """열차 하나 예약 시도. 성공하면 결과 dict, 매진이면 None
+
+        waiting: 예약대기 신청 경로 - 이미 같은 대기가 있다는 응답도 예약대기로 보고해야
+        "좌석 확보, 20분 안에 결제" 로 잘못 안내되지 않음
+        """
         try:
             reservation = reserve(train)
         except SoldOutError:
@@ -340,6 +344,7 @@ class ReserveHandler:
                     "success": True,
                     "result": "duplicate_reservation",
                     "error": None,
+                    "waiting": waiting,
                 }
             raise
         if not reservation:

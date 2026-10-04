@@ -154,6 +154,17 @@ class TestReserveHandlerWaitlist:
 
         assert result["success"] is True
         assert result["result"] == "duplicate_reservation"
+        # 이미 신청한 예약대기 - 좌석 확보(20분 결제)로 안내되면 안 됨
+        assert result["waiting"] is True
+
+    def test_existing_seat_reservation_is_not_waiting(self):
+        error = Exception("WRR800029 동일한 예약 내역이 있으니 확인하시기 바랍니다")
+        handler = _handler([_train("090000", seat=True)], create=[error])
+
+        result = _attempt(handler)
+
+        assert result["result"] == "duplicate_reservation"
+        assert result["waiting"] is False
 
 
 SPEC = {
@@ -438,3 +449,29 @@ class TestTelegramWaitlistStep:
 
         assert bot.userDict[chat_id]["lastAction"] == 12
         bot.send_message.assert_not_called()
+
+
+@pytest.mark.parametrize("waiting", [True, False])
+def test_runner_duplicate_message_matches_kind(waiting):
+    from core.runner import DUPLICATE_RESERVATION_MESSAGE, DUPLICATE_WAITLIST_MESSAGE
+
+    handler = Mock()
+    handler.login = Mock(return_value=True)
+    handler.reserve_single_attempt = Mock(
+        return_value={
+            "success": True,
+            "result": "duplicate_reservation",
+            "error": None,
+            "waiting": waiting,
+        }
+    )
+    reporter = Mock()
+
+    result = run_reservation(
+        SPEC, reporter, handler_factory=lambda: handler, sleep=lambda _: None
+    )
+
+    assert result["waiting"] is waiting
+    expected = DUPLICATE_WAITLIST_MESSAGE if waiting else DUPLICATE_RESERVATION_MESSAGE
+    assert result["train_info"] == expected
+    assert reporter.send.call_args.kwargs.get("waiting", False) is waiting
