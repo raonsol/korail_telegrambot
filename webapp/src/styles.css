@@ -683,6 +683,44 @@ input:focus {
   color: var(--brand);
 }
 
+.seat-toggle > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.seat-check {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--border);
+  border-radius: 5px;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.seat-toggle.selected .seat-check {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: var(--surface);
+}
+
+.seat-priority {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.seat-priority .label {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.field-error {
+  color: var(--danger);
+}
+
 .checkbox {
   display: flex;
   align-items: center;

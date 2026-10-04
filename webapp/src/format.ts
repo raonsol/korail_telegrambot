@@ -1,4 +1,4 @@
-import type { Reservation, ReservationStatus } from './api'
+import type { Reservation, ReservationStatus, SeatType } from './api'
 
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토']
 
@@ -85,3 +85,33 @@ export function formatPhoneInput(value: string): string {
 
 export const KORAIL_PAYMENT_URL =
   'https://www.korail.com/ticket/reservation/list'
+
+/** 좌석 선택 (일반실/특실 체크 + 둘 다 고른 경우 우선순위) ↔ 서버의 seat_type */
+export interface SeatSelection {
+  general: boolean
+  special: boolean
+  priority: 'general' | 'special'
+}
+
+export function seatSelectionFrom(seatType: SeatType): SeatSelection {
+  return {
+    general: seatType !== 'special_only',
+    special: seatType !== 'general_only',
+    priority: seatType === 'special' || seatType === 'special_only' ? 'special' : 'general',
+  }
+}
+
+/** 하나도 고르지 않았으면 null */
+export function toSeatType(seat: SeatSelection): SeatType | null {
+  if (seat.general && seat.special) return seat.priority === 'general' ? 'general' : 'special'
+  if (seat.general) return 'general_only'
+  if (seat.special) return 'special_only'
+  return null
+}
+
+export const SEAT_SUMMARY: Record<SeatType, string> = {
+  general: '일반실·특실 (일반실 우선)',
+  special: '일반실·특실 (특실 우선)',
+  general_only: '일반실만',
+  special_only: '특실만',
+}
