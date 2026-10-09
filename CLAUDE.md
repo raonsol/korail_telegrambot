@@ -10,7 +10,7 @@ KTX (Korean train) reservation automation with **two channels** — a Telegram b
 
 - **FastAPI**: Telegram webhook, web app REST API, worker callbacks, PWA static files
 - **python-telegram-bot**: Telegram Bot API interactions
-- **pykorail** (`==0.2.1`): KTX reservation API client library (코레일톡 앱 API, curl_cffi 기반)
+- **pykorail** (`==0.2.2`): KTX reservation API client library (코레일톡 앱 API, curl_cffi 기반)
 - **SQLAlchemy + Alembic**: Users, web sessions, reservations (+30-day history), push subscriptions; schema migrations run on web startup
   - SQLite (local / subprocess mode), PostgreSQL (Docker Celery mode)
 - **Redis + Celery**: Optional distributed task processing system (MQ pattern)
@@ -112,9 +112,9 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 - **tasks.py**: `reservation_task(spec)`; Redis `reservation_task:{task_id}` guard against duplicate execution; `Heartbeat` thread + `worker_shutting_down` handler (restart detection)
 - **worker.py**: Subprocess entry point `run_process(spec, log_path)` (stdout/stderr → `logs/worker_{id8}.log`); `python -m telegramBot.worker` still reads a spec from stdin for manual runs
 - **korail_client.py** (pykorail): `ReserveHandler.login` (bool + `loginError` reason) / `reserve_single_attempt` / `close`
-  - `create_korail_client()`: logs Korail server block responses (code -2000)
+  - Korail server block responses (code -2000) arrive as pykorail's `AccessRestrictedError`; `ReserveHandler` logs them at ERROR (`코레일 서버 차단 응답 ...`, status, stage 로그인/조회/예약, egress id)
   - `FATAL_ERRORS` (`StationNotFoundError`, `PastDepartureError`): `reserve_single_attempt` returns `fatal: True` → `core/runner.py` reports `failed` immediately
-  - `create_korail_client(proxy_url, egress_id, *, device=)` sets the proxy on pykorail's curl_cffi session only and raises `KorailBlockedError` on code -2000; `reserve_single_attempt` returns `blocked: True`, `login()` sets `loginBlocked` → `core/runner.py` reports the block to the egress gate and waits (cancel / max duration checked every 5s, `progress` every 5 min so the 30-min stale rule does not fire)
+  - `create_korail_client(proxy_url, *, device=)` sets the proxy on pykorail's curl_cffi session only; on `AccessRestrictedError` `reserve_single_attempt` returns `blocked: True`, `login()` sets `loginBlocked` → `core/runner.py` reports the block to the egress gate and waits (cancel / max duration checked every 5s, `progress` every 5 min so the 30-min stale rule does not fire)
   - Web/Telegram login checks use the account's egress (`core.auth.default_korail_login`); a blocked login raises `KorailUnavailable` (503) and is not counted as a password failure
   - **Waitlist (예약대기)** is opt-in per reservation: `ReservationRequest.allow_waitlist` (default false; forced false for `special_only`, see `WAITLIST_SEAT_TYPES`) → `reservations.allow_waitlist` (migration `0005`) → `spec["allow_waitlist"]` → `reserve_single_attempt(allowWaitlist=)`. Telegram asks it in state 13 (between seat type 10 and confirm 11, callbacks `waitlist_on/off`, skipped for `special_only`); the web form has a checkbox with a "예약대기란?" explanation. When enabled, search uses `include_waiting_list=True`. Each attempt first reserves a train with seats (departure order); only if every train in range is sold out does it register a waitlist on the earliest train with `has_waiting_list()` (no seats + flag 9) and return `waiting: True`. Korail's flag is general-class only, so the waitlist is always requested with `GENERAL_ONLY` (also for `special` = SPECIAL_FIRST) and `special_only` never waitlists. pykorail's `create()` registers a waitlist only for trains without any seat
 - **messages.py**, **calendar_keyboard.py**, **time_keyboard.py**, **station_keyboard.py**
@@ -450,8 +450,8 @@ DATAGOV_API_KEY       # 공공데이터포털 API 서비스키 (역 검색용)
 ```
 
 ### Korail Client (pykorail) Notes
-- pykorail is pinned (`==0.2.1`): `create_korail_client()` and `scripts/check_korail_login.py` wrap its private `client._api._parse`
-- Since 0.2.1, a non-Korail HTTP 4xx/5xx body (e.g. the 403 `-2000` block) raises `HttpStatusError` (a `TransportError`, not `KorailError`) from `_parse`; `ReserveHandler.loginError` shows it as "코레일 서버가 요청을 거절했습니다: ...", not as a password error
+- pykorail is pinned (`==0.2.2`). The only private API used in production code is `client._api._session.proxies` (pykorail has no proxy option); the `_parse` wrapper was removed in favour of `AccessRestrictedError`. `test_pykorail_raises_access_restricted_for_block_body` pins the block-detection contract - re-check it when upgrading
+- Since 0.2.1, a non-Korail HTTP 4xx/5xx body raises `HttpStatusError` (a `TransportError`, not `KorailError`); `ReserveHandler.loginError` shows it as "코레일 서버가 요청을 거절했습니다: ...", not as a password error
 - Since 0.2.1, every `Korail()` without `device_profile`/`android_id` signs with a freshly generated synthetic Android ID (0.2.0 used one fixed ID for everyone) and the User-Agent is always `korailtalk`
 - **Device identity (Android ID)**: Korail blocks accounts that share an Android ID, and a new ID on every login looks like a new phone. Each Korail account therefore uses one fixed device `{"profile_id", "android_id"}` from `UserService.korail_device(korail_id)`:
   - issued on first use (`random_profile()`) and stored in `users.korail_device_profile` / `users.korail_android_id` (unique; written only while NULL so concurrent first logins agree)
@@ -462,7 +462,7 @@ DATAGOV_API_KEY       # 공공데이터포털 API 서비스키 (역 검색용)
   - never call `create_korail_client()` / `ReserveHandler()` without the device in production code
 - Phone numbers are accepted with or without hyphens (also spaces/dots) everywhere (`is_valid_phone`, `PHONE_FORMAT_HINT`); user ids are stored as digits, and Korail receives `010-1234-5678` (pykorail 0.2.1 strips the hyphens and sends the phone login flag)
 - `login()` raises `LoginFailedError` instead of returning `False`; `ReserveHandler.login()` still returns a bool and keeps a user-facing reason in `ReserveHandler.loginError`
-- Korail server block (anti-macro) responses look like `{"code": -2000, "id", "message"}`; pykorail drops them (login fails / search looks like "no trains"), so `create_korail_client()` wraps the response parser, logs them at ERROR (`코레일 서버 차단 응답 ...`, URL without query string, egress id) and raises `KorailBlockedError` (also when pykorail 0.2.1 already raised `HttpStatusError` for the 403 block body). Cloudflare WARP egress (container and host proxy mode) was blocked with -2000 while direct egress worked, so WARP support was removed; use proxies on lines you own (`KORAIL_EGRESSES`)
+- Korail server block (anti-macro) responses look like `{"code": -2000, "id", "message"}`; since 0.2.2 pykorail raises `AccessRestrictedError` (subclass of `HttpStatusError`) for them whatever the HTTP status (403 observed), so they are never mistaken for a wrong password or "no trains". pykorail drops the `id` (a trace value) and the URL, so the block log has neither. Cloudflare WARP egress (container and host proxy mode) was blocked with -2000 while direct egress worked, so WARP support was removed; use proxies on lines you own (`KORAIL_EGRESSES`)
 - pykorail's fallback "아이디 또는 비밀번호가 올바르지 않습니다" (code `None`) means the server sent no reason - real wrong-password responses carry a code such as `WRR000101`
 - `make korail-login-check` pipes `scripts/check_korail_login.py` into the running web container to diagnose ADMIN_KORAIL_ID/PW (env values as received, raw server response)
 - Station names are validated against Korail's station master before searching (`StationNotFoundError`)

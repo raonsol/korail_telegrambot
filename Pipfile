@@ -18,7 +18,7 @@ httpx = "*"
 pywebpush = "*"
 psycopg = {extras = ["binary"], version = "*"}
 cryptography = "*"
-pykorail = "==0.2.1"
+pykorail = "==0.2.2"
 
 [dev-packages]
 black = "*"
