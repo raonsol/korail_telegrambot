@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "4da7c0372b36f6e3b562de4f4627f10e4df21dff84a4c4048b48abc186df61a5"
+            "sha256": "394644c1b63d54ddee2d93ebb78a209a365ae94519189691b053578e860346bb"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -1856,12 +1856,12 @@
         },
         "pykorail": {
             "hashes": [
-                "sha256:7f431147c91726725fef642540aa2bf76050335f82ab424a55be5638a878f922",
-                "sha256:abb65e7fcf0a94f0ba8e32859d36b18e524ce89fcbd40296af10c5c5866e7594"
+                "sha256:324ef6d93acdbef35dd9c67e244727b2990c6195e1da27eccb0e265daac833d0",
+                "sha256:be639a15b65006dd805ae16905db776b40404ebb2062e8387b7a03cb79111d4c"
             ],
             "index": "pypi",
             "markers": "python_version >= '3.10'",
-            "version": "==0.2.1"
+            "version": "==0.2.2"
         },
         "pyopenssl": {
             "hashes": [

@@ -1,4 +1,3 @@
-import json
 import logging
 import requests
 import sys
@@ -6,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pykorail import Korail
 from pykorail.device import profile_by_id
 from pykorail import (
+    AccessRestrictedError,
     HttpStatusError,
     KorailError,
     ReserveOption,
@@ -34,11 +34,6 @@ WAITLIST_OPTIONS = (
     ReserveOption.SPECIAL_FIRST,
 )
 
-# 코레일 서버가 매크로/비정상 환경으로 판단해 요청을 차단할 때 주는 응답 코드
-# 응답 형식이 {"code": -2000, "id": ..., "message": ...} 로 일반 API 응답과 다름
-# pykorail 0.2.1 부터 HTTP 4xx·5xx(차단은 403)이면 HttpStatusError 로 올라오고 id 는 버려짐
-KORAIL_BLOCKED_CODE = "-2000"
-
 # pykorail 이 서버 응답에 사유가 없을 때 넣는 기본 로그인 실패 문구
 PYKORAIL_FALLBACK_LOGIN_MSG = "아이디 또는 비밀번호가 올바르지 않습니다"
 
@@ -47,26 +42,16 @@ BLOCKED_LOGIN_MESSAGE = (
 )
 
 
-class KorailBlockedError(Exception):
-    """코레일 서버 차단 응답(code -2000)
-
-    pykorail 예외(KorailError)와 따로 두어 일반 실패(로그인 실패, 열차 없음)와 구분한다.
-    차단 중에 같은 출구로 계속 요청하면 차단이 길어지므로 호출 측은 출구를 쉬게 해야 한다.
-    """
-
-    def __init__(self, block_id=None, message=None):
-        super().__init__(f"코레일 서버 차단 응답 (id={block_id}): {message}")
-        self.block_id = block_id
-        self.message = message
-
-
-def create_korail_client(proxy_url="", egress_id="", *, device=None):
+def create_korail_client(proxy_url="", *, device=None):
     """pykorail 클라이언트 생성
+
+    코레일 서버 차단 응답(code -2000)은 pykorail 이 AccessRestrictedError 로 올리므로
+    (HTTP 상태와 무관) 호출 측에서 일반 실패(로그인 실패, 열차 없음)와 구분해 잡는다.
+    차단 중에 같은 출구로 계속 요청하면 차단이 길어지므로 호출 측은 출구를 쉬게 해야 한다.
 
     Args:
         proxy_url: 코레일 요청을 보낼 프록시 (비어 있으면 직접 요청). 코레일 요청에만 적용되고
             텔레그램·내부 콜백 요청은 프록시를 거치지 않음
-        egress_id: 로그에 남길 출구 이름 (프록시 주소는 인증 정보가 있을 수 있어 남기지 않음)
         device: ``{"profile_id", "android_id"}`` (UserService.korail_device). 없으면 pykorail 이
             클라이언트마다 새 Android ID를 만들어 로그인할 때마다 다른 기기로 보이므로 항상 넘긴다.
     """
@@ -75,7 +60,6 @@ def create_korail_client(proxy_url="", egress_id="", *, device=None):
         # pykorail 은 프록시 옵션을 제공하지 않으므로 내부 HTTP 세션(curl_cffi)에 직접 지정.
         # pykorail 의 모든 코레일 요청은 이 세션을 거침 (client._api.get/post)
         client._api._session.proxies = {"http": proxy_url, "https": proxy_url}
-    _raise_on_korail_blocks(client, egress_id or "direct")
     return client
 
 
@@ -90,56 +74,15 @@ def _device_kwargs(device):
     return {"device_profile": profile}
 
 
-def _raise_on_korail_blocks(client, egress_id):
-    """코레일 서버 차단 응답(code -2000)을 서버 로그에 남기고 KorailBlockedError 발생
-
-    pykorail 은 차단 응답을 HttpStatusError(403) 또는 일반 실패(로그인 실패, 열차 없음 등)로
-    처리해 원본(요청 id 등)을 버리므로, 모든 응답이 지나가는 파싱 단계에서 확인한다.
-    """
-    api = client._api
-    parse = api._parse
-
-    def parse_and_check(response):
-        try:
-            payload = parse(response)
-        except HttpStatusError as e:
-            # pykorail 0.2.1+: 차단은 HTTP 403 + 코레일 형식이 아닌 본문으로 와서 여기서 끊김
-            body = _json_body(response)
-            if _is_block(body):
-                _log_block(response, body, egress_id)
-                raise KorailBlockedError(body.get("id"), body.get("message")) from e
-            raise
-        if _is_block(payload):
-            _log_block(response, payload, egress_id)
-            raise KorailBlockedError(payload.get("id"), payload.get("message"))
-        return payload
-
-    api._parse = parse_and_check
-
-
-def _json_body(response):
-    try:
-        body = json.loads(response.text)
-    except (TypeError, ValueError):
-        return {}
-    return body if isinstance(body, dict) else {}
-
-
-def _is_block(payload):
-    return str(payload.get("code")) == KORAIL_BLOCKED_CODE
-
-
-def _log_block(response, payload, egress_id):
-    # 조회 파라미터(회원번호 등)가 남지 않도록 쿼리스트링은 제외
-    url = str(getattr(response, "url", "") or "").split("?")[0]
+def _log_block(error, egress_id, stage):
+    """코레일 서버 차단 응답을 서버 로그에 남김 (출구별 차단 빈도·원인 추적용)"""
     logger.error(
-        "코레일 서버 차단 응답 (status=%s, code=%s, id=%s, url=%s, 출구=%s): %s",
-        getattr(response, "status_code", None),
-        payload.get("code"),
-        payload.get("id"),
-        url or "unknown",
-        egress_id,
-        payload.get("message"),
+        "코레일 서버 차단 응답 (status=%s, code=%s, 단계=%s, 출구=%s): %s",
+        error.status_code,
+        error.code,
+        stage,
+        egress_id or "direct",
+        error.msg,
     )
 
 
@@ -187,12 +130,11 @@ class ReserveHandler:
         client = None
         self.loginBlocked = False
         try:
-            client = create_korail_client(
-                self.proxy_url, self.egress_id, device=self.device
-            )
+            client = create_korail_client(self.proxy_url, device=self.device)
             # pykorail 은 로그인 실패 시 LoginFailedError 를 발생시킴
             client.login(username, password)
-        except KorailBlockedError:
+        except AccessRestrictedError as e:
+            _log_block(e, self.egress_id, "로그인")
             if client is not None:
                 client.close()
             self.loginSuc = False
@@ -223,7 +165,7 @@ class ReserveHandler:
         str(KorailError) 는 "메시지 (코드)" 형식이라 코드가 없으면 "(None)" 이 붙으므로 msg 만 사용
         """
         if isinstance(error, HttpStatusError):
-            # 자격증명을 보기 전에 서버가 요청을 거절함 (403 이용제한 등) - 비밀번호 문제가 아님
+            # 자격증명을 보기 전에 서버가 요청을 거절함 (502 등) - 비밀번호 문제가 아님
             reason = error.msg or f"HTTP {error.status_code}"
             return f"코레일 서버가 요청을 거절했습니다: {reason}"
         if isinstance(error, KorailError) and error.msg:
@@ -281,6 +223,7 @@ class ReserveHandler:
         waitlist = allowWaitlist and special in WAITLIST_OPTIONS
         self.reserveInfo["waitlist"] = waitlist
 
+        stage = "조회"
         try:
             # Search for available trains
             trains = self._search_trains()
@@ -291,6 +234,7 @@ class ReserveHandler:
                     "error": "No trains available",
                 }
 
+            stage = "예약"
             # 좌석이 있는 열차부터 (출발 시각 순)
             for train in (t for t in trains if t.has_seat()):
                 print(f"열차 발견 : {train} <- 에 대한 예약을 시작합니다.")
@@ -308,7 +252,8 @@ class ReserveHandler:
 
             return {"success": False, "result": None, "error": "All trains sold out"}
 
-        except KorailBlockedError as e:
+        except AccessRestrictedError as e:
+            _log_block(e, self.egress_id, stage)
             return {"success": False, "result": None, "error": str(e), "blocked": True}
         except FATAL_ERRORS as e:
             return {"success": False, "result": None, "error": str(e), "fatal": True}

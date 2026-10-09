@@ -14,6 +14,7 @@ from pykorail import (
     StationNotFoundError,
     PastDepartureError,
     HttpStatusError,
+    AccessRestrictedError,
 )
 
 
@@ -102,21 +103,18 @@ class TestReserveHandler:
         assert reserve_handler.loginError == "로그인 정보를 다시 확인해 주세요."
 
     def test_login_failure_reason_for_http_rejection(self, reserve_handler):
-        """HTTP 403 rejection (e.g. -2000 block) is not shown as a password/network error"""
+        """A non-block HTTP rejection (e.g. 502) is not shown as a password/network error"""
         mock_client = Mock()
-        mock_client.login = Mock(
-            side_effect=HttpStatusError(
-                403, "매크로 등 미허가 도구 사용 시 이용이 제한될 수 있습니다.", "-2000"
-            )
-        )
+        mock_client.login = Mock(side_effect=HttpStatusError(502, "Bad Gateway"))
 
         with patch("telegramBot.korail_client.Korail", return_value=mock_client):
             assert reserve_handler.login("test_user", "test_password") is False
 
-        assert reserve_handler.loginError == (
-            "코레일 서버가 요청을 거절했습니다: "
-            "매크로 등 미허가 도구 사용 시 이용이 제한될 수 있습니다."
+        assert (
+            reserve_handler.loginError
+            == "코레일 서버가 요청을 거절했습니다: Bad Gateway"
         )
+        assert reserve_handler.loginBlocked is False
         mock_client.close.assert_called_once()
 
     def test_login_failure_reason_for_network_error(self, reserve_handler):
@@ -458,13 +456,20 @@ class TestReserveHandler:
         assert result["error"] == str(error)
 
 
+BLOCK_MESSAGE = "매크로 등 미허가 도구 사용 시 이용이 제한될 수 있습니다."
+
+
+def _block(status=403):
+    return AccessRestrictedError(status, BLOCK_MESSAGE, "-2000")
+
+
 class TestKorailBlockLogging:
     """Korail server block responses (code -2000) are written to the server log"""
 
     def test_proxy_applies_only_to_korail_session(self):
         from telegramBot.korail_client import create_korail_client
 
-        client = create_korail_client("socks5h://user:pw@100.64.0.2:1080", "home1")
+        client = create_korail_client("socks5h://user:pw@100.64.0.2:1080")
         try:
             assert client._api._session.proxies == {
                 "http": "socks5h://user:pw@100.64.0.2:1080",
@@ -485,155 +490,100 @@ class TestKorailBlockLogging:
         handler = ReserveHandler("socks5h://h:1080", "home1")
         with patch("telegramBot.korail_client.create_korail_client") as create:
             handler.login("010-1234-5678", "pw")
-        create.assert_called_once_with("socks5h://h:1080", "home1", device=None)
+        create.assert_called_once_with("socks5h://h:1080", device=None)
 
-    def test_blocked_login(self):
-        from telegramBot.korail_client import (
-            BLOCKED_LOGIN_MESSAGE,
-            KorailBlockedError,
-            ReserveHandler,
-        )
+    def test_blocked_login(self, caplog):
+        import logging
+        from telegramBot.korail_client import BLOCKED_LOGIN_MESSAGE, ReserveHandler
 
-        handler = ReserveHandler()
+        handler = ReserveHandler(egress_id="home1")
         client = Mock()
-        client.login.side_effect = KorailBlockedError("id", "blocked")
+        client.login.side_effect = _block()
         with patch(
             "telegramBot.korail_client.create_korail_client", return_value=client
         ):
-            assert handler.login("010-1234-5678", "pw") is False
+            with caplog.at_level(logging.ERROR, logger="telegramBot.korail_client"):
+                assert handler.login("010-1234-5678", "pw") is False
         assert handler.loginBlocked is True
         assert handler.loginError == BLOCKED_LOGIN_MESSAGE
         client.close.assert_called_once()
+        log = caplog.text
+        assert "코레일 서버 차단 응답" in log
+        assert "status=403" in log
+        assert "code=-2000" in log
+        assert "단계=로그인" in log
+        assert "출구=home1" in log
+        assert BLOCK_MESSAGE in log
 
         # 비밀번호 오류는 차단이 아님
+        caplog.clear()
         client.login.side_effect = LoginFailedError("x", "WRR000101")
         with patch(
             "telegramBot.korail_client.create_korail_client", return_value=client
         ):
-            assert handler.login("010-1234-5678", "pw") is False
+            with caplog.at_level(logging.ERROR, logger="telegramBot.korail_client"):
+                assert handler.login("010-1234-5678", "pw") is False
         assert handler.loginBlocked is False
+        assert "코레일 서버 차단 응답" not in caplog.text
 
-    @pytest.mark.parametrize("stage", ["search", "reserve"])
-    def test_blocked_attempt(self, stage):
-        from telegramBot.korail_client import KorailBlockedError, ReserveHandler
+    @pytest.mark.parametrize("stage", ["조회", "예약"])
+    def test_blocked_attempt(self, stage, caplog):
+        import logging
+        from telegramBot.korail_client import ReserveHandler
 
         handler = ReserveHandler()
         handler.korail_client = Mock()
         train = Mock(dep_time="100000")
-        if stage == "search":
-            handler.korail_client.trains.search.side_effect = KorailBlockedError()
+        if stage == "조회":
+            handler.korail_client.trains.search.side_effect = _block()
         else:
             handler.korail_client.trains.search.return_value = [train]
-            handler.korail_client.reservations.create.side_effect = KorailBlockedError()
-        result = handler.reserve_single_attempt("20990101", "서울", "부산", "090000")
+            handler.korail_client.reservations.create.side_effect = _block()
+        with caplog.at_level(logging.ERROR, logger="telegramBot.korail_client"):
+            result = handler.reserve_single_attempt(
+                "20990101", "서울", "부산", "090000"
+            )
         assert result["success"] is False
         assert result["blocked"] is True
+        assert f"단계={stage}" in caplog.text
+        assert "출구=direct" in caplog.text
 
-    def test_korail_block_response_is_logged(self, caplog):
-        """Korail server block (code -2000) is written to the server log"""
-        import json
+    def test_other_http_rejection_is_not_a_block(self, caplog):
+        """A non-block HTTP error (e.g. 502) is retried as a normal failure, not logged as a block"""
         import logging
-        from telegramBot.korail_client import create_korail_client
+        from telegramBot.korail_client import ReserveHandler
 
-        block = {
-            "code": -2000,
-            "id": "2c0a2515-6ea1-9bef-5dca-0f6d37da13c1",
-            "message": "매크로 등 미허가 도구 사용 시 이용이 제한될 수 있습니다.",
-        }
-        response = Mock(
-            status_code=200,
-            text=json.dumps(block, ensure_ascii=False),
-            url="https://smart.letskorail.com/login?mbCrdNo=1234",
-        )
-        from telegramBot.korail_client import KorailBlockedError
-
-        client = create_korail_client(egress_id="home1")
-        try:
-            with caplog.at_level(logging.ERROR, logger="telegramBot.korail_client"):
-                with pytest.raises(KorailBlockedError) as e:
-                    client._api._parse(response)
-        finally:
-            client.close()
-
-        # 일반 실패와 구분되도록 별도 예외로 알림 (출구를 쉬게 하기 위해)
-        assert e.value.block_id == block["id"]
-        log = caplog.text
-        assert "코레일 서버 차단 응답" in log
-        assert "출구=home1" in log
-        assert "code=-2000" in log
-        assert "2c0a2515-6ea1-9bef-5dca-0f6d37da13c1" in log
-        assert "매크로 등 미허가 도구" in log
-        assert "mbCrdNo" not in log  # 쿼리스트링은 남기지 않음
-
-    def test_korail_block_with_http_403_is_logged_and_raised(self, caplog):
-        """pykorail 0.2.1+ raises HttpStatusError for a 403 block; it is logged with its id
-        and turned into KorailBlockedError so the egress gate backs off"""
-        import json
-        import logging
-        from telegramBot.korail_client import KorailBlockedError, create_korail_client
-
-        block = {
-            "code": -2000,
-            "id": "2c0a2515-6ea1-9bef-5dca-0f6d37da13c1",
-            "message": "매크로 등 미허가 도구 사용 시 이용이 제한될 수 있습니다.",
-        }
-        response = Mock(
-            status_code=403,
-            text=json.dumps(block, ensure_ascii=False),
-            url="https://smart.letskorail.com/login?mbCrdNo=1234",
-        )
-        client = create_korail_client()
-        try:
-            with caplog.at_level(logging.ERROR, logger="telegramBot.korail_client"):
-                with pytest.raises(KorailBlockedError) as exc:
-                    client._api._parse(response)
-        finally:
-            client.close()
-
-        assert exc.value.block_id == "2c0a2515-6ea1-9bef-5dca-0f6d37da13c1"
-        assert isinstance(exc.value.__cause__, HttpStatusError)
-        assert exc.value.__cause__.status_code == 403
-        log = caplog.text
-        assert "코레일 서버 차단 응답" in log
-        assert "status=403" in log
-        assert "2c0a2515-6ea1-9bef-5dca-0f6d37da13c1" in log
-        assert "mbCrdNo" not in log
-
-    def test_non_json_http_error_is_raised_without_block_log(self, caplog):
-        """A non-JSON 5xx body raises HttpStatusError but is not reported as a block"""
-        import logging
-        from telegramBot.korail_client import create_korail_client
-
-        response = Mock(
-            status_code=502, text="<html>Bad Gateway</html>", url="https://x/y"
-        )
-        client = create_korail_client()
-        try:
-            with caplog.at_level(logging.ERROR, logger="telegramBot.korail_client"):
-                with pytest.raises(HttpStatusError):
-                    client._api._parse(response)
-        finally:
-            client.close()
-
+        handler = ReserveHandler()
+        handler.korail_client = Mock()
+        handler.korail_client.trains.search.side_effect = HttpStatusError(502, "x")
+        with caplog.at_level(logging.ERROR, logger="telegramBot.korail_client"):
+            result = handler.reserve_single_attempt(
+                "20990101", "서울", "부산", "090000"
+            )
+        assert result["success"] is False
+        assert "blocked" not in result
         assert "코레일 서버 차단 응답" not in caplog.text
 
-    def test_normal_korail_response_is_not_logged(self, caplog):
-        """Regular Korail responses (even failures) are not logged as blocks"""
+    @pytest.mark.parametrize("status", [403, 200])
+    def test_pykorail_raises_access_restricted_for_block_body(self, status):
+        """Contract with the pinned pykorail: a -2000 body raises AccessRestrictedError
+        whatever the HTTP status, and normal Korail failures do not.
+        Re-check this when upgrading pykorail - block detection relies on it."""
         import json
-        import logging
-        from telegramBot.korail_client import create_korail_client
+        from pykorail import Korail
 
-        payload = {"strResult": "FAIL", "h_msg_cd": "WRR000101", "h_msg_txt": "x"}
-        response = Mock(
-            status_code=200,
-            text=json.dumps(payload),
-            url="https://smart.letskorail.com/x",
-        )
-        client = create_korail_client()
+        client = Korail()
         try:
-            with caplog.at_level(logging.ERROR, logger="telegramBot.korail_client"):
-                assert client._api._parse(response) == payload
+            block = {"code": -2000, "id": "trace", "message": BLOCK_MESSAGE}
+            with pytest.raises(AccessRestrictedError) as exc:
+                client._api._parse(
+                    Mock(status_code=status, text=json.dumps(block, ensure_ascii=False))
+                )
+            assert exc.value.status_code == status
+            assert exc.value.code == "-2000"
+
+            payload = {"strResult": "FAIL", "h_msg_cd": "WRR000101", "h_msg_txt": "x"}
+            response = Mock(status_code=status, text=json.dumps(payload))
+            assert client._api._parse(response) == payload
         finally:
             client.close()
-
-        assert "코레일 서버 차단 응답" not in caplog.text
