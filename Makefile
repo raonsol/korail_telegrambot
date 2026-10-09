@@ -22,17 +22,17 @@ port-free-%:
 help:           ## Show this help.
 	@fgrep -h "##" $(MAKEFILE_LIST) | fgrep -v fgrep | sed -e 's/\\$$//' | sed -e 's/##//'
 
-.PHONY: setup-pipenv
-setup-pipenv:  ## Install pipenv globally
-	pip install --user pipenv --break-system-packages
+.PHONY: setup-uv
+setup-uv:  ## Install uv (Python package manager) for the current user
+	pip install --user uv --break-system-packages
 
 .PHONY: install
-install:	## Install dependencies and create virtual environment
-	pipenv install --dev
+install:	## Install dependencies (incl. dev) into .venv from uv.lock
+	uv sync
 
 .PHONY: dev
 dev: port-free-8390  ## Run local development server in subprocess mode (port: 8390, IS_DEV=true)
-	PIPENV_DONT_LOAD_ENV=1 IS_DEV=true USE_CELERY=false pipenv run python -m fastapi dev src/app.py --port 8390
+	IS_DEV=true USE_CELERY=false uv run python -m fastapi dev src/app.py --port 8390
 
 .PHONY: dev-mq
 dev-mq: port-free-8390 redis-start celery-worker-start celery-flower-start  ## Run local development with Celery (MQ) - starts Redis + Worker + Flower + Web (port: 8390, IS_DEV=true)
@@ -41,7 +41,7 @@ dev-mq: port-free-8390 redis-start celery-worker-start celery-flower-start  ## R
 	@echo "✅ Flower monitoring UI running at http://localhost:5555"
 	@echo "🚀 Starting FastAPI development server on port 8390..."
 	@echo "⚠️  Press Ctrl+C to stop. Then run 'make dev-mq-stop' to cleanup."
-	PIPENV_DONT_LOAD_ENV=1 IS_DEV=true USE_CELERY=true pipenv run python -m fastapi dev src/app.py --port 8390
+	IS_DEV=true USE_CELERY=true uv run python -m fastapi dev src/app.py --port 8390
 
 .PHONY: dev-mq-stop
 dev-mq-stop: celery-flower-stop celery-worker-stop  ## Stop Celery (MQ) development services (Worker + Flower only, Redis stays running)
@@ -50,7 +50,7 @@ dev-mq-stop: celery-flower-stop celery-worker-stop  ## Stop Celery (MQ) developm
 
 .PHONY: run
 run: port-free-8391  ## Run local production server in subprocess mode (port: 8391, IS_DEV=false)
-	PIPENV_DONT_LOAD_ENV=1 USE_CELERY=false pipenv run python -m fastapi run src/app.py --host 0.0.0.0 --port 8391
+	USE_CELERY=false uv run python -m fastapi run src/app.py --host 0.0.0.0 --port 8391
 
 .PHONY: run-mq
 run-mq: port-free-8391 redis-start celery-worker-start celery-flower-start  ## Run local production with Celery (MQ) - starts Redis + Worker + Flower + Web (port: 8391, IS_DEV=false)
@@ -59,7 +59,7 @@ run-mq: port-free-8391 redis-start celery-worker-start celery-flower-start  ## R
 	@echo "✅ Flower monitoring UI running at http://localhost:5555"
 	@echo "🚀 Starting FastAPI production server on port 8391..."
 	@echo "⚠️  Press Ctrl+C to stop. Then run 'make run-mq-stop' to cleanup."
-	PIPENV_DONT_LOAD_ENV=1 USE_CELERY=true pipenv run python -m fastapi run src/app.py --host 0.0.0.0 --port 8391
+	USE_CELERY=true uv run python -m fastapi run src/app.py --host 0.0.0.0 --port 8391
 
 .PHONY: run-mq-stop
 run-mq-stop: celery-flower-stop celery-worker-stop  ## Stop Celery (MQ) production services (Worker + Flower only, Redis stays running)
@@ -91,7 +91,7 @@ celery-worker-start:  ## Start Celery worker in background (pool: CELERY_POOL, d
 		echo "✅ Celery worker already running (PID: $$(cat ${WORKER_PID_FILE}))"; \
 	else \
 		echo "🚀 Starting Celery worker in background..."; \
-		cd src && PYTHONPATH=. pipenv run sh -c 'celery -A telegramBot.tasks worker --loglevel=info --pool=$${CELERY_POOL:-threads} --pidfile=../${WORKER_PID_FILE} --detach'; \
+		cd src && PYTHONPATH=. uv run sh -c 'celery -A telegramBot.tasks worker --loglevel=info --pool=$${CELERY_POOL:-threads} --pidfile=../${WORKER_PID_FILE} --detach'; \
 	fi
 
 .PHONY: celery-worker-stop
@@ -113,7 +113,7 @@ celery-flower-start:  ## Start Flower monitoring UI in background
 		echo "⚠️  Port 5555 is already in use (Docker Compose flower?) - skipping local Flower"; \
 	else \
 		echo "🌸 Starting Flower monitoring UI in background on http://localhost:5555..."; \
-		nohup bash -c "cd src && PYTHONPATH=. pipenv run celery -A telegramBot.tasks flower" > /dev/null 2>&1 & \
+		nohup bash -c "cd src && PYTHONPATH=. uv run celery -A telegramBot.tasks flower" > /dev/null 2>&1 & \
 		echo $$! > ${FLOWER_PID_FILE}; \
 		sleep 1; \
 	fi
@@ -140,7 +140,7 @@ korail-login-check:  ## Diagnose ADMIN_KORAIL_ID/PW login inside Docker (shows s
 
 .PHONY: lint
 lint:	## Run lint
-	pipenv run black .
+	uv run black .
 
 .PHONY: webapp-install
 webapp-install:	## Install web app (PWA) dependencies
@@ -156,51 +156,51 @@ webapp-build:	## Build web app into webapp/dist (served by FastAPI at /app)
 
 .PHONY: vapid-keys
 vapid-keys:	## Generate VAPID keys for Web Push notifications
-	@cd src && PIPENV_DONT_LOAD_ENV=1 pipenv run python -m core.vapid
+	@cd src && uv run python -m core.vapid
 
 .PHONY: test
 test:	## Run all tests
-	pipenv run pytest
+	uv run pytest
 
 .PHONY: test-unit
 test-unit:	## Run unit tests only
-	pipenv run pytest -m unit -v
+	uv run pytest -m unit -v
 
 .PHONY: test-integration
 test-integration:	## Run integration tests only
-	pipenv run pytest -m integration -v
+	uv run pytest -m integration -v
 
 .PHONY: test-e2e
 test-e2e:	## Run end-to-end tests only
-	pipenv run pytest -m e2e -v
+	uv run pytest -m e2e -v
 
 .PHONY: test-subprocess
 test-subprocess:	## Run subprocess mode tests
-	pipenv run pytest -m subprocess -v
+	uv run pytest -m subprocess -v
 
 .PHONY: test-mq
 test-mq:	## Run Celery (MQ) mode tests (requires Redis)
-	pipenv run pytest -m "celery or requires_redis" -v
+	uv run pytest -m "celery or requires_redis" -v
 
 .PHONY: test-fast
 test-fast:	## Run fast tests only (skip slow E2E tests)
-	pipenv run pytest -m "not slow" -v
+	uv run pytest -m "not slow" -v
 
 .PHONY: test-coverage
 test-coverage:	## Run tests with coverage report
-	pipenv run pytest --cov=src --cov-report=html --cov-report=term-missing --cov-report=xml
+	uv run pytest --cov=src --cov-report=html --cov-report=term-missing --cov-report=xml
 
 .PHONY: test-verbose
 test-verbose:	## Run tests with verbose output
-	pipenv run pytest -vv -s
+	uv run pytest -vv -s
 
 .PHONY: test-watch
 test-watch:	## Run tests in watch mode (requires pytest-watch)
-	pipenv run ptw
+	uv run ptw
 
 .PHONY: coverage-html
 coverage-html:	## Generate HTML coverage report and open in browser
-	pipenv run pytest --cov=src --cov-report=html
+	uv run pytest --cov=src --cov-report=html
 	@echo "Opening coverage report..."
 	@which xdg-open > /dev/null && xdg-open htmlcov/index.html || open htmlcov/index.html || echo "Please open htmlcov/index.html manually"
 

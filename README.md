@@ -140,7 +140,7 @@ make docker-compose-down
 
 | 명령어 | 설명 |
 |--------|------|
-| `make install` | pipenv로 의존성 설치 |
+| `make install` | uv로 의존성 설치 (`uv.lock` 기준, `.venv` 생성) |
 | `make dev` | 개발 서버 실행 (subprocess 모드, 포트 8390) |
 | `make dev-mq` | 개발 서버 실행 (MQ 방식, 포트 8390) |
 | `make run` | 운영 서버 실행 (subprocess 모드, 포트 8391) |
@@ -319,7 +319,8 @@ korail_telegrambot/
 ├── docker-compose.yml        # 운영 Docker 설정
 ├── Dockerfile                # 멀티 스테이지 빌드 (웹앱 + 서버)
 ├── Makefile                  # 빌드 및 실행 명령어
-├── Pipfile                   # Python 의존성
+├── pyproject.toml            # Python 의존성 (uv)
+├── uv.lock                   # 의존성 고정 버전 (uv lock 으로 갱신)
 ├── CLAUDE.md                 # AI 어시스턴트 지시사항
 └── README.md                 # 이 파일
 ```
@@ -410,7 +411,8 @@ After=network.target
 Type=simple
 User=your_user
 WorkingDirectory=/path/to/korail_telegrambot
-ExecStart=/usr/local/bin/pipenv run fastapi run src/app.py --port 8391
+# uv 경로는 `which uv` 로 확인 (make setup-uv 로 설치하면 ~/.local/bin/uv)
+ExecStart=/home/your_user/.local/bin/uv run fastapi run src/app.py --port 8391
 Restart=always
 RestartSec=3
 Environment=PATH=/usr/local/bin:/usr/bin:/bin

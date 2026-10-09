@@ -58,7 +58,7 @@ tests/
 
 2. **테스트 의존성 설치**:
    ```bash
-   pipenv install --dev
+   uv sync
    ```
 
 ### 빠른 시작
@@ -80,71 +80,71 @@ make test-e2e
 
 #### 모든 테스트 실행
 ```bash
-pipenv run pytest
+uv run pytest
 ```
 
 #### 특정 테스트 카테고리 실행
 
 ```bash
 # 단위 테스트만
-pipenv run pytest -m unit
+uv run pytest -m unit
 
 # 통합 테스트만
-pipenv run pytest -m integration
+uv run pytest -m integration
 
 # E2E 테스트만
-pipenv run pytest -m e2e
+uv run pytest -m e2e
 
 # Subprocess 모드 테스트
-pipenv run pytest -m subprocess
+uv run pytest -m subprocess
 
 # Celery 모드 테스트
-pipenv run pytest -m celery
+uv run pytest -m celery
 ```
 
 #### 특정 테스트 파일 실행
 
 ```bash
 # 설정 테스트
-pipenv run pytest tests/unit/test_config.py
+uv run pytest tests/unit/test_config.py
 
 # 봇 핸들러 테스트
-pipenv run pytest tests/unit/test_bot.py
+uv run pytest tests/unit/test_bot.py
 
 # 완전한 예약 플로우 테스트
-pipenv run pytest tests/e2e/test_reservation_flow.py
+uv run pytest tests/e2e/test_reservation_flow.py
 ```
 
 #### 특정 테스트 함수 실행
 
 ```bash
 # 특정 함수 테스트
-pipenv run pytest tests/unit/test_config.py::TestWebSettings::test_web_settings_dev_mode
+uv run pytest tests/unit/test_config.py::TestWebSettings::test_web_settings_dev_mode
 
 # 특정 클래스 테스트
-pipenv run pytest tests/unit/test_bot.py::TestTelegramBot
+uv run pytest tests/unit/test_bot.py::TestTelegramBot
 ```
 
 ### 테스트 실행 옵션
 
 ```bash
 # 상세 출력
-pipenv run pytest -v
+uv run pytest -v
 
 # print 문 표시
-pipenv run pytest -s
+uv run pytest -s
 
 # 첫 실패 시 중단
-pipenv run pytest -x
+uv run pytest -x
 
 # 마지막 실패한 테스트만 실행
-pipenv run pytest --lf
+uv run pytest --lf
 
 # 병렬 실행 (pytest-xdist 필요)
-pipenv run pytest -n auto
+uv run pytest -n auto
 
 # 빠른 테스트만 실행 (느린 E2E 테스트 제외)
-pipenv run pytest -m "not slow"
+uv run pytest -m "not slow"
 ```
 
 ## 테스트 카테고리
@@ -162,7 +162,7 @@ pipenv run pytest -m "not slow"
 
 **예제**:
 ```bash
-pipenv run pytest tests/unit/test_config.py -v
+uv run pytest tests/unit/test_config.py -v
 ```
 
 ### 통합 테스트 (`-m integration`)
@@ -176,7 +176,7 @@ pipenv run pytest tests/unit/test_config.py -v
 
 **예제**:
 ```bash
-pipenv run pytest tests/integration/ -v
+uv run pytest tests/integration/ -v
 ```
 
 **특별 요구사항**:
@@ -193,24 +193,24 @@ pipenv run pytest tests/integration/ -v
 **예제**:
 ```bash
 # 모든 E2E 테스트 실행
-pipenv run pytest tests/e2e/ -v
+uv run pytest tests/e2e/ -v
 
 # 느린 E2E 테스트 제외
-pipenv run pytest -m "e2e and not slow"
+uv run pytest -m "e2e and not slow"
 ```
 
 ### 모드별 테스트
 
 #### Subprocess 모드 테스트
 ```bash
-pipenv run pytest -m subprocess
+uv run pytest -m subprocess
 ```
 
 Subprocess 기반 백그라운드 태스크 실행을 테스트합니다.
 
 #### Celery 모드 테스트
 ```bash
-pipenv run pytest -m celery
+uv run pytest -m celery
 ```
 
 Celery 기반 분산 태스크 실행을 테스트합니다 (Redis 필요).
@@ -221,13 +221,13 @@ Celery 기반 분산 태스크 실행을 테스트합니다 (Redis 필요).
 
 ```bash
 # HTML 커버리지 리포트 생성
-pipenv run pytest --cov=src --cov-report=html
+uv run pytest --cov=src --cov-report=html
 
 # 터미널에서 커버리지 보기
-pipenv run pytest --cov=src --cov-report=term-missing
+uv run pytest --cov=src --cov-report=term-missing
 
 # XML 커버리지 생성 (CI/CD용)
-pipenv run pytest --cov=src --cov-report=xml
+uv run pytest --cov=src --cov-report=xml
 ```
 
 ### 커버리지 리포트 보기
@@ -374,7 +374,7 @@ BOTTOKEN_DEV=test_token \
 WEBHOOK_URL_DEV=http://test.example.com \
 ALLOW_LIST=01012345678 \
 ADMINPW=test_admin \
-pipenv run pytest
+uv run pytest
 ```
 
 ## 문제 해결
@@ -386,7 +386,7 @@ pipenv run pytest
 ```bash
 # PYTHONPATH에 src/ 포함 확인
 export PYTHONPATH="${PYTHONPATH}:./src"
-pipenv run pytest
+uv run pytest
 ```
 
 또는 pytest.ini 설정 사용 (이미 설정됨).
@@ -396,7 +396,7 @@ pipenv run pytest
 ```bash
 # Celery 테스트 실행 전에 Redis 시작
 make redis-start
-pipenv run pytest -m celery
+uv run pytest -m celery
 make redis-stop
 ```
 
@@ -404,17 +404,17 @@ make redis-stop
 
 `pytest-asyncio`가 설치되어 있는지 확인:
 ```bash
-pipenv install --dev pytest-asyncio
+uv add --dev pytest-asyncio
 ```
 
 #### 커버리지가 생성되지 않음
 
 ```bash
 # coverage 패키지 설치
-pipenv install --dev pytest-cov
+uv add --dev pytest-cov
 
 # 커버리지와 함께 실행
-pipenv run pytest --cov=src
+uv run pytest --cov=src
 ```
 
 ### 테스트 환경
@@ -454,13 +454,13 @@ ADMINPW=test_password
 
 ```bash
 # 병렬로 실행
-pipenv run pytest -n auto
+uv run pytest -n auto
 
 # 느린 테스트 건너뛰기
-pipenv run pytest -m "not slow"
+uv run pytest -m "not slow"
 
 # 변경된 테스트만 실행
-pipenv run pytest --testmon
+uv run pytest --testmon
 ```
 
 ## 유지보수

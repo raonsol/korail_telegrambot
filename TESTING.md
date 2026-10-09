@@ -37,13 +37,13 @@ make test-subprocess     # Subprocess 모드 테스트
 make test-mq        # MQ 모드 테스트 (Redis 필요)
 
 # 직접 pytest 커맨드
-pipenv run pytest                           # 모든 테스트
-pipenv run pytest -m unit                  # 단위 테스트
-pipenv run pytest -m "not slow"           # 빠른 테스트만
-pipenv run pytest tests/unit/test_bot.py  # 특정 파일
-pipenv run pytest -v -s                   # 상세 출력과 함께
-pipenv run pytest -x                      # 첫 실패 시 중단
-pipenv run pytest --lf                    # 마지막 실패한 테스트만
+uv run pytest                           # 모든 테스트
+uv run pytest -m unit                  # 단위 테스트
+uv run pytest -m "not slow"           # 빠른 테스트만
+uv run pytest tests/unit/test_bot.py  # 특정 파일
+uv run pytest -v -s                   # 상세 출력과 함께
+uv run pytest -x                      # 첫 실패 시 중단
+uv run pytest --lf                    # 마지막 실패한 테스트만
 ```
 
 ## 테스트 구조
@@ -88,17 +88,17 @@ tests/
 
 ```bash
 # 마커로
-pipenv run pytest -m unit
-pipenv run pytest -m "integration and not requires_redis"
+uv run pytest -m unit
+uv run pytest -m "integration and not requires_redis"
 
 # 파일로
-pipenv run pytest tests/unit/test_config.py
+uv run pytest tests/unit/test_config.py
 
 # 클래스로
-pipenv run pytest tests/unit/test_bot.py::TestTelegramBot
+uv run pytest tests/unit/test_bot.py::TestTelegramBot
 
 # 함수로
-pipenv run pytest tests/unit/test_config.py::TestWebSettings::test_web_settings_dev_mode
+uv run pytest tests/unit/test_config.py::TestWebSettings::test_web_settings_dev_mode
 ```
 
 ## 다양한 테스트 타입을 위한 사전 준비사항
@@ -126,40 +126,40 @@ pipenv run pytest tests/unit/test_config.py::TestWebSettings::test_web_settings_
 
 ```bash
 # 개발 모드 테스트
-pipenv run pytest tests/unit/test_config.py::TestWebSettings::test_web_settings_dev_mode
+uv run pytest tests/unit/test_config.py::TestWebSettings::test_web_settings_dev_mode
 
 # 프로덕션 모드 테스트
-pipenv run pytest tests/unit/test_config.py::TestWebSettings::test_web_settings_production_mode
+uv run pytest tests/unit/test_config.py::TestWebSettings::test_web_settings_production_mode
 ```
 
 ### 봇 핸들러 테스트
 
 ```bash
 # start 커맨드 테스트
-pipenv run pytest tests/unit/test_bot.py::TestTelegramBot::test_start_func
+uv run pytest tests/unit/test_bot.py::TestTelegramBot::test_start_func
 
 # 사용자 입력 검증 테스트
-pipenv run pytest tests/unit/test_bot.py::TestTelegramBot::test_input_id_valid_phone
+uv run pytest tests/unit/test_bot.py::TestTelegramBot::test_input_id_valid_phone
 ```
 
 ### 예약 플로우 테스트
 
 ```bash
 # 완전한 플로우
-pipenv run pytest tests/e2e/test_reservation_flow.py::TestCompleteReservationFlow::test_full_reservation_flow_subprocess_mode
+uv run pytest tests/e2e/test_reservation_flow.py::TestCompleteReservationFlow::test_full_reservation_flow_subprocess_mode
 
 # 에러 처리
-pipenv run pytest tests/e2e/test_reservation_flow.py::TestErrorRecovery
+uv run pytest tests/e2e/test_reservation_flow.py::TestErrorRecovery
 ```
 
 ### API 클라이언트 테스트
 
 ```bash
 # 로그인 테스트
-pipenv run pytest tests/unit/test_korail_client.py::TestReserveHandler::test_login_success
+uv run pytest tests/unit/test_korail_client.py::TestReserveHandler::test_login_success
 
 # 예약 테스트
-pipenv run pytest tests/unit/test_korail_client.py::TestReserveHandler::test_reserve_single_attempt_success
+uv run pytest tests/unit/test_korail_client.py::TestReserveHandler::test_reserve_single_attempt_success
 ```
 
 ## 테스트를 위한 환경 변수
@@ -180,7 +180,7 @@ ADMIN_KORAIL_PW=admin_pass
 
 필요시 오버라이드:
 ```bash
-IS_DEV=false pipenv run pytest
+IS_DEV=false uv run pytest
 ```
 
 ## CI/CD 통합
@@ -312,28 +312,28 @@ make redis-stop
 
 ```bash
 # pytest-asyncio 설치 확인
-pipenv install --dev pytest-asyncio
+uv add --dev pytest-asyncio
 ```
 
 ### 커버리지가 생성되지 않음
 
 ```bash
 # pytest-cov 설치
-pipenv install --dev pytest-cov
+uv add --dev pytest-cov
 
 # 커버리지 플래그와 함께 실행
-pipenv run pytest --cov=src
+uv run pytest --cov=src
 ```
 
 ### 테스트 실행이 느림
 
 ```bash
 # 병렬로 실행 (pytest-xdist 필요)
-pipenv install --dev pytest-xdist
-pipenv run pytest -n auto
+uv add --dev pytest-xdist
+uv run pytest -n auto
 
 # 느린 테스트 건너뛰기
-pipenv run pytest -m "not slow"
+uv run pytest -m "not slow"
 ```
 
 ## 모범 사례
@@ -376,22 +376,22 @@ pipenv run pytest -m "not slow"
 
 ```bash
 # 패턴에 맞는 테스트 실행
-pipenv run pytest -k "test_login"
+uv run pytest -k "test_login"
 
 # print 문과 함께 테스트 실행
-pipenv run pytest -s
+uv run pytest -s
 
 # 추가 상세 정보와 함께
-pipenv run pytest -vv
+uv run pytest -vv
 
 # 실패 시 디버거로 진입
-pipenv run pytest --pdb
+uv run pytest --pdb
 
 # 테스트 리포트 생성
-pipenv run pytest --html=report.html
+uv run pytest --html=report.html
 
 # 테스트 소요 시간 확인
-pipenv run pytest --durations=10
+uv run pytest --durations=10
 ```
 
 ---
