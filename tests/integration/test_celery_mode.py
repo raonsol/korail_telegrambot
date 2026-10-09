@@ -185,10 +185,12 @@ class TestCeleryTasks:
     def test_reservation_task_success(self, mock_redis_client):
         from telegramBot.tasks import reservation_task
 
-        with patch(
-            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
-        ), patch("telegramBot.tasks.run_reservation") as run, patch(
-            "telegramBot.tasks.build_reporter"
+        with (
+            patch(
+                "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+            ),
+            patch("telegramBot.tasks.run_reservation") as run,
+            patch("telegramBot.tasks.build_reporter"),
         ):
             run.side_effect = lambda spec, reporter, should_stop, on_success, **_: (
                 on_success() or {"status": "success"}
@@ -213,12 +215,14 @@ class TestCeleryTasks:
         spec = _spec(korail_pw_enc=encrypted)
         spec.pop("korail_pw")
 
-        with patch(
-            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
-        ), patch(
-            "telegramBot.tasks.run_reservation", return_value={"status": "failed"}
-        ) as run, patch(
-            "telegramBot.tasks.build_reporter"
+        with (
+            patch(
+                "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+            ),
+            patch(
+                "telegramBot.tasks.run_reservation", return_value={"status": "failed"}
+            ) as run,
+            patch("telegramBot.tasks.build_reporter"),
         ):
             reservation_task.apply(kwargs={"spec": spec}, task_id="task-enc")
 
@@ -231,10 +235,12 @@ class TestCeleryTasks:
         spec.pop("korail_pw")
         reporter = Mock()
 
-        with patch(
-            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
-        ), patch("telegramBot.tasks.run_reservation") as run, patch(
-            "telegramBot.tasks.build_reporter", return_value=reporter
+        with (
+            patch(
+                "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+            ),
+            patch("telegramBot.tasks.run_reservation") as run,
+            patch("telegramBot.tasks.build_reporter", return_value=reporter),
         ):
             result = reservation_task.apply(
                 kwargs={"spec": spec}, task_id="task-bad"
@@ -258,12 +264,14 @@ class TestCeleryTasks:
             egress_proxy_enc=vault.encrypt("socks5h://h:1080"),
         )
 
-        with patch(
-            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
-        ), patch(
-            "telegramBot.tasks.run_reservation", return_value={"status": "failed"}
-        ) as run, patch(
-            "telegramBot.tasks.build_reporter"
+        with (
+            patch(
+                "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+            ),
+            patch(
+                "telegramBot.tasks.run_reservation", return_value={"status": "failed"}
+            ) as run,
+            patch("telegramBot.tasks.build_reporter"),
         ):
             reservation_task.apply(kwargs={"spec": spec}, task_id="task-egress")
 
@@ -279,10 +287,12 @@ class TestCeleryTasks:
         from telegramBot.tasks import reservation_task
 
         reporter = Mock()
-        with patch(
-            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
-        ), patch("telegramBot.tasks.run_reservation") as run, patch(
-            "telegramBot.tasks.build_reporter", return_value=reporter
+        with (
+            patch(
+                "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+            ),
+            patch("telegramBot.tasks.run_reservation") as run,
+            patch("telegramBot.tasks.build_reporter", return_value=reporter),
         ):
             result = reservation_task.apply(
                 kwargs={"spec": _spec(egress_id="home1", egress_proxy_enc="garbage")},
@@ -296,10 +306,12 @@ class TestCeleryTasks:
         from telegramBot.tasks import reservation_task
 
         mock_redis_client.hset("reservation_task:task-done", "status", "completed")
-        with patch(
-            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
-        ), patch("telegramBot.tasks.run_reservation") as run, patch(
-            "telegramBot.tasks.build_reporter"
+        with (
+            patch(
+                "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+            ),
+            patch("telegramBot.tasks.run_reservation") as run,
+            patch("telegramBot.tasks.build_reporter"),
         ):
             result = reservation_task.apply(
                 kwargs={"spec": _spec()}, task_id="task-done"
@@ -313,10 +325,12 @@ class TestCeleryTasks:
         from telegramBot.tasks import reservation_task
 
         mock_redis_client.hset("reservation_task:task-c", "status", "cancelled")
-        with patch(
-            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
-        ), patch("telegramBot.tasks.run_reservation") as run, patch(
-            "telegramBot.tasks.build_reporter"
+        with (
+            patch(
+                "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+            ),
+            patch("telegramBot.tasks.run_reservation") as run,
+            patch("telegramBot.tasks.build_reporter"),
         ):
             result = reservation_task.apply(
                 kwargs={"spec": _spec()}, task_id="task-c"
@@ -340,10 +354,12 @@ class TestCeleryTasks:
             seen["after"] = should_stop()
             return {"status": "stopped"}
 
-        with patch(
-            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
-        ), patch("telegramBot.tasks.run_reservation", side_effect=fake_run), patch(
-            "telegramBot.tasks.build_reporter"
+        with (
+            patch(
+                "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+            ),
+            patch("telegramBot.tasks.run_reservation", side_effect=fake_run),
+            patch("telegramBot.tasks.build_reporter"),
         ):
             reservation_task.apply(kwargs={"spec": _spec()}, task_id="task-r")
 
@@ -371,15 +387,17 @@ class TestCeleryTasks:
             return value
 
         mock_redis_client.hget = racy_hget
-        with patch(
-            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
-        ), patch(
-            "telegramBot.tasks.run_reservation",
-            side_effect=lambda spec, reporter, should_stop, on_success, **_: {
-                "stopped": should_stop()
-            },
-        ), patch(
-            "telegramBot.tasks.build_reporter"
+        with (
+            patch(
+                "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+            ),
+            patch(
+                "telegramBot.tasks.run_reservation",
+                side_effect=lambda spec, reporter, should_stop, on_success, **_: {
+                    "stopped": should_stop()
+                },
+            ),
+            patch("telegramBot.tasks.build_reporter"),
         ):
             result = reservation_task.apply(
                 kwargs={"spec": _spec()}, task_id="task-race"
@@ -391,12 +409,14 @@ class TestCeleryTasks:
     def test_reservation_task_passes_max_duration(self, mock_redis_client):
         from telegramBot.tasks import RESERVATION_TIMEOUT, reservation_task
 
-        with patch(
-            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
-        ), patch(
-            "telegramBot.tasks.run_reservation", return_value={"status": "failed"}
-        ) as run, patch(
-            "telegramBot.tasks.build_reporter"
+        with (
+            patch(
+                "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+            ),
+            patch(
+                "telegramBot.tasks.run_reservation", return_value={"status": "failed"}
+            ) as run,
+            patch("telegramBot.tasks.build_reporter"),
         ):
             reservation_task.apply(kwargs={"spec": _spec()}, task_id="t1")
             reservation_task.apply(
@@ -414,12 +434,14 @@ class TestCeleryTasks:
     def test_redis_client_is_shared(self, mock_redis_client):
         from telegramBot.tasks import reservation_task
 
-        with patch(
-            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
-        ) as from_url, patch(
-            "telegramBot.tasks.run_reservation", return_value={"status": "failed"}
-        ), patch(
-            "telegramBot.tasks.build_reporter"
+        with (
+            patch(
+                "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+            ) as from_url,
+            patch(
+                "telegramBot.tasks.run_reservation", return_value={"status": "failed"}
+            ),
+            patch("telegramBot.tasks.build_reporter"),
         ):
             reservation_task.apply(kwargs={"spec": _spec()}, task_id="s1")
             reservation_task.apply(kwargs={"spec": _spec()}, task_id="s2")
@@ -439,13 +461,15 @@ class TestCeleryTasks:
     def test_reservation_task_without_redis(self):
         from telegramBot.tasks import reservation_task
 
-        with patch(
-            "telegramBot.tasks.redis.Redis.from_url",
-            side_effect=Exception("no redis"),
-        ), patch(
-            "telegramBot.tasks.run_reservation", return_value={"status": "success"}
-        ) as run, patch(
-            "telegramBot.tasks.build_reporter"
+        with (
+            patch(
+                "telegramBot.tasks.redis.Redis.from_url",
+                side_effect=Exception("no redis"),
+            ),
+            patch(
+                "telegramBot.tasks.run_reservation", return_value={"status": "success"}
+            ) as run,
+            patch("telegramBot.tasks.build_reporter"),
         ):
             result = reservation_task.apply(
                 kwargs={"spec": _spec()}, task_id="task-noredis"
@@ -493,10 +517,12 @@ class TestWorkerLossDetection:
             )
             return {"status": "failed"}
 
-        with patch(
-            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
-        ), patch("telegramBot.tasks.run_reservation", side_effect=fake_run), patch(
-            "telegramBot.tasks.build_reporter"
+        with (
+            patch(
+                "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+            ),
+            patch("telegramBot.tasks.run_reservation", side_effect=fake_run),
+            patch("telegramBot.tasks.build_reporter"),
         ):
             reservation_task.apply(kwargs={"spec": _spec()}, task_id="task-hb")
 
@@ -540,11 +566,13 @@ class TestWorkerLossDetection:
             return {"status": "stopped", "attempts": 3}
 
         try:
-            with patch(
-                "telegramBot.tasks.redis.Redis.from_url",
-                return_value=mock_redis_client,
-            ), patch("telegramBot.tasks.run_reservation", side_effect=fake_run), patch(
-                "telegramBot.tasks.build_reporter", return_value=reporter
+            with (
+                patch(
+                    "telegramBot.tasks.redis.Redis.from_url",
+                    return_value=mock_redis_client,
+                ),
+                patch("telegramBot.tasks.run_reservation", side_effect=fake_run),
+                patch("telegramBot.tasks.build_reporter", return_value=reporter),
             ):
                 result = tasks.reservation_task.apply(
                     kwargs={"spec": _spec()}, task_id="task-shutdown"
@@ -634,10 +662,12 @@ class TestUnreportedSuccessCelery:
             on_success(train_info="KTX 101", attempts=9)
             return {"status": "success", "reported": False}
 
-        with patch(
-            "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
-        ), patch("telegramBot.tasks.run_reservation", side_effect=fake_run), patch(
-            "telegramBot.tasks.build_reporter"
+        with (
+            patch(
+                "telegramBot.tasks.redis.Redis.from_url", return_value=mock_redis_client
+            ),
+            patch("telegramBot.tasks.run_reservation", side_effect=fake_run),
+            patch("telegramBot.tasks.build_reporter"),
         ):
             reservation_task.apply(kwargs={"spec": _spec()}, task_id="task-res")
 

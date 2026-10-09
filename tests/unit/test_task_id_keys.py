@@ -36,9 +36,10 @@ def test_task_id_keys():
     mock_response = Mock()
     mock_response.raise_for_status = Mock()
 
-    with patch("core.runner.requests.Session.post", return_value=mock_response), patch(
-        "core.runner.ReserveHandler"
-    ) as mock_handler_class:
+    with (
+        patch("core.runner.requests.Session.post", return_value=mock_response),
+        patch("core.runner.ReserveHandler") as mock_handler_class,
+    ):
         mock_handler = Mock()
         mock_handler.login = Mock(return_value=False)
         mock_handler_class.return_value = mock_handler

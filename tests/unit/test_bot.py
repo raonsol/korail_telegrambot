@@ -145,9 +145,10 @@ class TestTelegramBot:
             "trainInfo": {},
         }
 
-        with patch("telegramBot.bot.settings") as mock_settings, patch(
-            "telegramBot.bot.ReserveHandler"
-        ) as mock_handler_class:
+        with (
+            patch("telegramBot.bot.settings") as mock_settings,
+            patch("telegramBot.bot.ReserveHandler") as mock_handler_class,
+        ):
             mock_settings.admin_password = "admin123"
             mock_settings.admin_korail_id = "admin_id"
             mock_settings.admin_korail_pw = "admin_pw"
@@ -171,9 +172,10 @@ class TestTelegramBot:
         chat_id = 123456
         bot_instance._create_user(chat_id)
 
-        with patch("telegramBot.bot.settings") as mock_settings, patch(
-            "telegramBot.bot.ReserveHandler"
-        ) as mock_handler_class:
+        with (
+            patch("telegramBot.bot.settings") as mock_settings,
+            patch("telegramBot.bot.ReserveHandler") as mock_handler_class,
+        ):
             mock_settings.admin_password = "admin123"
             mock_settings.admin_korail_id = "admin_id"
             mock_settings.admin_korail_pw = "wrong_pw"

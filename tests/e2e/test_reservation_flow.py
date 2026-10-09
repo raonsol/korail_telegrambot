@@ -194,9 +194,10 @@ class TestCompleteReservationFlow:
 
         await bot.start_func(update, None)
 
-        with patch("telegramBot.bot.settings") as mock_settings, patch(
-            "telegramBot.bot.ReserveHandler"
-        ) as mock_handler_class:
+        with (
+            patch("telegramBot.bot.settings") as mock_settings,
+            patch("telegramBot.bot.ReserveHandler") as mock_handler_class,
+        ):
             mock_settings.admin_password = "admin123"
             mock_settings.admin_korail_id = "admin_user"
             mock_settings.admin_korail_pw = "admin_pass"

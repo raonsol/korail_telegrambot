@@ -340,7 +340,7 @@ make vapid-keys       # Generate VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY for Web Pu
 
 ### Code Quality
 ```bash
-make lint             # Format code with black (CI pins black 25.9.0)
+make lint             # Format code with black (dev group pins black==25.9.0, same as CI - change both together)
 make test             # All Python tests (TEST_DATABASE_URL=postgresql://... to run DB tests on Postgres)
 cd webapp && npm run build   # Typecheck (tsc) + build
 ```
