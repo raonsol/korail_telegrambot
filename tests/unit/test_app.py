@@ -135,9 +135,10 @@ class TestAppConfiguration:
 
     def test_use_celery_environment_variable(self):
         with patch.dict("os.environ", {"USE_CELERY": "true"}):
-            with patch("telegramBot.bot.ApplicationBuilder"), patch(
-                "core.services.build_services"
-            ) as mock_build:
+            with (
+                patch("telegramBot.bot.ApplicationBuilder"),
+                patch("core.services.build_services") as mock_build,
+            ):
                 import app
 
                 importlib.reload(app)

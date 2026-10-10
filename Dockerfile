@@ -14,10 +14,15 @@ FROM python:3.13.1-slim
 RUN apt-get update && apt-get install -y tzdata && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY Pipfile* ./
+COPY pyproject.toml uv.lock ./
 
-RUN pip install --no-cache-dir pipenv && \
-  pipenv install --system --deploy --clear
+# uv.lock 그대로 시스템 Python 에 설치 (PATH 의 fastapi·celery 를 그대로 사용)
+# --locked: uv.lock 이 pyproject.toml 과 맞지 않으면 빌드 실패. 설치 후 uv 는 이미지에서 제거
+RUN pip install --no-cache-dir uv==0.12.19 && \
+  uv export --locked --no-dev --format requirements.txt -o /tmp/requirements.txt && \
+  uv pip install --system --no-cache --require-hashes -r /tmp/requirements.txt && \
+  rm /tmp/requirements.txt && \
+  pip uninstall -y uv
 
 COPY src .
 COPY --from=webapp /webapp/dist ./webapp_dist

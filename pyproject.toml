@@ -1,0 +1,39 @@
+[project]
+name = "korail-telegrambot"
+version = "0.0.0" # 앱 버전은 src/version.py (Docker 이미지 태그·봇 시작 메시지)
+requires-python = "==3.13.*"
+dependencies = [
+    "fastapi[standard]>=0.115.0,<0.116.0",
+    "requests",
+    "python-telegram-bot",
+    "pyopenssl",
+    "pydantic-settings",
+    "redis",
+    "celery",
+    "flower",
+    "sqlalchemy",
+    "alembic",
+    "httpx",
+    "pywebpush",
+    "psycopg[binary]",
+    "cryptography",
+    # create_korail_client() 가 비공개 client._api._session 을 쓰므로 정확히 고정 (CLAUDE.md 참고)
+    "pykorail==0.2.2",
+]
+
+[dependency-groups]
+dev = [
+    "black==25.9.0", # CI(.github/workflows/test.yml lint)와 같은 버전 - 바꿀 때 함께 변경
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "pytest-mock",
+    "httpx",
+    "fakeredis",
+    "freezegun",
+]
+
+[tool.uv]
+# 배포용 패키지가 아닌 애플리케이션 - 의존성만 설치하고 프로젝트 자체는 설치하지 않음
+package = false
+required-version = ">=0.12"

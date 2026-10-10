@@ -16,6 +16,7 @@ KTX (Korean train) reservation automation with **two channels** — a Telegram b
 - **Redis + Celery**: Optional distributed task processing system (MQ pattern)
 - **React + Vite + vite-plugin-pwa** (`webapp/`): Installable PWA with offline shell and Web Push
 - **Docker**: Multi-stage build (Node builds the PWA, Python image serves it)
+- **uv** (>= 0.12, `pyproject.toml` + `uv.lock`): Python dependencies. `uv add <pkg>` / `uv lock --upgrade-package <pkg>` (bumps only that package); never edit `uv.lock` by hand. `make install` = `uv sync` (`.venv`, incl. the `dev` group); Docker installs the lock into the system Python (`uv export --locked` → `uv pip install --system --require-hashes`, uv removed afterwards); CI runs `uv sync --locked` + `uv run --no-sync pytest`. Docker and CI pin uv `0.12.19`
 
 ### Layers
 
@@ -179,7 +180,7 @@ The DB schema is managed by Alembic (`src/core/migrations`, `alembic.ini` at the
 - pre-Alembic DB (tables but no `alembic_version`) → stamp baseline `0001`, then upgrade
 - otherwise → upgrade to `head`
 
-Any model change needs a revision in `src/core/migrations/versions/` (`DATABASE_URL=... pipenv run alembic revision --autogenerate -m "..."`, then review it; `alembic check` must report nothing). Keep fresh (`create_all`) and migrated schemas identical - e.g. declare indexes with `index=True` so names match `ix_<table>_<column>`. `env.py` uses `render_as_batch=True` for SQLite. Workers never touch the DB, so only the web server migrates.
+Any model change needs a revision in `src/core/migrations/versions/` (`DATABASE_URL=... uv run alembic revision --autogenerate -m "..."`, then review it; `alembic check` must report nothing). Keep fresh (`create_all`) and migrated schemas identical - e.g. declare indexes with `index=True` so names match `ix_<table>_<column>`. `env.py` uses `render_as_batch=True` for SQLite. Workers never touch the DB, so only the web server migrates.
 
 ### Multiple Reservation Support (Important!)
 
@@ -206,7 +207,7 @@ app = create_app(settings, services, bot)
 
 **Important Note on Environment Variables:**
 - The `.env` file should NOT set `USE_CELERY` to avoid conflicts
-- Makefile commands use `PIPENV_DONT_LOAD_ENV=1` to prevent .env from overriding command-line settings
+- The Makefile exports `.env` (`-include .env` + `export`) and sets `USE_CELERY` on the command line, which wins over `.env` (`uv run` does not load `.env` itself; pydantic-settings prefers real env vars over `env_file`)
 - This ensures `make dev` and `make run` always use subprocess mode
 - And `make dev-mq` and `make run-mq` always use Celery mode (MQ pattern)
 - `WEBAPP_ENC_KEY` must be identical for the web server and Celery workers (workers decrypt the password)
@@ -274,8 +275,8 @@ ReservationService -> CeleryLauncher (apply_async, task_id=reservation_id) -> Re
 
 ### Setup and Installation
 ```bash
-make setup-pipenv     # Install pipenv globally
-make install          # Install dependencies with pipenv
+make setup-uv         # Install uv for the current user
+make install          # uv sync: install deps (incl. dev group) into .venv from uv.lock
 ```
 
 ### Local Development (Port 8390, IS_DEV=true, uses BOTTOKEN_DEV)
@@ -339,7 +340,7 @@ make vapid-keys       # Generate VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY for Web Pu
 
 ### Code Quality
 ```bash
-make lint             # Format code with black (CI pins black 25.9.0)
+make lint             # Format code with black (dev group pins black==25.9.0, same as CI - change both together)
 make test             # All Python tests (TEST_DATABASE_URL=postgresql://... to run DB tests on Postgres)
 cd webapp && npm run build   # Typecheck (tsc) + build
 ```

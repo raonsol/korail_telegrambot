@@ -217,11 +217,12 @@ class TestReservationApi:
     @pytest.mark.asyncio
     async def test_users_cannot_see_each_other(self, app):
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as alice, httpx.AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as bob:
+        async with (
+            httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as alice,
+            httpx.AsyncClient(transport=transport, base_url="http://testserver") as bob,
+        ):
             await _login(alice, "01012345678")
             await _login(bob, "01087654321")
             created = await alice.post(
@@ -281,11 +282,14 @@ class TestAdminApi:
     @pytest.mark.asyncio
     async def test_deactivation_revokes_sessions(self, app):
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as user, httpx.AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as admin:
+        async with (
+            httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as user,
+            httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as admin,
+        ):
             await _login(user)
             await _admin_login(admin)
             await admin.patch("/api/admin/users/01012345678", json={"is_active": False})
@@ -299,11 +303,14 @@ class TestAdminApi:
     @pytest.mark.asyncio
     async def test_admin_sees_all_reservations(self, app):
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as user, httpx.AsyncClient(
-            transport=transport, base_url="http://testserver"
-        ) as admin:
+        async with (
+            httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as user,
+            httpx.AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as admin,
+        ):
             await _login(user)
             await user.post(
                 "/api/reservations", json={**RESERVATION, "dep_date": _future()}

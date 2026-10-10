@@ -337,10 +337,13 @@ class TestWorkerEntrypoint:
         from telegramBot import worker
 
         spec = {field: "x" for field in worker.REQUIRED_FIELDS}
-        with patch("sys.stdin", io.StringIO(json.dumps(spec))), patch.object(
-            worker, "run_reservation", return_value={"status": "success"}
-        ) as run, patch.object(worker, "build_reporter") as build_reporter, patch(
-            "logging.FileHandler"
+        with (
+            patch("sys.stdin", io.StringIO(json.dumps(spec))),
+            patch.object(
+                worker, "run_reservation", return_value={"status": "success"}
+            ) as run,
+            patch.object(worker, "build_reporter") as build_reporter,
+            patch("logging.FileHandler"),
         ):
             assert worker.main() == 0
 
@@ -366,9 +369,10 @@ class TestWorkerEntrypoint:
             }
             return {"status": "success", "reported": reported}
 
-        with patch.object(
-            worker, "run_reservation", side_effect=fake_run
-        ), patch.object(worker, "build_reporter"):
+        with (
+            patch.object(worker, "run_reservation", side_effect=fake_run),
+            patch.object(worker, "build_reporter"),
+        ):
             assert worker._run(spec, str(path)) == 0
 
         assert path.exists() is kept
@@ -396,17 +400,19 @@ class TestWorkerEntrypoint:
 
         full = {field: "x" for field in worker.REQUIRED_FIELDS}
         full.update(spec)
-        with patch.object(
-            worker, "run_reservation", side_effect=fake_run
-        ), patch.object(worker, "build_reporter"):
+        with (
+            patch.object(worker, "run_reservation", side_effect=fake_run),
+            patch.object(worker, "build_reporter"),
+        ):
             worker._run(full, str(tmp_path / "result_x.json"), str(tmp_path))
         assert seen["gate"].path == str(tmp_path / "egress_home1.json")
 
     def test_worker_rejects_incomplete_spec(self):
         from telegramBot import worker
 
-        with patch("sys.stdin", io.StringIO('{"reservation_id": "x"}')), patch(
-            "logging.FileHandler"
+        with (
+            patch("sys.stdin", io.StringIO('{"reservation_id": "x"}')),
+            patch("logging.FileHandler"),
         ):
             assert worker.main() == 2
 
@@ -415,10 +421,11 @@ class TestWorkerEntrypoint:
 
         spec = {field: "x" for field in worker.REQUIRED_FIELDS}
         reporter = Mock()
-        with patch("sys.stdin", io.StringIO(json.dumps(spec))), patch.object(
-            worker, "run_reservation", side_effect=RuntimeError("boom")
-        ), patch.object(worker, "build_reporter", return_value=reporter), patch(
-            "logging.FileHandler"
+        with (
+            patch("sys.stdin", io.StringIO(json.dumps(spec))),
+            patch.object(worker, "run_reservation", side_effect=RuntimeError("boom")),
+            patch.object(worker, "build_reporter", return_value=reporter),
+            patch("logging.FileHandler"),
         ):
             assert worker.main() == 1
 
