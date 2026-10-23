@@ -24,7 +24,7 @@ export function formatDateTime(iso: string | null): string {
     timeZone: 'Asia/Seoul',
     month: 'numeric',
     day: 'numeric',
-    hour: '2-digit',
+    hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(iso))
 }
@@ -114,4 +114,50 @@ export const SEAT_SUMMARY: Record<SeatType, string> = {
   special: '일반실·특실 (특실 우선)',
   general_only: '일반실만',
   special_only: '특실만',
+}
+
+/** 관리자 표처럼 좁은 곳에 쓰는 좌석 조건 */
+export const SEAT_SHORT: Record<SeatType, string> = {
+  general: '일반실 우선',
+  special: '특실 우선',
+  general_only: '일반실만',
+  special_only: '특실만',
+}
+
+/** 정각 단위 시각 (24는 그날 마지막 열차까지 → 23:59) */
+export function hourLabel(hour: number): string {
+  return hour >= 24 ? '23:59' : `${String(hour).padStart(2, '0')}:00`
+}
+
+/** 14:52 → 오후 2:52 */
+function meridiemTime(hhmm: string): string {
+  const [h, m] = hhmm.split(':').map(Number)
+  return `${h < 12 ? '오전' : '오후'} ${h % 12 || 12}:${String(m).padStart(2, '0')}`
+}
+
+export interface ResultInfo {
+  trainNo?: string // "KTX 015"
+  depTime?: string
+  arrTime?: string
+  fare?: string // "59,800원 · 1석"
+  payBy?: string // "오후 2:52"
+}
+
+/**
+ * 예약 결과 문구(pykorail Reservation 표기)에서 표시용 정보를 뽑음. 못 읽으면 빈 값
+ * 예: "[KTX 015]  10/12 07:30~10:12  서울~부산 (2시간 42분), 59800원(1석), 구입기한 10월 5일 14:52"
+ */
+export function parseResultText(text: string | null): ResultInfo {
+  if (!text) return {}
+  const train = text.match(/\[([^\]\d]*?)\s*(\d+)\]/)
+  const times = text.match(/(\d{2}:\d{2})~(\d{2}:\d{2})/)
+  const fare = text.match(/([\d,]+)원\((\d+)석\)/)
+  const limit = text.match(/구입기한[^,]*?(\d{1,2}:\d{2})/)
+  return {
+    trainNo: train ? `${train[1].trim()} ${train[2]}`.trim() : undefined,
+    depTime: times?.[1],
+    arrTime: times?.[2],
+    fare: fare ? `${Number(fare[1].replace(/,/g, '')).toLocaleString()}원 · ${fare[2]}석` : undefined,
+    payBy: limit ? meridiemTime(limit[1]) : undefined,
+  }
 }

@@ -1,0 +1,116 @@
+/* 디자인 핸드오프 원본 그대로 — 수정은 app.css에 */
+/* 코레일봇 — 색상 토큰
+   기준: 기존 웹앱 --brand #0b4ea2 를 더 선명한 '레일 블루'로 확장 */
+:root {
+  /* Rail Blue */
+  --blue-50: #eef4ff;
+  --blue-100: #dce8fe;
+  --blue-200: #bcd3fc;
+  --blue-300: #8db3f8;
+  --blue-400: #5a8ff2;
+  --blue-500: #2f6deb;
+  --blue-600: #1a56d6;
+  --blue-700: #1544ad;
+  --blue-800: #12398b;
+  --blue-900: #10306f;
+  --blue-950: #0a1c45;
+
+  /* Neutral (cool slate) */
+  --gray-0: #ffffff;
+  --gray-25: #f6f8fb;
+  --gray-50: #eff3f8;
+  --gray-100: #e5eaf2;
+  --gray-200: #d5dce7;
+  --gray-300: #b7c1d0;
+  --gray-400: #8e9aad;
+  --gray-500: #67748a;
+  --gray-600: #4d596c;
+  --gray-700: #354052;
+  --gray-800: #222b3a;
+  --gray-900: #151c27;
+
+  /* Signal */
+  --green-50: #e5f6ee;
+  --green-400: #3fbf86;
+  --green-600: #0f7a4e;
+  --red-50: #fdeced;
+  --red-400: #f07474;
+  --red-600: #c62f2f;
+  --amber-50: #fff4de;
+  --amber-300: #ffcf66;
+  --amber-400: #ffbe3d;
+  --amber-700: #9a5d00;
+
+  /* ---- Semantic (light) ---- */
+  --brand: var(--blue-600);
+  --brand-hover: var(--blue-700);
+  --brand-press: var(--blue-800);
+  --brand-text: var(--blue-600);
+  --brand-soft: var(--blue-50);
+  --brand-soft-2: var(--blue-100);
+  --on-brand: #ffffff;
+
+  --bg: var(--gray-25);
+  --surface: var(--gray-0);
+  --surface-2: var(--gray-50);
+  --surface-3: var(--gray-100);
+  --text: var(--gray-900);
+  --text-2: var(--gray-600);
+  --text-3: var(--gray-500);
+  --border: var(--gray-100);
+  --border-strong: var(--gray-200);
+  --scrim: rgba(10, 20, 40, 0.5);
+
+  --success: var(--green-600);
+  --success-soft: var(--green-50);
+  --danger: var(--red-600);
+  --danger-soft: var(--red-50);
+  --warning: var(--amber-700);
+  --warning-soft: var(--amber-50);
+
+  /* 노선도 */
+  --rail: var(--brand);
+  --rail-idle: var(--gray-200);
+  --stop-fill: var(--surface);
+
+
+  --focus-ring: 0 0 0 3px rgba(26, 86, 214, 0.28);
+  color-scheme: light;
+}
+
+/* ---- Semantic (dark) ---- */
+[data-theme='dark'] {
+  --brand: var(--blue-500);
+  --brand-hover: var(--blue-400);
+  --brand-press: var(--blue-600);
+  --brand-text: #86b0f8;
+  --brand-soft: #142443;
+  --brand-soft-2: #1b3058;
+  --on-brand: #ffffff;
+
+  --bg: #0a0f18;
+  --surface: #121926;
+  --surface-2: #19222f;
+  --surface-3: #212c3c;
+  --text: #e8edf6;
+  --text-2: #a0abbe;
+  --text-3: #7d899d;
+  --border: #232d3d;
+  --border-strong: #2f3b4e;
+  --scrim: rgba(0, 0, 0, 0.6);
+
+  --success: var(--green-400);
+  --success-soft: #11302a;
+  --danger: var(--red-400);
+  --danger-soft: #361d22;
+  --warning: var(--amber-300);
+  --warning-soft: #33280f;
+
+  --rail: var(--brand-text);
+  --rail-idle: #2f3b4e;
+  --stop-fill: var(--surface);
+
+
+  --focus-ring: 0 0 0 3px rgba(134, 176, 248, 0.35);
+  color-scheme: dark;
+}

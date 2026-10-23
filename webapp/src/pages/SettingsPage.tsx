@@ -6,6 +6,8 @@ import { useAuth } from '../auth'
 import { ErrorBox } from '../components/Feedback'
 import { Icon } from '../components/Icon'
 import { Layout } from '../components/Layout'
+import { Segmented } from '../components/Segmented'
+import { Switch } from '../components/Switch'
 import { useInstallPrompt } from '../hooks'
 import {
   getPushState,
@@ -15,6 +17,13 @@ import {
   unsubscribePush,
   type PushState,
 } from '../push'
+import { useThemePref, type ThemePref } from '../theme'
+
+const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
+  { value: 'system', label: '시스템 설정' },
+  { value: 'light', label: '라이트' },
+  { value: 'dark', label: '다크' },
+]
 
 export function SettingsPage() {
   const { me, logout, setMe } = useAuth()
@@ -23,6 +32,7 @@ export function SettingsPage() {
   const [pushState, setPushState] = useState<PushState | null>(null)
   const [pushBusy, setPushBusy] = useState(false)
   const [pushError, setPushError] = useState<unknown>(null)
+  const [theme, setTheme] = useThemePref()
 
   useEffect(() => {
     getPushState().then(setPushState)
@@ -53,21 +63,25 @@ export function SettingsPage() {
 
   return (
     <Layout title="설정">
-      <section className="card account">
-        <Icon name={user.is_admin ? 'shield' : 'user'} size={28} />
+      <section className="kb-card kb-account">
+        <span className="kb-avatar">
+          <Icon name={user.is_admin ? 'shield' : 'user'} size={24} />
+        </span>
         <div>
           <strong>{user.is_admin ? '관리자' : user.name || user.phone}</strong>
-          {!user.is_admin && <div className="muted small">{user.phone}</div>}
+          {!user.is_admin && user.name && <div className="kb-hint kb-num">{user.phone}</div>}
         </div>
       </section>
 
-      <section className="section">
-        <h2>알림</h2>
-        <div className="card settings-list">
-          <div className="setting">
+      <section className="kb-section" style={{ marginTop: 28 }}>
+        <div className="kb-section-head">
+          <h2>알림</h2>
+        </div>
+        <div className="kb-card kb-card--flush">
+          <div className="kb-setting">
             <div>
               <strong>푸시 알림</strong>
-              <p className="muted small">
+              <p className="kb-hint">
                 {!me.push_enabled
                   ? '서버에 푸시 알림이 설정되지 않았습니다.'
                   : pushState === 'unsupported'
@@ -79,7 +93,7 @@ export function SettingsPage() {
                       : '앱을 닫아도 예약 결과를 알려드립니다.'}
               </p>
             </div>
-            <Toggle
+            <Switch
               checked={pushState === 'subscribed'}
               disabled={
                 !me.push_enabled || pushBusy || pushState === 'unsupported' || pushState === 'denied'
@@ -89,16 +103,16 @@ export function SettingsPage() {
             />
           </div>
           {!user.is_admin && (
-            <div className="setting">
+            <div className="kb-setting">
               <div>
                 <strong>텔레그램 알림</strong>
-                <p className="muted small">
+                <p className="kb-hint">
                   {user.telegram_linked
                     ? '웹에서 시작한 예약 결과도 텔레그램으로 받습니다.'
                     : '텔레그램 봇에서 한 번 로그인하면 연결됩니다.'}
                 </p>
               </div>
-              <Toggle
+              <Switch
                 checked={user.telegram_linked && user.telegram_notify}
                 disabled={!user.telegram_linked || telegram.isPending}
                 onChange={() => telegram.mutate(!user.telegram_notify)}
@@ -107,24 +121,37 @@ export function SettingsPage() {
             </div>
           )}
         </div>
-        <ErrorBox error={pushError ?? telegram.error} />
+        {(pushError || telegram.error) && (
+          <div style={{ marginTop: 12 }}>
+            <ErrorBox error={pushError ?? telegram.error} />
+          </div>
+        )}
+      </section>
+
+      <section className="kb-section" style={{ marginTop: 28 }}>
+        <div className="kb-section-head">
+          <h2>화면</h2>
+        </div>
+        <Segmented name="화면 테마" value={theme} options={THEME_OPTIONS} onChange={setTheme} />
       </section>
 
       {!isStandalone() && (
-        <section className="section">
-          <h2>앱 설치</h2>
-          <div className="card">
+        <section className="kb-section" style={{ marginTop: 28 }}>
+          <div className="kb-section-head">
+            <h2>앱 설치</h2>
+          </div>
+          <div className="kb-card">
             {canInstall ? (
-              <button className="button block" onClick={install}>
+              <button className="kb-btn kb-btn--block" onClick={install}>
                 <Icon name="download" size={18} /> 홈 화면에 설치
               </button>
             ) : needsIosInstall ? (
-              <p className="small">
+              <p className="kb-small">
                 Safari 하단의 <strong>공유</strong> 버튼 → <strong>홈 화면에 추가</strong>를 누르면
                 앱처럼 사용할 수 있고 푸시 알림도 받을 수 있습니다.
               </p>
             ) : (
-              <p className="small muted">
+              <p className="kb-small kb-muted">
                 브라우저 메뉴의 <strong>앱 설치</strong> 또는 <strong>홈 화면에 추가</strong>를
                 이용해주세요.
               </p>
@@ -134,41 +161,17 @@ export function SettingsPage() {
       )}
 
       <button
-        className="button ghost block logout"
+        className="kb-btn kb-btn--ghost kb-btn--block kb-logout"
         onClick={async () => {
           await logout()
           navigate('/login', { replace: true })
         }}
       >
-        <Icon name="logout" size={18} /> 로그아웃
+        로그아웃
       </button>
-      <p className="fineprint center">로그아웃하면 서버에 보관된 코레일 비밀번호가 삭제됩니다.</p>
+      <p className="kb-fineprint" style={{ textAlign: 'center', margin: '8px 0 0' }}>
+        로그아웃하면 서버에 보관된 코레일 비밀번호가 삭제됩니다.
+      </p>
     </Layout>
-  )
-}
-
-function Toggle({
-  checked,
-  disabled,
-  onChange,
-  label,
-}: {
-  checked: boolean
-  disabled?: boolean
-  onChange: () => void
-  label: string
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      className={`toggle${checked ? ' on' : ''}`}
-      disabled={disabled}
-      onClick={onChange}
-    >
-      <span />
-    </button>
   )
 }
