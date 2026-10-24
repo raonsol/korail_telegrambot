@@ -778,3 +778,108 @@ class TestTelegram:
             )
         )
         bot.send_message.assert_not_called()
+
+
+class TestTrainListNearby:
+    """새 예약 화면의 시간대별 열차 목록도 인근역 선택을 따름"""
+
+    @staticmethod
+    def _train(dep_code, dep_name):
+        t = Mock(
+            train_no="403",
+            train_type_name="KTX",
+            dep_time="091700",
+            arr_time="102400",
+            duration_minutes=67,
+            dep_code=dep_code,
+            arr_code="0024",
+            dep_name=dep_name,
+            arr_name="서대전",
+        )
+        t.has_general_seat.return_value = True
+        t.has_special_seat.return_value = False
+        t.has_seat.return_value = True
+        t.has_waiting_list.return_value = False
+        return t
+
+    def _search(self, nearby):
+        from pykorail import NoResultsError
+
+        from core.egress import EgressPool, parse_egresses
+        from core.schemas import now_kst
+        from core.trains import TrainQuery, TrainSearchService
+
+        client = Mock()
+        client.trains.search = Mock(
+            side_effect=[
+                [self._train("0001", "서울"), self._train("0015", "용산")],
+                NoResultsError(),
+            ]
+        )
+        service = TrainSearchService(
+            EgressPool(parse_egresses("")),
+            client_factory=Mock(return_value=client),
+            sleep=Mock(),
+        )
+        query = TrainQuery(
+            dep_date=(now_kst() + timedelta(days=7)).date(),
+            src_station="용산",
+            dst_station="대전",
+            dep_time="0900",
+            max_dep_time="0930",
+            train_type="KTX",
+            include_nearby=nearby,
+        )
+        return service.search(KORAIL_ID, query), client
+
+    def test_nearby_trains_keep_each_station_pair(self):
+        result, client = self._search(True)
+        kwargs = client.trains.search.call_args.kwargs
+        assert kwargs["include_nearby_stations"] is True
+        assert [(t.dep_station, t.arr_station) for t in result.trains] == [
+            ("서울", "서대전"),
+            ("용산", "서대전"),
+        ]
+
+    def test_off_by_default(self):
+        _, client = self._search(False)
+        assert client.trains.search.call_args.kwargs["include_nearby_stations"] is False
+
+    @pytest.mark.asyncio
+    async def test_api_passes_choice(self, services, tmp_path):
+        import httpx
+
+        from core.trains import TrainSearchOut
+        from web.factory import create_app
+
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text("<html></html>")
+        app = create_app(
+            services.settings, services, run_housekeeping=False, dist_dir=str(dist)
+        )
+        calls = []
+        services.trains.search = lambda korail_id, query: (
+            calls.append(query) or TrainSearchOut(trains=[])
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
+            await client.post(
+                "/api/auth/login", json={"phone": KORAIL_ID, "password": "correct"}
+            )
+            params = {
+                "date": (datetime.now() + timedelta(days=7)).date().isoformat(),
+                "src": "용산",
+                "dst": "대전",
+                "start": "0900",
+                "end": "1200",
+            }
+            for nearby in ("true", "false"):
+                response = await client.get(
+                    "/api/trains", params={**params, "nearby": nearby}
+                )
+                assert response.status_code == 200, response.text
+            await client.get("/api/trains", params=params)
+        assert [q.include_nearby for q in calls] == [True, False, False]

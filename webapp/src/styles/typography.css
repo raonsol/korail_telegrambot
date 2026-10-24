@@ -1,0 +1,39 @@
+/* 디자인 핸드오프 원본 그대로 — 수정은 app.css에 */
+:root {
+  --font-sans: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo',
+    'Noto Sans KR', 'Malgun Gothic', system-ui, sans-serif;
+  --font-mono: 'Martian Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* scale (px) */
+  --fs-display: 32px;
+  --fs-title-1: 24px;
+  --fs-title-2: 20px;
+  --fs-title-3: 17px;
+  --fs-body: 16px;
+  --fs-body-sm: 14px;
+  --fs-caption: 12.5px;
+  --fs-micro: 11px;
+
+  --lh-tight: 1.25;
+  --lh-snug: 1.4;
+  --lh-body: 1.55;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --fw-heavy: 800;
+
+  --ls-tight: -0.02em;
+  --ls-board: 0.02em;
+
+  /* semantic */
+  --type-display: var(--fw-heavy) var(--fs-display) / var(--lh-tight) var(--font-sans);
+  --type-title-1: var(--fw-bold) var(--fs-title-1) / var(--lh-tight) var(--font-sans);
+  --type-title-2: var(--fw-bold) var(--fs-title-2) / var(--lh-snug) var(--font-sans);
+  --type-title-3: var(--fw-bold) var(--fs-title-3) / var(--lh-snug) var(--font-sans);
+  --type-body: var(--fw-regular) var(--fs-body) / var(--lh-body) var(--font-sans);
+  --type-body-sm: var(--fw-regular) var(--fs-body-sm) / var(--lh-body) var(--font-sans);
+  --type-label: var(--fw-semibold) var(--fs-body-sm) / var(--lh-snug) var(--font-sans);
+  --type-caption: var(--fw-medium) var(--fs-caption) / var(--lh-snug) var(--font-sans);
+}

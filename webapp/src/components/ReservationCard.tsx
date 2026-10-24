@@ -1,54 +1,46 @@
-import { Link } from 'react-router-dom'
 import type { Reservation } from '../api'
-import { displayStatus, formatDate, relativeTime, timeRange } from '../format'
-import { StatusBadge } from './StatusBadge'
+import { SEAT_SUMMARY, displayStatus, formatDate, relativeTime, timeRange } from '../format'
+import { StatusBadge, TrainTag } from './StatusBadge'
+import { RouteLine, Ticket, type TicketTone } from './Ticket'
 
-export function ReservationCard({
-  reservation: r,
-  showOwner,
-}: {
-  reservation: Reservation
-  showOwner?: boolean
-}) {
+export function ticketTone(r: Reservation, activeTone: TicketTone = 'plain'): TicketTone {
+  if (r.is_active) return activeTone
+  // 코레일에서 취소한 예약은 상태가 success 여도 취소 색
+  return displayStatus(r) === 'success' ? 'success' : 'muted'
+}
+
+export function ReservationCard({ reservation: r }: { reservation: Reservation }) {
   return (
-    <Link to={`/r/${r.id}`} className={`card reservation-card status-${displayStatus(r)}`}>
-      <div className="card-row">
-        <span className="route">
-          {r.src_station}
-          <span className="route-arrow">→</span>
-          {r.dst_station}
-        </span>
+    <Ticket
+      to={`/r/${r.id}`}
+      tone={ticketTone(r)}
+      stub={
+        <>
+          <span>{SEAT_SUMMARY[r.seat_type]}</span>
+          <span className={r.is_active ? 'kb-num' : undefined}>
+            {!r.is_active
+              ? relativeTime(r.finished_at ?? r.updated_at)
+              : r.attempts > 0
+                ? `${r.attempts.toLocaleString()}회 시도`
+                : r.status === 'running'
+                  ? '검색 시작'
+                  : '시작 대기'}
+          </span>
+        </>
+      }
+    >
+      <div className="kb-ticket__head">
+        <TrainTag reservation={r} />
         <StatusBadge
           status={r.status}
           waitlisted={r.waitlisted}
           korailCancelled={Boolean(r.korail_cancelled_at)}
         />
       </div>
-      <div className="card-meta">
-        <span>{formatDate(r.dep_date)}</span>
-        <span>{timeRange(r)}</span>
+      <RouteLine from={r.src_station} to={r.dst_station} status={displayStatus(r)} />
+      <div className="kb-ticket__window">
+        {formatDate(r.dep_date)} · <span className="kb-num">{timeRange(r)}</span>
       </div>
-      <div className="card-sub">
-        <span>
-          {r.train_type_label} · {r.seat_type_label}
-        </span>
-        <span>
-          {!r.is_active
-            ? relativeTime(r.finished_at ?? r.updated_at)
-            : r.attempts > 0
-              ? `${r.attempts.toLocaleString()}회 시도`
-              : r.status === 'running'
-                ? '검색 시작'
-                : '시작 대기'}
-        </span>
-      </div>
-      {showOwner && (
-        <div className="card-owner">
-          {r.owner_id === 'admin' ? '관리자' : r.owner_id.replace(/(\d{3})(\d{4})(\d{4})/, '$1-$2-$3')}
-          {' · '}
-          {r.origin === 'web' ? '웹' : '텔레그램'}
-        </div>
-      )}
-    </Link>
+    </Ticket>
   )
 }

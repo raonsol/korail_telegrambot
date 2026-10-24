@@ -1,0 +1,43 @@
+/* 디자인 핸드오프 원본 그대로 — 수정은 app.css에 */
+:root {
+  --space-0: 2px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-pill: 999px;
+
+  --shadow-1: 0 1px 2px rgba(10, 28, 69, 0.06);
+  --shadow-2: 0 1px 2px rgba(10, 28, 69, 0.05), 0 6px 18px rgba(10, 28, 69, 0.07);
+  --shadow-3: 0 -4px 32px rgba(6, 12, 26, 0.18);
+  --shadow-brand: 0 8px 22px rgba(26, 86, 214, 0.38);
+
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 320ms;
+
+  --hit: 48px;
+  --hit-sm: 36px;
+  --topbar-h: 56px;
+  --tabbar-h: 64px;
+  --content-max: 640px;
+  --stub-h: 52px;
+}
+[data-theme='dark'] {
+  --shadow-1: none;
+  --shadow-2: none;
+  --shadow-brand: 0 8px 22px rgba(47, 109, 235, 0.35);
+}

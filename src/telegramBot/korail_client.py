@@ -39,6 +39,20 @@ WAITLIST_OPTIONS = (
 # pykorail 이 서버 응답에 사유가 없을 때 넣는 기본 로그인 실패 문구
 PYKORAIL_FALLBACK_LOGIN_MSG = "아이디 또는 비밀번호가 올바르지 않습니다"
 
+# 코레일이 앱 버전·보안 정책을 바꿔 이 클라이언트의 요청을 받지 않음 (2026-10-21부터 -8204,
+# pykorail 이 새 기기 인증을 지원해야 풀림). 다시 시도해도 결과가 같으므로 바로 중단한다
+APP_OUTDATED_CODES = frozenset({"-8204"})
+APP_OUTDATED_MESSAGE = (
+    "코레일 앱 보안 정책이 바뀌어 지금은 예약을 진행할 수 없습니다. "
+    "서비스가 업데이트되면 다시 시도해주세요. (코레일 -8204)"
+)
+
+
+def is_app_outdated(error) -> bool:
+    """코레일이 앱 버전·보안 정책 변경으로 요청을 거부했는지 (재시도 무의미)"""
+    return isinstance(error, KorailError) and error.code in APP_OUTDATED_CODES
+
+
 BLOCKED_LOGIN_MESSAGE = (
     "코레일 서버가 요청을 일시적으로 차단했습니다. 잠시 후 다시 시도해주세요."
 )
@@ -250,6 +264,8 @@ class ReserveHandler:
             # 자격증명을 보기 전에 서버가 요청을 거절함 (502 등) - 비밀번호 문제가 아님
             reason = error.msg or f"HTTP {error.status_code}"
             return f"코레일 서버가 요청을 거절했습니다: {reason}"
+        if is_app_outdated(error):
+            return APP_OUTDATED_MESSAGE
         if isinstance(error, KorailError) and error.msg:
             # pykorail 은 서버가 사유(h_msg_txt)와 코드 없이 거부하면 이 문구를 대신 넣음
             # 실제 비밀번호 오류는 서버가 사유와 코드(WRR000101 등)를 주므로 구분해서 안내
@@ -364,6 +380,16 @@ class ReserveHandler:
                 "needs_login": True,
             }
         except Exception as e:
+            if is_app_outdated(e):
+                logger.error(
+                    f"코레일이 앱 버전·보안 정책 변경으로 요청을 거부함 (단계={stage}): {e}"
+                )
+                return {
+                    "success": False,
+                    "result": None,
+                    "error": APP_OUTDATED_MESSAGE,
+                    "fatal": True,
+                }
             error_str = str(e)
             # Check for duplicate reservation at top level too
             if "동일한 예약 내역이 있으니" in error_str or "WRR800029" in error_str:

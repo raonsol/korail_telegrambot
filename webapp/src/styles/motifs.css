@@ -1,0 +1,173 @@
+/* 디자인 핸드오프 원본 그대로 — 수정은 app.css에 */
+/* =========================================================
+   열차 모티브 — 노선도 · 승차권
+   ========================================================= */
+
+/* ---------- 노선도 Route ----------
+   <div class="kb-route" data-status="running">
+     <div class="kb-route__stop">서울<small>06:00</small></div>
+     <div class="kb-route__track"><span class="kb-route__train"></span></div>
+     <div class="kb-route__stop kb-route__stop--end">부산<small>23:59</small></div>
+   </div> */
+.kb-route {
+  --dot: 12px;
+  display: grid;
+  grid-template-columns: auto minmax(24px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+.kb-route__stop {
+  display: grid;
+  gap: 1px;
+  font: var(--fw-bold) var(--fs-title-3) / 1.25 var(--font-sans);
+  letter-spacing: var(--ls-tight);
+}
+.kb-route__stop small {
+  font: var(--fw-medium) var(--fs-caption) / 1.4 var(--font-mono);
+  color: var(--text-2);
+  letter-spacing: 0;
+}
+.kb-route__stop--end { text-align: right; }
+.kb-route__track {
+  position: relative;
+  height: 3px;
+  margin: 0 calc(var(--dot) / 2);
+  border-radius: 2px;
+  background: var(--rail);
+}
+.kb-route__track::before,
+.kb-route__track::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: var(--dot);
+  height: var(--dot);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+}
+.kb-route__track::before { left: 0; border: 3px solid var(--rail); background: var(--stop-fill); }
+.kb-route__track::after { left: 100%; background: var(--rail); }
+.kb-route__train {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 18px;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--rail);
+  box-shadow: 0 0 0 3px var(--stop-fill);
+  transform: translate(-50%, -50%);
+  opacity: 0;
+}
+.kb-route[data-status='queued'] .kb-route__track,
+.kb-route[data-status='cancelled'] .kb-route__track { --rail: var(--rail-idle); background: repeating-linear-gradient(90deg, var(--rail-idle) 0 6px, transparent 6px 10px); }
+.kb-route[data-status='running'] .kb-route__track { background: linear-gradient(90deg, var(--rail) 0 0) left / 100% 100% no-repeat, var(--rail-idle); }
+.kb-route[data-status='running'] .kb-route__train { opacity: 1; animation: kb-train 2.8s var(--ease-in-out) infinite; }
+.kb-route[data-status='success'] { --rail: var(--success); }
+.kb-route[data-status='failed'],
+.kb-route[data-status='error'] { --rail: var(--danger); }
+.kb-route--lg .kb-route__stop { font-size: var(--fs-title-1); }
+.kb-route--lg { --dot: 14px; }
+.kb-route--sm { --dot: 9px; gap: 8px; grid-template-columns: auto minmax(28px, 1fr) auto; }
+.kb-route--sm .kb-route__stop { font-size: 14px; font-weight: 600; }
+.kb-route--sm .kb-route__track { height: 2px; }
+.kb-route--sm .kb-route__track::before { border-width: 2px; }
+.kb-route--sm .kb-route__train { width: 12px; height: 5px; }
+@keyframes kb-train {
+  0% { left: 0; }
+  50% { left: 100%; }
+  100% { left: 0; }
+}
+
+/* 세로 노선 (출발역/도착역 입력 그룹) */
+.kb-rail-v {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  column-gap: 10px;
+  align-items: center;
+}
+.kb-rail-v__line {
+  grid-row: 1 / span 2;
+  position: relative;
+  align-self: stretch;
+  justify-self: center;
+  width: 3px;
+  margin: 46px 0 22px;
+  border-radius: 2px;
+  background: var(--rail);
+}
+.kb-rail-v__line::before,
+.kb-rail-v__line::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  box-sizing: border-box;
+}
+.kb-rail-v__line::before { top: -6px; border: 3px solid var(--rail); background: var(--bg); }
+.kb-rail-v__line::after { bottom: -6px; background: var(--rail); }
+.kb-rail-v > .kb-field:nth-of-type(1) { grid-column: 2; grid-row: 1; }
+.kb-rail-v > .kb-field:nth-of-type(2) { grid-column: 2; grid-row: 2; margin-top: 14px; }
+.kb-rail-v__swap { grid-column: 3; grid-row: 1 / span 2; margin-top: 26px; }
+
+/* ---------- 승차권 Ticket ----------
+   <a class="kb-ticket"><div class="kb-ticket__paper"><div class="kb-ticket__main">…</div><div class="kb-ticket__stub">…</div></div></a>
+   하단 stub 경계에 펀치홀(좌우 반원) + 절취선 */
+.kb-ticket {
+  --notch: 9px;
+  --stub: var(--stub-h);
+  --ticket-bg: var(--surface);
+  --ticket-line: var(--border-strong);
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  filter: drop-shadow(0 0 0.75px var(--ticket-line)) drop-shadow(0 0 0.5px var(--ticket-line)) drop-shadow(0 2px 6px rgba(10, 28, 69, 0.06));
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.kb-ticket__paper {
+  position: relative;
+  border-radius: var(--radius-lg);
+  background: var(--ticket-bg);
+  -webkit-mask:
+    radial-gradient(circle var(--notch) at 0 calc(100% - var(--stub)), #0000 98%, #000) left / 51% 100% no-repeat,
+    radial-gradient(circle var(--notch) at 100% calc(100% - var(--stub)), #0000 98%, #000) right / 51% 100% no-repeat;
+  mask:
+    radial-gradient(circle var(--notch) at 0 calc(100% - var(--stub)), #0000 98%, #000) left / 51% 100% no-repeat,
+    radial-gradient(circle var(--notch) at 100% calc(100% - var(--stub)), #0000 98%, #000) right / 51% 100% no-repeat;
+}
+a.kb-ticket:active { transform: scale(0.99); }
+.kb-ticket__main { padding: 16px 18px 16px; }
+.kb-ticket__stub {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: var(--stub);
+  padding: 0 18px;
+  color: var(--text-2);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-medium);
+}
+.kb-ticket__stub::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: calc(var(--notch) + 6px);
+  right: calc(var(--notch) + 6px);
+  border-top: 2px dashed var(--border-strong);
+}
+.kb-ticket__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
+.kb-ticket__window { margin-top: 12px; color: var(--text); font-weight: var(--fw-medium); font-size: var(--fs-body-sm); }
+.kb-ticket__window .kb-num, .kb-ticket__stub .kb-num { font-size: 0.9em; font-weight: 500; }
+.kb-ticket--success { --ticket-bg: var(--success-soft); --ticket-line: var(--success); }
+.kb-ticket--success .kb-ticket__stub::before { border-top-color: color-mix(in srgb, var(--success) 45%, transparent); }
+.kb-ticket--muted .kb-ticket__main { opacity: 0.72; }
+.kb-ticket--brand { --ticket-bg: var(--brand-soft); --ticket-line: var(--brand-soft-2); }
+.kb-ticket--brand .kb-route { --stop-fill: var(--brand-soft); }
+.kb-ticket--success .kb-route { --stop-fill: var(--success-soft); }

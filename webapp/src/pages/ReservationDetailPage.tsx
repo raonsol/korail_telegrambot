@@ -1,18 +1,24 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { Api } from '../api'
+import { Api, type Reservation } from '../api'
 import { useAuth } from '../auth'
 import { ErrorBox, Spinner } from '../components/Feedback'
 import { Icon } from '../components/Icon'
 import { Layout } from '../components/Layout'
+import { ticketTone } from '../components/ReservationCard'
 import { StatusBadge } from '../components/StatusBadge'
+import { RouteLine, Ticket } from '../components/Ticket'
 import {
   KORAIL_PAYMENT_URL,
+  SEAT_SUMMARY,
   displayStatus,
   formatDate,
   formatDateTime,
+  parseResultText,
+  relativeTime,
   timeRange,
+  type ResultInfo,
 } from '../format'
 import { getPushState, subscribePush, type PushState } from '../push'
 
@@ -46,6 +52,9 @@ export function ReservationDetailPage() {
   })
 
   const r = query.data
+  const info = r?.status === 'success' ? parseResultText(r.result_text) : {}
+  // 결제 기한: 서버가 받은 값이 있으면 그것, 없으면 결과 문구에서 읽은 시각
+  const payBy = r?.pay_deadline ? formatDateTime(r.pay_deadline) : info.payBy
 
   return (
     <Layout title="예약 상세" back>
@@ -54,92 +63,76 @@ export function ReservationDetailPage() {
       ) : query.isError || !r ? (
         <ErrorBox error={query.error ?? '예약을 찾을 수 없습니다.'} />
       ) : (
-        <>
-          <section className={`hero status-${displayStatus(r)}`}>
-            <StatusBadge
-              status={r.status}
-              waitlisted={r.waitlisted}
-              korailCancelled={Boolean(r.korail_cancelled_at)}
-            />
-            <div className="hero-route">
-              <span>{r.src_station}</span>
-              <Icon name="arrow" size={22} />
-              <span>{r.dst_station}</span>
-            </div>
-            <div className="hero-meta">
-              {formatDate(r.dep_date)} · {timeRange(r)}
-            </div>
-            {r.is_active && (
-              <p className="hero-note">
-                {r.status === 'queued'
-                  ? '예약 작업이 곧 시작됩니다.'
-                  : `빈 좌석을 찾고 있습니다 · ${r.attempts.toLocaleString()}회 시도`}
-              </p>
-            )}
-          </section>
+        <div className="kb-stack">
+          <DetailTicket reservation={r} info={info} payBy={payBy} />
 
           {justCreated && r.is_active && <PushPrompt />}
 
+          {r.status === 'success' && r.korail_cancelled_at && (
+            <section className="kb-card kb-result-card kb-result-card--cancelled">
+              <h2>코레일 예약을 취소했습니다</h2>
+              {r.result_text && <p className="kb-result-text kb-num">{r.result_text}</p>}
+              <p className="kb-hint">{formatDateTime(r.korail_cancelled_at)}에 취소함</p>
+            </section>
+          )}
+
           {r.status === 'success' && r.waitlisted && !r.korail_cancelled_at && (
-            <section className="card success-card">
+            <section className="kb-card kb-card--success kb-result-card">
               <h2>예약대기를 신청했습니다</h2>
-              {r.result_text && <p className="result-text">{r.result_text}</p>}
-              <p>
+              {r.result_text && <p className="kb-result-text kb-num">{r.result_text}</p>}
+              <p className="kb-small">
                 <strong>아직 좌석이 확보된 것은 아닙니다.</strong> 좌석이 배정되면 코레일이
                 알려주며, 안내받은 기한 안에 결제해야 합니다.
               </p>
-              <p className="muted small">
+              <p className="kb-hint">
                 신청 내역 확인/취소: 코레일톡 앱 오른쪽 상단 메뉴 → 승차권 예매 → 예약 승차권
                 조회/취소
               </p>
             </section>
           )}
 
-          {r.status === 'success' && r.korail_cancelled_at && (
-            <section className="card">
-              <h2>코레일 예약을 취소했습니다</h2>
-              {r.result_text && <p className="result-text">{r.result_text}</p>}
-              <p className="muted small">{formatDateTime(r.korail_cancelled_at)}에 취소함</p>
-            </section>
-          )}
-
           {r.status === 'success' && !r.waitlisted && !r.korail_cancelled_at && (
-            <section className="card success-card">
-              <h2>예약에 성공했습니다 🎉</h2>
-              {r.result_text && <p className="result-text">{r.result_text}</p>}
+            <section className="kb-card kb-card--success kb-result-card">
+              <h2>예약에 성공했습니다</h2>
+              {r.result_text && <p className="kb-result-text kb-num">{r.result_text}</p>}
               {r.include_nearby && (
-                <p className="muted small">
-                  인근역 포함 예약입니다. 위 열차 정보의 실제 출발·도착역을 확인하세요.
+                <p className="kb-hint">
+                  인근역 포함 예약입니다. 실제 출발·도착역을 확인하세요.
                 </p>
               )}
-              <p>
+              <p className="kb-small">
                 <strong>
-                  {r.pay_deadline
-                    ? `${formatDateTime(r.pay_deadline)}까지 결제하지 않으면 예약이 취소됩니다.`
+                  {payBy
+                    ? `${payBy}까지 결제하지 않으면 예약이 취소됩니다.`
                     : '20분 안에 결제하지 않으면 예약이 취소됩니다.'}
                 </strong>
               </p>
-              <a className="button primary block" href={KORAIL_PAYMENT_URL} target="_blank" rel="noreferrer">
+              <a
+                className="kb-btn kb-btn--primary kb-btn--block"
+                href={KORAIL_PAYMENT_URL}
+                target="_blank"
+                rel="noreferrer"
+              >
                 코레일 홈페이지에서 결제하기
               </a>
-              <p className="muted small">
+              <p className="kb-hint">
                 코레일톡 앱: 오른쪽 상단 메뉴 → 승차권 예매 → 예약 승차권 조회/취소
               </p>
             </section>
           )}
 
           {(r.status === 'failed' || r.status === 'error') && r.error && (
-            <div className="error-box" role="alert">
+            <div className="kb-error" role="alert">
               {r.error}
             </div>
           )}
 
-          <section className="card">
-            <dl className="summary">
+          <section className="kb-card">
+            <dl className="kb-summary">
               <dt>열차</dt>
               <dd>{r.train_type_label}</dd>
               <dt>좌석</dt>
-              <dd>{r.seat_type_label}</dd>
+              <dd>{SEAT_SUMMARY[r.seat_type]}</dd>
               <dt>예약대기</dt>
               <dd>{r.allow_waitlist ? '사용' : '사용 안 함'}</dd>
               <dt>인근역</dt>
@@ -147,11 +140,9 @@ export function ReservationDetailPage() {
               {r.korail_rsv_id && (
                 <>
                   <dt>예약번호</dt>
-                  <dd>{r.korail_rsv_id}</dd>
+                  <dd className="kb-num">{r.korail_rsv_id}</dd>
                 </>
               )}
-              <dt>시도 횟수</dt>
-              <dd>{r.attempts.toLocaleString()}회</dd>
               <dt>시작</dt>
               <dd>
                 {formatDateTime(r.created_at)} ({r.origin === 'web' ? '웹' : '텔레그램'})
@@ -168,55 +159,116 @@ export function ReservationDetailPage() {
           <ErrorBox error={cancel.error} />
           <ErrorBox error={korailCancel.error} />
 
-          <div className="actions">
-            {r.korail_cancellable && (
-              <button
-                className="button danger block"
-                disabled={korailCancel.isPending}
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      r.waitlisted
-                        ? '코레일에서 이 예약대기를 취소할까요?'
-                        : '코레일에서 이 예약을 취소할까요? 취소한 좌석은 되돌릴 수 없습니다.',
-                    )
+          {r.korail_cancellable && (
+            <button
+              className="kb-btn kb-btn--danger kb-btn--block kb-detail-action"
+              disabled={korailCancel.isPending}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    r.waitlisted
+                      ? '코레일에서 이 예약대기를 취소할까요?'
+                      : '코레일에서 이 예약을 취소할까요? 취소한 좌석은 되돌릴 수 없습니다.',
                   )
-                    korailCancel.mutate()
-                }}
-              >
-                {korailCancel.isPending
-                  ? '코레일에서 취소하는 중…'
-                  : r.waitlisted
-                    ? '코레일 예약대기 취소'
-                    : '코레일 예약 취소'}
-              </button>
-            )}
-            {r.is_active ? (
-              <button
-                className="button danger block"
-                disabled={cancel.isPending}
-                onClick={() => {
-                  if (window.confirm('이 예약 작업을 취소할까요?')) cancel.mutate()
-                }}
-              >
-                {cancel.isPending ? '취소하는 중…' : '예약 작업 취소'}
-              </button>
-            ) : (
-              <button
-                className="button block"
-                onClick={() => navigate('/new', { state: { prefill: r } })}
-              >
-                <Icon name="refresh" size={18} /> 같은 조건으로 다시 예약
-              </button>
-            )}
-          </div>
-        </>
+                )
+                  korailCancel.mutate()
+              }}
+            >
+              {korailCancel.isPending
+                ? '코레일에서 취소하는 중…'
+                : r.waitlisted
+                  ? '코레일 예약대기 취소'
+                  : '코레일 예약 취소'}
+            </button>
+          )}
+
+          {r.is_active ? (
+            <button
+              className="kb-btn kb-btn--danger kb-btn--block kb-detail-action"
+              disabled={cancel.isPending}
+              onClick={() => {
+                if (window.confirm('이 예약 작업을 취소할까요?')) cancel.mutate()
+              }}
+            >
+              {cancel.isPending ? '취소하는 중…' : '예약 작업 취소'}
+            </button>
+          ) : (
+            <button
+              className="kb-btn kb-btn--block kb-detail-action"
+              onClick={() => navigate('/new', { state: { prefill: r } })}
+            >
+              <Icon name="refresh" size={18} /> 같은 조건으로 다시 예약
+            </button>
+          )}
+        </div>
       )}
     </Layout>
   )
 }
 
-/** 첫 예약 직후 알림 권한 요청 (맥락 없이 앱 진입 시 요청하지 않음) */
+/** 상태에 따라 용지 색이 바뀌는 상단 승차권 */
+function DetailTicket({
+  reservation: r,
+  info,
+  payBy,
+}: {
+  reservation: Reservation
+  info: ResultInfo
+  payBy?: string
+}) {
+  const stubRight =
+    r.status === 'success' && r.korail_cancelled_at
+      ? `${formatDateTime(r.korail_cancelled_at)} 코레일 취소`
+      : r.status === 'queued'
+      ? '시작 대기'
+      : r.is_active
+        ? `${relativeTime(r.updated_at)} 갱신`
+        : r.status === 'success' && r.waitlisted
+          ? '예약대기 신청'
+          : r.status === 'success' && payBy
+            ? `결제 기한 ${payBy}`
+            : `${formatDateTime(r.finished_at ?? r.updated_at)} 종료`
+
+  return (
+    <Ticket
+      tone={ticketTone(r, 'brand')}
+      stub={
+        <>
+          <span>
+            시도 <b className="kb-num">{r.attempts.toLocaleString()}회</b>
+          </span>
+          <span>{stubRight}</span>
+        </>
+      }
+    >
+      <div className="kb-ticket__head">
+        <span className="kb-caption kb-caption--strong">
+          {formatDate(r.dep_date)} · {info.trainNo ?? r.train_type_label}
+        </span>
+        <StatusBadge
+          status={r.status}
+          waitlisted={r.waitlisted}
+          korailCancelled={Boolean(r.korail_cancelled_at)}
+        />
+      </div>
+      <RouteLine
+        size="lg"
+        // 인근역 포함 예약은 실제로 탄 역을 보여 줌 (결과 문구에서 읽음)
+        from={(r.include_nearby && info.depStation) || r.src_station}
+        to={(r.include_nearby && info.arrStation) || r.dst_station}
+        fromTime={info.depTime}
+        toTime={info.arrTime}
+        status={displayStatus(r)}
+      />
+      <div className="kb-ticket__window--detail">
+        <span className="kb-caption">{info.fare ? '운임' : '출발 시각 범위'}</span>
+        <span className="kb-num">{info.fare ?? timeRange(r)}</span>
+      </div>
+    </Ticket>
+  )
+}
+
+/** 예약 직후 알림 권한 요청 (맥락 없이 앱 진입 시 요청하지 않음) */
 function PushPrompt() {
   const { me } = useAuth()
   const [state, setState] = useState<PushState | null>(null)
@@ -229,15 +281,15 @@ function PushPrompt() {
   if (!me?.push_enabled || !me.push_public_key || state !== 'unsubscribed') return null
 
   return (
-    <div className="card notice">
+    <div className="kb-card kb-notice">
       <Icon name="bell" />
       <div>
         <strong>예약 결과를 알림으로 받으세요</strong>
-        <p className="muted small">앱을 닫아도 예약 성공/실패를 바로 알려드립니다.</p>
+        <p className="kb-hint">앱을 닫아도 예약 성공/실패를 바로 알려드립니다.</p>
         <ErrorBox error={error} />
       </div>
       <button
-        className="button small primary"
+        className="kb-btn kb-btn--sm kb-btn--primary"
         onClick={async () => {
           try {
             setState(await subscribePush(me.push_public_key!))

@@ -19,7 +19,7 @@ export function Segmented<T extends string>({
 }) {
   return (
     <div
-      className="segmented"
+      className="kb-segmented"
       role="radiogroup"
       aria-label={name}
       style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
@@ -30,7 +30,7 @@ export function Segmented<T extends string>({
           type="button"
           role="radio"
           aria-checked={value === option.value}
-          className={value === option.value ? 'selected' : ''}
+          className={value === option.value ? 'is-selected' : ''}
           onClick={() => onChange(option.value)}
         >
           <span>{option.label}</span>

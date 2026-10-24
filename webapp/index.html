@@ -3,15 +3,35 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0b4ea2" />
+    <meta name="theme-color" content="#f6f8fb" />
     <meta name="description" content="매진된 KTX 좌석을 자동으로 예약합니다" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <meta name="apple-mobile-web-app-title" content="코레일 예약" />
+    <meta name="apple-mobile-web-app-title" content="코레일봇" />
     <link rel="icon" href="/app/favicon.ico" sizes="48x48" />
     <link rel="icon" href="/app/icon.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="/app/apple-touch-icon-180x180.png" />
-    <title>코레일 예약</title>
+    <!-- ?v=: 아이콘을 바꾸면 올림 (iOS는 같은 주소의 터치 아이콘을 오래 캐시함) -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/app/apple-touch-icon-180x180.png?v=2" />
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+    />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Martian+Mono:wdth,wght@75..112.5,400..800&display=swap"
+    />
+    <script>
+      // 첫 화면부터 테마 적용 (깜빡임 방지) — theme.ts와 같은 키/규칙
+      try {
+        var pref = localStorage.getItem('theme')
+        var dark = pref === 'dark' || (pref !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+      } catch (e) {}
+    </script>
+    <title>코레일봇</title>
   </head>
   <body>
     <div id="root"></div>

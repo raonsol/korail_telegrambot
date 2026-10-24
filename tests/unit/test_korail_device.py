@@ -322,7 +322,7 @@ class TestMigration:
                 assert user.korail_android_id is None
                 legacy = s.get(Reservation, "r1")
                 assert legacy.waitlisted is False
-                # 0006: 인근역 포함 여부, 예약 후 관리 컬럼
+                # 0007: 인근역 포함 여부, 예약 후 관리 컬럼
                 assert legacy.include_nearby is False
                 assert legacy.korail_rsv_id is None
                 assert legacy.pay_deadline is None

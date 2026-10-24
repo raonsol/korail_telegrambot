@@ -14,12 +14,12 @@ export function UpdatePrompt() {
 
   if (!needRefresh) return null
   return (
-    <div className="toast" role="status">
+    <div className="kb-toast kb-toast--float" role="status">
       <span>새 버전이 있습니다.</span>
-      <button className="button small" onClick={() => updateServiceWorker(true)}>
+      <button className="kb-btn kb-btn--sm kb-btn--primary" onClick={() => updateServiceWorker(true)}>
         새로고침
       </button>
-      <button className="button small ghost" onClick={() => setNeedRefresh(false)}>
+      <button className="kb-btn kb-btn--sm kb-btn--ghost" onClick={() => setNeedRefresh(false)}>
         나중에
       </button>
     </div>

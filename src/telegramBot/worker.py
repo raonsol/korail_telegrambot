@@ -23,6 +23,7 @@ from core.runner import (
     build_reporter,
     result_file,
     run_reservation,
+    runner_options,
     write_result_file,
 )
 
@@ -100,7 +101,11 @@ def _run(spec: dict, result_path: str | None = None, state_dir: str = logs_dir) 
 
     try:
         result = run_reservation(
-            spec, reporter, on_success=save_result, gate=build_gate(spec, state_dir)
+            spec,
+            reporter,
+            on_success=save_result,
+            gate=build_gate(spec, state_dir),
+            **runner_options(spec),
         )
         logger.info(f"Reservation {spec['reservation_id']} finished: {result}")
         if result.get("reported") and result_path:

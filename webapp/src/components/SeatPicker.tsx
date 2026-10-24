@@ -1,4 +1,5 @@
 import type { SeatSelection } from '../format'
+import { Icon } from './Icon'
 import { Segmented } from './Segmented'
 
 const PRIORITY_OPTIONS: { value: SeatSelection['priority']; label: string; hint: string }[] = [
@@ -17,31 +18,35 @@ export function SeatPicker({
   const toggle = (key: 'general' | 'special') => onChange({ ...value, [key]: !value[key] })
   const both = value.general && value.special
   const none = !value.general && !value.special
+  const [first, second] = value.priority === 'general' ? ['일반실', '특실'] : ['특실', '일반실']
 
   return (
     <>
-      <div className="segmented" role="group" aria-label="좌석" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+      <div
+        className="kb-segmented"
+        role="group"
+        aria-label="좌석"
+        style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}
+      >
         {(['general', 'special'] as const).map((key) => (
           <button
             key={key}
             type="button"
             role="checkbox"
             aria-checked={value[key]}
-            className={`seat-toggle ${value[key] ? 'selected' : ''}`}
+            className={`kb-seat${value[key] ? ' is-selected' : ''}`}
             onClick={() => toggle(key)}
           >
-            <span>
-              <span className="seat-check" aria-hidden="true">
-                {value[key] ? '✓' : ''}
-              </span>
-              {key === 'general' ? '일반실' : '특실'}
+            <span className="kb-seat-check" aria-hidden="true">
+              <Icon name="check" size={14} />
             </span>
+            {key === 'general' ? '일반실' : '특실'}
           </button>
         ))}
       </div>
       {both && (
-        <div className="seat-priority">
-          <span className="label small">둘 다 있으면</span>
+        <div className="kb-field kb-field--tight">
+          <span className="kb-hint">둘 다 있으면</span>
           <Segmented
             name="우선 예약할 좌석"
             value={value.priority}
@@ -50,11 +55,11 @@ export function SeatPicker({
           />
         </div>
       )}
-      <small className={none ? 'field-error' : 'muted'}>
+      <small className={`kb-hint${none ? ' kb-hint--error' : ''}`}>
         {none
           ? '일반실과 특실 중 하나 이상 선택해주세요.'
           : both
-            ? `${value.priority === 'general' ? '일반실' : '특실'}을 먼저 찾고, 없으면 ${value.priority === 'general' ? '특실' : '일반실'}을 예약합니다.`
+            ? `${first}을 먼저 찾고, 없으면 ${second}을 예약합니다.`
             : `${value.general ? '일반실' : '특실'}만 예약합니다.`}
       </small>
     </>

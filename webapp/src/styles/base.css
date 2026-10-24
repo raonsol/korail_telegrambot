@@ -1,0 +1,55 @@
+/* 디자인 핸드오프 원본 그대로 — 수정은 app.css에 */
+/* 기본 리셋 — 기존 웹앱 body 설정 계승 (keep-all, 탭 하이라이트 제거) */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+}
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: var(--type-body);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+a {
+  color: var(--brand-text);
+  text-underline-offset: 3px;
+}
+a:hover {
+  color: var(--brand-hover);
+}
+h1,
+h2,
+h3 {
+  margin: 0;
+  letter-spacing: var(--ls-tight);
+}
+.kb-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+.kb-muted {
+  color: var(--text-2);
+}
+.kb-small {
+  font-size: var(--fs-body-sm);
+}
+.kb-caption {
+  font: var(--type-caption);
+  color: var(--text-3);
+}

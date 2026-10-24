@@ -1,0 +1,1042 @@
+/* =========================================================
+   앱 배치 — 디자인 키트(kb-*) 위에 실제 화면 레이아웃을 얹음
+   (고정 탭바 · safe-area · 화면별 조합). 수치는 디자인 레퍼런스 기준
+   ========================================================= */
+
+/* 페이지 끝에서 더 당겨도 화면 전체(상단바 포함)가 늘어났다 튕기지 않게 (iOS 고무줄 효과).
+   html에 두어야 문서 스크롤에 적용되고, body는 이전 iOS 호환용 */
+html,
+body {
+  overscroll-behavior-y: none;
+}
+html {
+  background: var(--bg);
+}
+body {
+  min-height: 100dvh;
+}
+.kb-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ---------- App shell ---------- */
+.kb-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+.kb-shell.has-tabbar {
+  padding-bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+}
+.kb-topbar {
+  --pad-l: 16px;
+  --pad-r: 12px;
+  --gutter: max(0px, (100% - var(--content-max)) / 2);
+  height: calc(var(--topbar-h) + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) calc(var(--gutter) + var(--pad-r)) 0 calc(var(--gutter) + var(--pad-l));
+}
+.kb-topbar--back {
+  --pad-l: 6px;
+}
+.kb-topbar__logo img {
+  width: 100%;
+  height: 100%;
+}
+a.kb-icon-btn {
+  color: var(--text);
+}
+.kb-content {
+  width: 100%;
+  flex: 1;
+}
+.kb-content--fab {
+  padding-bottom: 96px;
+}
+.kb-tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.kb-fab--float {
+  position: fixed;
+  right: max(20px, calc((100vw - var(--content-max)) / 2 + 20px));
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 20px);
+  z-index: 9;
+}
+.kb-toast--float {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 16px);
+  z-index: 30;
+  margin: 0 auto;
+}
+.kb-greeting {
+  margin: 4px 0 0;
+  color: var(--text-2);
+}
+.kb-greeting strong {
+  color: var(--text);
+}
+.kb-stack {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+.kb-stack > .kb-error {
+  margin: 0;
+}
+.kb-stack--loose {
+  gap: 16px;
+}
+.kb-section--first {
+  margin-top: 22px;
+}
+.kb-section--near {
+  margin-top: 28px;
+}
+.kb-section .kb-card + .kb-error {
+  margin-top: 12px;
+}
+.kb-field--tight {
+  gap: 6px;
+}
+.kb-caption--strong {
+  color: var(--text-2);
+}
+.kb-fineprint--center {
+  margin: 8px 0 0;
+  text-align: center;
+}
+
+/* 화면 하단 고정 버튼 영역 (새 예약) */
+.kb-actionbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.kb-actionbar__inner {
+  display: grid;
+  gap: 8px;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 12px 16px calc(22px + env(safe-area-inset-bottom));
+}
+.kb-actionbar .kb-fineprint {
+  text-align: center;
+}
+
+/* ---------- Sheet / Dialog ---------- */
+.kb-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.kb-sheet {
+  max-height: 85dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: calc(20px + env(safe-area-inset-bottom));
+}
+.kb-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--scrim);
+}
+.kb-dialog {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  max-width: 340px;
+  padding: 22px 20px 18px;
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-3);
+  animation: kb-pop var(--dur) var(--ease-out);
+}
+.kb-dialog__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.kb-dialog__head h2 {
+  font: var(--type-title-3);
+}
+.kb-dialog__icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.kb-dialog > p {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+.kb-dialog > ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.kb-dialog > .kb-btn {
+  margin-top: 6px;
+}
+@keyframes kb-pop {
+  from {
+    transform: scale(0.96);
+    opacity: 0;
+  }
+}
+
+/* ---------- 01 로그인 ---------- */
+.kb-login {
+  display: flex;
+  flex-direction: column;
+  max-width: 440px;
+  min-height: 100dvh;
+  margin: 0 auto;
+  padding: calc(72px + env(safe-area-inset-top)) 24px calc(32px + env(safe-area-inset-bottom));
+}
+.kb-login__brand {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  text-align: center;
+}
+.kb-login__brand h1 {
+  margin-top: 14px;
+  font: var(--fw-heavy) 28px / 1.2 var(--font-sans);
+  letter-spacing: -0.03em;
+}
+.kb-login__brand p {
+  margin: 0;
+  color: var(--text-2);
+}
+.kb-login .kb-tabs {
+  margin-top: 28px;
+}
+.kb-login .kb-form {
+  gap: 18px;
+  margin-top: 22px;
+}
+.kb-login .kb-fineprint {
+  margin: 22px 0 0;
+}
+
+/* ---------- 03C 새 예약 — 승차권 채우기 ---------- */
+.kb-guide {
+  margin: 0 4px;
+  color: var(--text-2);
+  font-size: var(--fs-body-sm);
+}
+.kb-ticket-form .kb-ticket__paper {
+  --stub: 64px;
+}
+.kb-ticket-form .kb-ticket__main {
+  padding: 18px 18px 8px;
+}
+.kb-tag-btn {
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  cursor: pointer;
+}
+.kb-tag-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.kb-ticket-form__route {
+  display: grid;
+  /* 역 이름은 글자만큼, 노선은 남는 폭을 모두 (긴 역 이름이면 최소 96px까지 줄어듦) */
+  grid-template-columns: minmax(0, max-content) minmax(96px, 1fr) minmax(0, max-content);
+  /* 아래 정렬 + 노선 높이를 역 이름 줄과 같게 → 노선이 역 이름 세로 가운데에 옴 */
+  align-items: end;
+  gap: 8px;
+  margin: 6px 0 14px;
+}
+.kb-stop-btn {
+  min-width: 0;
+  padding: 10px 4px 10px 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast);
+}
+.kb-stop-btn--end {
+  padding: 10px 8px 10px 4px;
+  text-align: right;
+}
+.kb-stop-btn small {
+  display: block;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: var(--fw-semibold);
+}
+.kb-stop-btn b {
+  display: block;
+  overflow: hidden;
+  line-height: 32px;
+  color: var(--text);
+  font-size: var(--fs-title-1);
+  letter-spacing: -0.03em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-stop-btn.is-empty b {
+  color: var(--brand-text);
+}
+.kb-stop-btn.is-open {
+  background: var(--brand-soft);
+  box-shadow: inset 0 0 0 1.5px var(--brand);
+}
+.kb-stop-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.kb-route--mini {
+  grid-template-columns: minmax(40px, 1fr);
+}
+.kb-route--mini .kb-route__track {
+  margin: 0 6px;
+}
+/* 출발/도착 바꾸기 — 노선 한가운데 얹힘 */
+.kb-ticket-form__rail {
+  position: relative;
+  display: grid;
+  align-items: center;
+  /* .kb-stop-btn b 의 줄 높이(32px)와 버튼 아래 여백(10px)에 맞춤 */
+  height: 32px;
+  margin-bottom: 10px;
+}
+.kb-swap-btn {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 34px;
+  height: 34px;
+  transform: translate(-50%, -50%);
+  transition: transform var(--dur) var(--ease-out), background var(--dur-fast);
+}
+.kb-swap-btn svg {
+  transform: rotate(90deg);
+}
+.kb-swap-btn:hover {
+  background: var(--brand-soft);
+}
+.kb-swap-btn:active {
+  transform: translate(-50%, -50%) scale(0.92);
+}
+.kb-swap-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+/* 노선이 비치지 않도록 불투명하게 두고 색만 흐리게 */
+.kb-swap-btn:disabled {
+  color: var(--text-3);
+  cursor: default;
+  background: var(--surface);
+}
+.kb-rows {
+  display: grid;
+}
+.kb-rowbtn > b.kb-num {
+  font-size: 15px;
+}
+.kb-rowbtn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+/* 예약 폼의 스위치 줄 (인근역): 시트를 열지 않고 바로 켜고 끔 */
+.kb-rowswitch {
+  cursor: default;
+}
+.kb-rowswitch > b {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.kb-waitlist {
+  display: grid;
+  gap: 1px;
+}
+.kb-waitlist small {
+  color: var(--text-3);
+  font-size: var(--fs-micro);
+}
+.kb-waitlist > span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.kb-waitlist b {
+  color: var(--text);
+  font-size: 13.5px;
+}
+.kb-info-btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.kb-info-btn:hover {
+  background: var(--brand-soft);
+  color: var(--brand-text);
+}
+.kb-progress {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.kb-progress > i {
+  width: 10px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border-strong);
+  transition: width var(--dur) var(--ease-out), background var(--dur);
+}
+.kb-progress > i.is-done {
+  width: 22px;
+  background: var(--brand);
+}
+.kb-progress > span {
+  margin-left: 6px;
+}
+
+/* 조건이 다 채워진 승차권 — 연한 파랑만으로는 밝은 배경(--bg)과 구분이 안 되어 테두리를 브랜드색으로 */
+.kb-ticket-form.kb-ticket--brand {
+  --ticket-line: var(--brand);
+}
+.kb-ticket-form.kb-ticket--brand .kb-ticket__stub::before {
+  border-top-color: color-mix(in srgb, var(--brand) 35%, transparent);
+}
+:root:not([data-theme='dark']) .kb-ticket-form.kb-ticket--brand {
+  --ticket-bg: var(--brand-soft-2);
+}
+:root:not([data-theme='dark']) .kb-ticket-form.kb-ticket--brand .kb-route {
+  --stop-fill: var(--brand-soft-2);
+}
+:root:not([data-theme='dark']) .kb-ticket-form.kb-ticket--brand .kb-rowbtn {
+  border-top-color: color-mix(in srgb, var(--brand) 14%, transparent);
+}
+
+/* 좌석 체크박스 — 글자(✓) 대신 SVG라 폰트에 따라 어긋나지 않음 */
+.kb-seat-check {
+  flex-shrink: 0;
+}
+.kb-seat-check svg {
+  stroke-width: 3;
+}
+
+/* 시트 내용 */
+.kb-sheet-body {
+  display: grid;
+  gap: 12px;
+}
+.kb-sheet-body--time {
+  gap: 16px;
+}
+.kb-sheet-body--calendar {
+  gap: 10px;
+}
+.kb-calendar__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.kb-calendar__nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.kb-calendar__nav .kb-icon-btn {
+  width: 36px;
+  height: 36px;
+}
+.kb-calendar__nav .kb-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: none;
+}
+.kb-calendar__dow.is-sun,
+.kb-calendar__day.is-sun {
+  color: var(--danger);
+}
+.kb-calendar__dow.is-sat,
+.kb-calendar__day.is-sat {
+  color: var(--brand-text);
+}
+.kb-calendar__day.is-selected {
+  color: var(--on-brand);
+}
+.kb-filter > button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.kb-stepper__box > button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+/* 시각 시트의 열차 목록 */
+.kb-trains {
+  display: grid;
+  gap: 8px;
+}
+.kb-trains__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.kb-trains__head .kb-caption {
+  flex: 1;
+}
+.kb-trains__head .kb-icon-btn {
+  width: 32px;
+  height: 32px;
+}
+.kb-trains__note {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-body-sm);
+}
+.kb-trains__list {
+  /* 시트 안에서 완료 버튼이 밀려나지 않도록 목록만 스크롤 */
+  max-height: min(260px, 32dvh);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  list-style: none;
+  transition: opacity var(--dur-fast);
+}
+.kb-trains__list.is-updating {
+  opacity: 0.55;
+}
+.kb-train {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 12px;
+  padding: 10px 12px;
+}
+.kb-train + .kb-train {
+  border-top: 1px solid var(--border);
+}
+.kb-train__time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14.5px;
+  font-weight: var(--fw-semibold);
+}
+.kb-train__time i {
+  color: var(--text-3);
+  font-style: normal;
+  font-weight: var(--fw-regular);
+}
+.kb-train__name {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-medium);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-train__name small.kb-train__stations {
+  color: var(--brand);
+}
+.kb-train__name small {
+  margin-left: 6px;
+  color: var(--text-3);
+  font-size: inherit;
+  font-weight: var(--fw-regular);
+}
+.kb-train__seats {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.kb-seatchip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+}
+.kb-seatchip.is-on {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.kb-seatchip.is-wait {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.kb-station-more {
+  justify-self: center;
+}
+.kb-station-empty {
+  padding: 12px 4px;
+  color: var(--text-3);
+  font-size: var(--fs-body-sm);
+  text-align: center;
+}
+
+/* ---------- 04 예약 상세 ---------- */
+.kb-ticket__window--detail {
+  display: grid;
+  gap: 2px;
+  margin-top: 16px;
+}
+.kb-ticket__window--detail .kb-num {
+  font-size: var(--fs-title-2);
+  font-weight: var(--fw-bold);
+}
+.kb-ticket__stub b.kb-num {
+  color: var(--text);
+}
+.kb-result-card {
+  display: grid;
+  gap: 12px;
+}
+.kb-result-card h2 {
+  color: var(--success);
+  font: var(--type-title-3);
+}
+/* 코레일에서 취소한 예약: 성공 색 대신 기본 글자색 */
+.kb-result-card--cancelled h2 {
+  color: var(--text);
+}
+.kb-result-card p {
+  margin: 0;
+}
+.kb-result-text {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: var(--fs-caption);
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+.kb-detail-action {
+  margin-top: 4px;
+}
+
+/* ---------- 05 설정 ---------- */
+.kb-account strong {
+  display: block;
+}
+.kb-logout {
+  margin-top: 28px;
+  color: var(--danger);
+}
+.kb-logout:hover {
+  color: var(--danger);
+}
+
+/* ---------- 06 관리자 ---------- */
+.kb-admin {
+  min-height: 100dvh;
+  background: var(--bg);
+}
+.kb-admin__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  padding: calc(14px + env(safe-area-inset-top)) 32px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+.kb-admin__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  text-decoration: none;
+}
+.kb-admin__brand:hover {
+  color: var(--text);
+}
+.kb-admin__brand b {
+  font-size: var(--fs-title-3);
+  letter-spacing: var(--ls-tight);
+}
+.kb-admin__head .kb-tabs {
+  min-width: 240px;
+  margin-left: 20px;
+}
+.kb-admin__spacer {
+  flex: 1;
+}
+.kb-admin__main {
+  display: grid;
+  gap: 18px;
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 28px 32px 48px;
+}
+.kb-pagehead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+}
+.kb-pagehead > div {
+  flex: 1;
+  min-width: 240px;
+}
+.kb-pagehead h1 {
+  font: var(--type-title-1);
+}
+.kb-pagehead .kb-hint {
+  margin: 4px 0 0;
+}
+.kb-toolbar .kb-input-wrap {
+  flex: 1 1 300px;
+  max-width: 420px;
+}
+.kb-toolbar .kb-input,
+.kb-add-user .kb-input {
+  min-height: 40px;
+}
+.kb-toolbar__spacer {
+  flex: 1;
+}
+.kb-add-user {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.kb-add-user strong {
+  margin-right: 8px;
+}
+.kb-add-user .kb-input--num {
+  flex: 1 1 200px;
+  max-width: 240px;
+}
+.kb-add-user .kb-input:not(.kb-input--num) {
+  flex: 1 1 160px;
+  max-width: 200px;
+}
+.kb-add-user > .kb-error {
+  flex-basis: 100%;
+}
+.kb-tablefoot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 관리자 표 (div grid + ARIA table 역할) */
+.kb-grid-table {
+  min-width: var(--table-min, 960px);
+  font-size: var(--fs-body-sm);
+}
+.kb-grid-row {
+  display: grid;
+  grid-template-columns: var(--cols);
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+.kb-grid-row:last-child {
+  border-bottom: 0;
+}
+.kb-grid-row > div {
+  min-width: 0;
+  padding: 12px 14px;
+}
+.kb-grid-row--head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-2);
+}
+.kb-grid-row--head > div {
+  padding: 11px 14px;
+  color: var(--text-2);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+}
+.kb-grid-row:not(.kb-grid-row--head):hover {
+  background: var(--surface-2);
+}
+.kb-grid-row.is-dim {
+  opacity: 0.6;
+}
+.kb-grid-row .is-num {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.kb-grid-row .is-right {
+  text-align: right;
+}
+.kb-grid-row .is-mono {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.kb-grid-row .is-sub {
+  color: var(--text-2);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.kb-grid-row input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--brand);
+}
+.kb-grid-row mark {
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--brand) 22%, transparent);
+  color: inherit;
+}
+.kb-grid-empty {
+  padding: 48px;
+  color: var(--text-3);
+  text-align: center;
+}
+.kb-cell-user {
+  display: grid;
+  gap: 1px;
+}
+.kb-cell-user > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-cell-user .is-mono {
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+.kb-cell-train {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.kb-cell-actions {
+  display: flex;
+  gap: 4px;
+}
+.kb-cell-actions .kb-icon-btn {
+  width: 36px;
+  height: 36px;
+}
+
+/* 사용자 정보 수정 팝업 */
+.kb-dialog:has(.kb-user-edit) {
+  max-width: 400px;
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+}
+.kb-dialog:has(.kb-user-edit) .kb-dialog__icon {
+  background: var(--brand-soft);
+  color: var(--brand-text);
+}
+.kb-user-edit {
+  display: grid;
+  gap: 16px;
+}
+.kb-user-edit__phone {
+  font-size: 15px;
+  font-weight: var(--fw-semibold);
+}
+.kb-user-edit__settings {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.kb-user-edit__settings .kb-setting {
+  padding: 12px 14px;
+}
+.kb-user-edit__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+/* 관리자 운영 설정 */
+.kb-settings-form {
+  display: grid;
+  gap: 16px;
+  max-width: 820px;
+}
+.kb-settings-group h2 {
+  margin: 0;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  font: var(--type-label);
+}
+.kb-setting-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 18px;
+}
+.kb-setting-row + .kb-setting-row {
+  border-top: 1px solid var(--border);
+}
+.kb-setting-row__text {
+  display: grid;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+}
+.kb-setting-row__text label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: var(--fw-semibold);
+}
+.kb-setting-row__text p {
+  margin: 0;
+}
+.kb-setting-row__badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-text);
+  font-size: 11.5px;
+  font-weight: var(--fw-semibold);
+}
+.kb-setting-row__meta {
+  color: var(--text-3);
+  font-size: var(--fs-caption);
+}
+.kb-setting-row__error {
+  color: var(--danger);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-medium);
+}
+.kb-setting-row__input {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: var(--fs-body-sm);
+}
+.kb-setting-row__input .kb-input {
+  width: 120px;
+  text-align: right;
+}
+.kb-setting-row__input span {
+  min-width: 34px;
+}
+.kb-input.is-invalid {
+  border-color: var(--danger);
+}
+.kb-link-btn {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--brand-text);
+  font: inherit;
+  font-weight: var(--fw-semibold);
+  cursor: pointer;
+}
+.kb-link-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.kb-settings-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 0 calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+@media (max-width: 720px) {
+  /* 긴 표를 내려도 탭을 바로 바꿀 수 있게 상단바 고정. 화면을 덜 가리도록
+     기준 시각을 로고 옆 한 줄로 올리고(좁으면 말줄임) 여백을 줄임 */
+  .kb-admin__head {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    gap: 10px 12px;
+    padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+  }
+  .kb-admin__head .kb-tabs {
+    order: 3;
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+  .kb-admin__spacer {
+    display: none;
+  }
+  .kb-admin__role {
+    display: none;
+  }
+  .kb-admin__head > .kb-caption {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .kb-admin__main {
+    padding: 20px 16px 40px;
+  }
+  .kb-setting-row {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .kb-setting-row__input .kb-input {
+    width: 140px;
+  }
+  .kb-settings-actions > .kb-btn {
+    flex: 1;
+  }
+}

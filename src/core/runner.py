@@ -38,6 +38,13 @@ DUPLICATE_WAITLIST_MESSAGE = (
 )
 
 MAX_ATTEMPTS_MESSAGE = "최대 시도 횟수를 초과하여 예약이 중단되었습니다."
+# 예상 밖의 같은 오류(열차 없음·매진·차단 제외)가 연속으로 이만큼 오면 재시도해도 소용없다고 보고 중단.
+# 세션 만료 오류는 첫 오류에서 바로 재로그인하므로 영향 없음. relogin_after_errors(10)와 같아서
+# 같은 오류만 반복될 때는 재로그인하기 전에 중단됨 (재로그인은 다른 오류가 섞여 쌓일 때만)
+SAME_ERROR_LIMIT = 10
+REPEATED_ERROR_MESSAGE = (
+    "같은 오류가 {count}회 연속 발생해 예약을 중단했습니다. ({error})"
+)
 MAX_DURATION_MESSAGE = "최대 실행 시간을 초과하여 예약이 중단되었습니다."
 
 # 예약 성공 보고는 웹 서버가 잠시 응답하지 않아도(재시작 등) 이 시간 동안 다시 보냄.
@@ -173,6 +180,32 @@ def build_reporter(spec: dict) -> CallbackReporter:
     )
 
 
+# 관리자 설정(core/app_settings.py)으로 웹 서버가 spec["runner"]에 싣는 반복 설정
+RUNNER_OPTION_TYPES = {
+    "interval": float,
+    "max_attempts": int,
+    "relogin_after_errors": int,
+    "same_error_limit": int,
+    "progress_every": int,
+}
+
+
+def runner_options(spec: dict) -> dict:
+    """spec["runner"]의 반복 설정을 run_reservation 인자로 (없거나 잘못된 값은 기본값 사용)"""
+    given = spec.get("runner")
+    if not isinstance(given, dict):
+        return {}
+    options = {}
+    for key, cast in RUNNER_OPTION_TYPES.items():
+        value = given.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        value = cast(value)
+        if value > 0:
+            options[key] = value
+    return options
+
+
 def run_reservation(
     spec: dict,
     reporter: CallbackReporter,
@@ -180,8 +213,9 @@ def run_reservation(
     on_success: Callable[..., None] = lambda **_: None,
     max_attempts: int = 1000,
     interval: float = 2.0,
-    progress_every: int = 20,
+    progress_every: int = 1,
     relogin_after_errors: int = 10,
+    same_error_limit: int = SAME_ERROR_LIMIT,
     sleep: Callable[[float], None] = time.sleep,
     handler_factory: Optional[Callable[[], ReserveHandler]] = None,
     clock: Callable[[], float] = time.monotonic,
@@ -228,6 +262,7 @@ def run_reservation(
             interval,
             progress_every,
             relogin_after_errors,
+            same_error_limit,
             sleep,
             _deadline(spec, clock),
             clock,
@@ -368,6 +403,7 @@ def _run_attempts(
     interval,
     progress_every,
     relogin_after_errors,
+    same_error_limit,
     sleep,
     expired,
     clock,
@@ -404,6 +440,8 @@ def _run_attempts(
 
     consecutive_errors = 0
     last_progress = clock()
+    # 같은 오류가 연속으로 온 횟수 (재로그인해도 이어서 셈)
+    last_error, same_errors = None, 0
     for attempt in range(1, max_attempts + 1):
         if should_stop():
             return {"status": "stopped", "attempts": attempt - 1}
@@ -482,8 +520,15 @@ def _run_attempts(
             return {"status": "failed", "message": error, "attempts": attempt}
         if error and error not in EXPECTED_MISSES:
             consecutive_errors += 1
+            same_errors = same_errors + 1 if error == last_error else 1
+            last_error = error
             if attempt % 10 == 0:
                 logger.warning(f"Attempt {attempt} failed: {error}")
+            if same_errors >= same_error_limit:
+                message = REPEATED_ERROR_MESSAGE.format(count=same_errors, error=error)
+                logger.error(f"Stopping reservation: {message}")
+                reporter.send("error", message=message, attempts=attempt)
+                return {"status": "error", "message": message, "attempts": attempt}
             needs_login = result.get("needs_login") is True or any(
                 word in error.lower() for word in ("login", "session", "로그인")
             )
@@ -506,6 +551,7 @@ def _run_attempts(
                 consecutive_errors = 0
         else:
             consecutive_errors = 0
+            last_error, same_errors = None, 0
 
         if (
             attempt % progress_every == 0

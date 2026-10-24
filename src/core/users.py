@@ -83,7 +83,9 @@ class UserService:
         name: Optional[str] = None,
         is_active: Optional[bool] = None,
         telegram_notify: Optional[bool] = None,
+        unlink_telegram: bool = False,
     ) -> User:
+        """None인 항목은 그대로 둠. unlink_telegram: 텔레그램 연결 해제 (다시 연결은 봇에서 로그인)"""
         with self.db.session() as s:
             user = s.get(User, account_key(phone))
             if not user:
@@ -94,6 +96,8 @@ class UserService:
                 user.is_active = is_active
             if telegram_notify is not None:
                 user.telegram_notify = telegram_notify
+            if unlink_telegram:
+                user.telegram_chat_id = None
             return user
 
     def delete(self, phone: str) -> None:
