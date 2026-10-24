@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from core.schemas import MAX_DAYS_AHEAD
 from version import VERSION
 
 
@@ -191,6 +192,10 @@ https://www.korail.com/ticket/reservation/list
 예매 희망일 8자를 입력해주십시오.
 (ex_ 20210124) <- 2021년 1월 24일
 """
+        INPUT_DATE_TOO_FAR: str = (
+            f"코레일은 오늘부터 {MAX_DAYS_AHEAD}일 이내(2개월) 열차만 판매합니다. "
+            "다른 날짜를 선택해주세요."
+        )
         INPUT_DEP_TIME_FAILURE: str = (
             "입력하신 값이 HHMM 형식에 맞지 않습니다. 다시 입력해주세요."
         )

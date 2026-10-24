@@ -20,8 +20,9 @@ try:
 except Exception:  # tzdata가 없는 환경
     KST = timezone(timedelta(hours=9))
 
-# 예약 가능한 최대 날짜 범위 (코레일은 약 1개월 전부터 예매 가능)
-MAX_DAYS_AHEAD = 90
+# 예약 가능한 최대 날짜 범위 (코레일은 오늘부터 2개월 이내 열차만 판매)
+# 2026-10-24 운행 달력(schedule.runDt)의 판매일 구분이 오늘+60일까지만 판매 중 값이었음
+MAX_DAYS_AHEAD = 60
 
 TRAIN_TYPE_LABELS = {"KTX": "KTX", "ALL": "모든 열차"}
 SEAT_TYPE_LABELS = {
@@ -146,7 +147,10 @@ class ReservationRequest(BaseModel):
         if self.dep_date < today:
             raise ValueError("출발일이 오늘보다 이전입니다.")
         if self.dep_date > today + timedelta(days=MAX_DAYS_AHEAD):
-            raise ValueError("출발일이 너무 먼 미래입니다.")
+            raise ValueError(
+                f"출발일은 오늘부터 {MAX_DAYS_AHEAD}일 이내여야 합니다. "
+                "(코레일은 2개월 이내 열차만 판매)"
+            )
         if self.src_station == self.dst_station:
             raise ValueError("출발역과 도착역이 같습니다.")
         if self.dep_date == today and self.dep_time < now.strftime("%H%M"):

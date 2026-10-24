@@ -47,7 +47,9 @@ class TestReservationRequest:
         "overrides, message",
         [
             ({"dep_date": now_kst().date() - timedelta(days=1)}, "이전"),
-            ({"dep_date": now_kst().date() + timedelta(days=400)}, "먼 미래"),
+            ({"dep_date": now_kst().date() + timedelta(days=400)}, "60일 이내"),
+            # 코레일은 2개월(오늘+60일) 이내 열차만 판매
+            ({"dep_date": now_kst().date() + timedelta(days=61)}, "60일 이내"),
             ({"dst_station": "서울"}, "같습니다"),
             ({"dep_time": "2500"}, "올바르지 않은"),
             ({"dep_time": "9am"}, "HHMM"),
@@ -61,6 +63,10 @@ class TestReservationRequest:
         with pytest.raises(ValidationError) as exc:
             _request(**overrides)
         assert message in str(exc.value)
+
+    def test_accepts_last_sale_day(self):
+        last = now_kst().date() + timedelta(days=60)
+        assert _request(dep_date=last).dep_date == last
 
     def test_rejects_past_time_today(self):
         now = now_kst()

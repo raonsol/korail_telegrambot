@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -29,6 +29,7 @@ from core.errors import KorailPasswordChangeRequired, KorailUnavailable, Service
 from core.notifier import ReservationEvent
 from core.schemas import (
     ADMIN_USER_ID,
+    MAX_DAYS_AHEAD,
     PHONE_FORMAT_HINT,
     SEAT_TYPE_LABELS,
     TRAIN_TYPE_LABELS,
@@ -39,6 +40,7 @@ from core.schemas import (
     format_phone,
     is_valid_phone,
     normalize_phone,
+    now_kst,
 )
 
 logger = logging.getLogger(__name__)
@@ -503,8 +505,11 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
 
     # 출발일 입력 함수 (캘린더 키보드 선택시)
     async def _input_date(self, chat_id, data: datetime):
-        today = datetime.today().date()
-        if data.date() >= today:
+        today = now_kst().date()
+        if data.date() > today + timedelta(days=MAX_DAYS_AHEAD):
+            msg = Messages.Error.INPUT_DATE_TOO_FAR
+            await self.send_message(chat_id, msg, reply_markup=create_calendar())
+        elif data.date() >= today:
             formatted_date = data.strftime("%Y년 %m월 %d일")
             self.userDict[chat_id]["trainInfo"]["depDate"] = data.strftime("%Y%m%d")
             self.userDict[chat_id]["lastAction"] = 5

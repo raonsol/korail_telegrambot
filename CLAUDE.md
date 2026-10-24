@@ -127,7 +127,7 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 - `src/sw.ts`: Workbox precache (offline shell), push + notificationclick handlers (`injectManifest`)
 - Screens: login (user/admin), home (active + 30-day history), new reservation, detail, settings (push/Telegram notify/install), admin (users, all reservations)
 - Seat choice (`components/SeatPicker.tsx`): 일반실/특실 toggles + a priority choice when both are on; `format.ts` `seatSelectionFrom` / `toSeatType` map it to the same four `seat_type` values the API and Telegram use (both → `general`/`special`, one → `*_only`, none → blocked in the form)
-- Dates/times are validated in **KST** on both client and server
+- Dates/times are validated in **KST** on both client and server; the departure date may be at most `MAX_DAYS_AHEAD` (60) days ahead - Korail sells only 2 months ahead (`core/schemas.py`, `NewReservationPage.tsx` and the Telegram date step share the value)
 - Icons: `npm run generate-icons` from `public/icon.svg`
 
 ### Docker Architecture

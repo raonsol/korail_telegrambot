@@ -19,7 +19,8 @@ import {
 } from '../format'
 import { recentStations, rememberStations } from '../storage'
 
-const MAX_DAYS_AHEAD = 90
+/** 코레일은 오늘부터 2개월 이내 열차만 판매 (서버 core/schemas.py MAX_DAYS_AHEAD 와 같은 값) */
+const MAX_DAYS_AHEAD = 60
 
 const TRAIN_OPTIONS: { value: TrainType; label: string }[] = [
   { value: 'KTX', label: 'KTX' },
