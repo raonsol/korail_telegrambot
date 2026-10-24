@@ -29,6 +29,33 @@ export function formatDateTime(iso: string | null): string {
   }).format(new Date(iso))
 }
 
+/** ISO 시각 → KST "오후 11:24" */
+export function formatClock(iso: string): string {
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(iso))
+}
+
+/** 기한까지 남은 시간 ("14분 남음", "1시간 5분 남음") */
+export function timeLeft(iso: string, now: number): string {
+  const minutes = Math.floor((new Date(iso).getTime() - now) / 60_000)
+  if (minutes < 0) return '기한 지남'
+  if (minutes < 1) return '1분 안에 마감'
+  if (minutes < 60) return `${minutes}분 남음`
+  return `${Math.floor(minutes / 60)}시간 ${minutes % 60}분 남음`
+}
+
+export function formatWon(price: number): string {
+  return `${price.toLocaleString()}원`
+}
+
+/** 코레일 열차 번호 "00403" → "403" */
+export function trainNumber(no: string): string {
+  return no.replace(/^0+(?=\d)/, '')
+}
+
 export function relativeTime(iso: string): string {
   const diff = (Date.now() - new Date(iso).getTime()) / 1000
   if (diff < 60) return '방금 전'
@@ -177,7 +204,7 @@ export function parseResultText(text: string | null): ResultInfo {
     trainNo: train ? `${train[1].trim()} ${train[2]}`.trim() : undefined,
     depTime: times?.[1],
     arrTime: times?.[2],
-    fare: fare ? `${Number(fare[1].replace(/,/g, '')).toLocaleString()}원 · ${fare[2]}석` : undefined,
+    fare: fare ? `${formatWon(Number(fare[1].replace(/,/g, '')))} · ${fare[2]}석` : undefined,
     payBy: limit ? meridiemTime(limit[1]) : undefined,
   }
 }

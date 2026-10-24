@@ -90,8 +90,8 @@ export interface ReservationInput {
   include_nearby: boolean
 }
 
-/** 코레일 계정의 결제 전 예약 (예약대기 포함) - "내 승차권" */
-export interface KorailReservation {
+/** "내 승차권" 예약·승차권의 열차 (코레일 예약번호 포함) */
+export interface KorailTrain {
   rsv_id: string
   train_no: string
   train_type: string
@@ -102,28 +102,21 @@ export interface KorailReservation {
   arr_station: string
   price: number
   seat_count: number
-  /** 좌석이 아니라 예약대기 (결제 기한 없음) */
-  waiting: boolean
-  pay_deadline: string | null
   /** 코레일봇이 잡은 예약이면 그 예약 기록 id */
   reservation_id: string | null
 }
 
+/** 코레일 계정의 결제 전 예약 (예약대기 포함) */
+export interface KorailReservation extends KorailTrain {
+  /** 좌석이 아니라 예약대기 (결제 기한 없음) */
+  waiting: boolean
+  pay_deadline: string | null
+}
+
 /** 코레일 계정의 발권된 승차권 */
-export interface KorailTicket {
-  rsv_id: string
-  train_no: string
-  train_type: string
-  dep_date: string
-  dep_time: string
-  arr_time: string
-  dep_station: string
-  arr_station: string
+export interface KorailTicket extends KorailTrain {
   car_no: string
   seats: string // "12A" 또는 "12A~12B"
-  seat_count: number
-  price: number
-  reservation_id: string | null
 }
 
 export interface KorailAccount {
@@ -275,8 +268,8 @@ export const Api = {
   korailAccount: (refresh = false) =>
     api<KorailAccount>(`/api/korail/account${refresh ? '?refresh=true' : ''}`),
   cancelKorailRsv: (rsvId: string) =>
-    // 남은 목록 (서버에 방금 본 목록이 없으면 null - 다시 조회)
-    api<KorailAccount | null>(`/api/korail/reservations/${encodeURIComponent(rsvId)}/cancel`, {
+    // 목록은 다시 받음 (서버 캐시에서 그 예약만 빠지므로 코레일에 다시 묻지 않음)
+    api<void>(`/api/korail/reservations/${encodeURIComponent(rsvId)}/cancel`, {
       method: 'POST',
     }),
   cancelAll: (scope: 'mine' | 'all' = 'mine') =>

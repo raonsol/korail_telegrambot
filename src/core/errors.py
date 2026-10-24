@@ -54,6 +54,16 @@ class KorailUnavailable(ServiceError):
     code = "KORAIL_BLOCKED"
 
 
+class KorailLoginFailed(ServiceError):
+    """코레일 로그인 실패 (rejected: 코레일이 아이디·비밀번호를 거절함 - 같은 비밀번호로 다시 시도하면 잠금에 가까워짐)"""
+
+    code = "KORAIL_LOGIN_FAILED"
+
+    def __init__(self, message: str, *, rejected: bool = False):
+        super().__init__(message)
+        self.rejected = rejected
+
+
 class KorailPasswordChangeRequired(ServiceError):
     """코레일 비밀번호 변경 안내를 처리해야 로그인됨 (비밀번호 오류가 아니므로 로그인 실패로 세지 않음)"""
 

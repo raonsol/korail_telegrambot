@@ -1134,58 +1134,42 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
     # ------------------------------------------------------------------ 예약 후 관리
 
     async def _handle_korail_cancel_callback(self, chat_id, callback_data):
-        """성공 메시지의 '코레일 예약 취소' 버튼: 확인을 받은 뒤 코레일에서 취소"""
-        if callback_data == "kcancel_no":
-            await self.send_message(chat_id, "코레일 예약 취소를 그만두었습니다.")
-            return
-        if callback_data.startswith("kcancel_yes_"):
-            await self._cancel_korail_reservation(
-                chat_id, callback_data.removeprefix("kcancel_yes_")
-            )
-            return
-        reservation_id = callback_data.removeprefix("kcancel_")
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    "예, 취소합니다", callback_data=f"kcancel_yes_{reservation_id}"
-                ),
-                InlineKeyboardButton("아니오", callback_data="kcancel_no"),
-            ]
-        ]
-        await self.send_message(
-            chat_id,
-            Messages.Info.KORAIL_CANCEL_CONFIRM,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
+        """성공 메시지의 '코레일 예약 취소' 버튼 (kcancel_{예약 id})
 
-    async def _cancel_korail_reservation(self, chat_id, reservation_id):
-        # 비밀번호는 이 대화에서 로그인할 때 받은 것만 씀 (DB에 저장하지 않음)
-        login = self._chat_korail_login(chat_id)
-        owner = self._chat_owner(chat_id)
-        if login is None or owner is None:
-            await self.send_message(chat_id, Messages.Info.KORAIL_CANCEL_NEEDS_LOGIN)
+        그 예약의 코레일 예약번호로 /mytickets 와 같은 확인·취소 흐름을 탄다.
+        kcancel_yes_/kcancel_no 는 예전에 보낸 확인 메시지의 버튼
+        """
+        if callback_data == "kcancel_no":
+            await self._handle_my_tickets_callback(chat_id, "kres_n")
             return
-        korail_id, korail_pw = login
+        if self._chat_korail_login(chat_id) is None:
+            await self.send_message(chat_id, Messages.Info.KORAIL_NEEDS_LOGIN)
+            return
+        confirmed = callback_data.startswith("kcancel_yes_")
+        reservation_id = callback_data.removeprefix(
+            "kcancel_yes_" if confirmed else "kcancel_"
+        )
         try:
-            await self.reservations.cancel_korail(
-                reservation_id,
-                korail_id=korail_id,
-                korail_pw=korail_pw,
-                owner=owner,
-                chat_id=chat_id,
-                source="telegram",
+            r = self.reservations.get(
+                reservation_id, owner=self._chat_owner(chat_id), chat_id=chat_id
             )
         except ServiceError as e:
             await self.send_message(chat_id, e.message)
             return
-        except Exception as e:
-            logger.error(f"Korail cancel failed for {reservation_id}: {e}")
+        if r.korail_cancelled_at is not None:
+            await self.send_message(chat_id, "이미 코레일에서 취소한 예약입니다.")
+        elif r.status != ReservationStatus.SUCCESS or not r.korail_rsv_id:
             await self.send_message(
-                chat_id,
-                "코레일 예약 취소 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+                chat_id, "코레일에서 취소할 수 있는 예약이 아닙니다."
             )
-            return
-        await self.send_message(chat_id, Messages.Info.KORAIL_CANCELLED)
+        elif confirmed:
+            await self._cancel_my_ticket(chat_id, r.korail_rsv_id)
+        else:
+            await self._confirm_my_ticket_cancel(
+                chat_id,
+                r.korail_rsv_id,
+                fallback=(f"{self._route(r)}\n{r.result_text or ''}", r.waitlisted),
+            )
 
     @staticmethod
     def _route(r) -> str:
@@ -1234,7 +1218,7 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
     async def _show_my_tickets(self, chat_id, refresh=False):
         login = self._chat_korail_login(chat_id)
         if login is None:
-            await self.send_message(chat_id, Messages.Info.MYTICKETS_NEEDS_LOGIN)
+            await self.send_message(chat_id, Messages.Info.KORAIL_NEEDS_LOGIN)
             return
         korail_id, korail_pw = login
         account = self.services.korail_account
@@ -1353,6 +1337,8 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
         self.ensure_user_exists(chat_id)
         if callback_data == "kres_r":
             await self._show_my_tickets(chat_id, refresh=True)
+        elif callback_data == "kres_l":
+            await self._show_my_tickets(chat_id)
         elif callback_data == "kres_n":
             await self.send_message(chat_id, "코레일 예약 취소를 그만두었습니다.")
         elif callback_data.startswith("kres_c_"):
@@ -1369,11 +1355,11 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
             (r for r in (data.reservations if data else []) if r.rsv_id == rsv_id), None
         )
 
-    async def _confirm_my_ticket_cancel(self, chat_id, rsv_id):
+    async def _confirm_my_ticket_cancel(self, chat_id, rsv_id, fallback=None):
+        """fallback: 최근 목록에 없을 때 보여 줄 (내용, 예약대기 여부)"""
         r = self._cached_reservation(chat_id, rsv_id)
         if r is None:
-            detail = f"예약번호 {rsv_id}"
-            waiting = False
+            detail, waiting = fallback or (f"예약번호 {rsv_id}", False)
         else:
             detail = (
                 f"{self._train_line(r)}\n"
@@ -1402,7 +1388,7 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
     async def _cancel_my_ticket(self, chat_id, rsv_id):
         login = self._chat_korail_login(chat_id)
         if login is None:
-            await self.send_message(chat_id, Messages.Info.MYTICKETS_NEEDS_LOGIN)
+            await self.send_message(chat_id, Messages.Info.KORAIL_NEEDS_LOGIN)
             return
         r = self._cached_reservation(chat_id, rsv_id)
         try:
@@ -1424,7 +1410,7 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
             chat_id,
             f"✅ {Messages.Info.KORAIL_CANCELLED}{detail}",
             reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔄 목록 다시 보기", callback_data="kres_r")]]
+                [[InlineKeyboardButton("📋 목록 보기", callback_data="kres_l")]]
             ),
         )
 

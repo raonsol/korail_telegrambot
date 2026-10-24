@@ -80,8 +80,9 @@ class ReservationService:
         # 코레일 예약 취소 (core.auth.default_korail_cancel). (코레일 ID, 비밀번호, 예약번호,
         # device=) -> 취소했으면 True, 결제 대기 목록에 없으면 False
         self.korail_cancel = korail_cancel
-        # 코레일 쪽 예약이 바뀌었을 때 (core.korail_account 캐시 비우기). services 에서 연결
-        self.korail_changed: Callable[[str], None] = lambda _korail_id: None
+        # 코레일 쪽 예약이 바뀌었을 때: (코레일 계정, 취소한 예약번호 또는 결과를 모르면 None)
+        # "내 승차권" 캐시 갱신 (KorailAccountService.forget). services 에서 연결
+        self.korail_changed: Callable[[str, Optional[str]], None] = lambda *_: None
         # 코레일 계정의 기기 신원 (UserService.korail_device) - 워커가 같은 기기로 로그인하도록 spec에 포함
         self.device_for = device_for
         self.launcher = launcher
@@ -398,8 +399,6 @@ class ReservationService:
         예약을 만든 코레일 계정의 비밀번호가 필요하다 (웹: 로그인 세션, 텔레그램: 대화의 로그인 정보).
         코레일 요청은 그 계정의 출구·기기로 보낸다.
         """
-        if self.korail_cancel is None:
-            raise ServiceError("코레일 예약 취소를 사용할 수 없습니다.")
         with self.db.session() as s:
             r = s.get(Reservation, reservation_id)
             if not r or not self._can_access(r, owner, chat_id):
@@ -414,8 +413,7 @@ class ReservationService:
                 )
             account, rsv_id = r.korail_id, r.korail_rsv_id
 
-        await self._cancel_on_korail(account, korail_pw, rsv_id)
-        await self._mark_korail_cancelled(account, rsv_id, source)
+        await self.cancel_korail_rsv(account, korail_pw, rsv_id, source=source)
         return self.get(reservation_id, owner=owner, chat_id=chat_id)
 
     async def cancel_korail_rsv(
@@ -449,11 +447,14 @@ class ReservationService:
         if self.korail_cancel is None:
             raise ServiceError("코레일 예약 취소를 사용할 수 없습니다.")
         device = self.device_for(korail_id) if self.device_for else None
-        cancelled = await asyncio.to_thread(
-            self.korail_cancel, korail_id, korail_pw, rsv_id, device=device
-        )
-        # 결과와 관계없이 코레일 쪽 목록이 바뀌었을 수 있음 ("내 승차권" 캐시)
-        self.korail_changed(korail_id)
+        cancelled = False
+        try:
+            cancelled = await asyncio.to_thread(
+                self.korail_cancel, korail_id, korail_pw, rsv_id, device=device
+            )
+        finally:
+            # "내 승차권" 캐시: 취소했으면 그 예약만 빼고, 아니면(이미 결제·만료, 오류) 버림
+            self.korail_changed(korail_id, rsv_id if cancelled else None)
         if not cancelled:
             raise Conflict(
                 "코레일에 결제 대기 중인 예약이 없습니다. "

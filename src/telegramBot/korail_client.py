@@ -49,6 +49,11 @@ APP_OUTDATED_MESSAGE = (
 )
 
 
+def _no_reason(error) -> bool:
+    """코레일이 사유·코드 없이 로그인을 거부함 (pykorail 이 대신 넣은 문구 - 비밀번호 오류로 단정할 수 없음)"""
+    return error.code is None and error.msg == PYKORAIL_FALLBACK_LOGIN_MSG
+
+
 def is_app_outdated(error) -> bool:
     """코레일이 앱 버전·보안 정책 변경으로 요청을 거부했는지 (재시도 무의미)"""
     return isinstance(error, KorailError) and error.code in APP_OUTDATED_CODES
@@ -221,6 +226,7 @@ class ReserveHandler:
         client = None
         self.loginBlocked = False
         self.loginPasswordChange = False
+        self.loginAppOutdated = False
         self.loginRejected = False
         try:
             client = create_korail_client(self.proxy_url, device=self.device)
@@ -240,7 +246,14 @@ class ReserveHandler:
                 client.close()
             self.loginSuc = False
             self.loginPasswordChange = isinstance(e, PasswordChangeRequiredError)
-            self.loginRejected = self._credentials_rejected(e)
+            self.loginAppOutdated = is_app_outdated(e)
+            # 코레일이 아이디·비밀번호를 거절함 (같은 비밀번호로 다시 시도하면 잠금에 가까워짐)
+            self.loginRejected = (
+                isinstance(e, LoginFailedError)
+                and not self.loginPasswordChange
+                and not self.loginAppOutdated
+                and not _no_reason(e)
+            )
             self.loginError = self._login_error_message(e)
             return False
 
@@ -252,17 +265,6 @@ class ReserveHandler:
         self.loginSuc = True
         self.loginError = ""
         return True
-
-    @staticmethod
-    def _credentials_rejected(error):
-        """코레일이 아이디·비밀번호를 거절함 (같은 비밀번호로 다시 시도하면 잠금에 가까워짐)"""
-        return (
-            isinstance(error, LoginFailedError)
-            and not isinstance(error, PasswordChangeRequiredError)
-            and not is_app_outdated(error)
-            # 사유·코드 없는 거부는 비밀번호 오류로 단정할 수 없음 (_login_error_message)
-            and not (error.code is None and error.msg == PYKORAIL_FALLBACK_LOGIN_MSG)
-        )
 
     @staticmethod
     def _login_error_message(error):
@@ -283,7 +285,7 @@ class ReserveHandler:
         if isinstance(error, KorailError) and error.msg:
             # pykorail 은 서버가 사유(h_msg_txt)와 코드 없이 거부하면 이 문구를 대신 넣음
             # 실제 비밀번호 오류는 서버가 사유와 코드(WRR000101 등)를 주므로 구분해서 안내
-            if error.code is None and error.msg == PYKORAIL_FALLBACK_LOGIN_MSG:
+            if _no_reason(error):
                 return "코레일 서버가 사유 없이 로그인을 거부했습니다. 잠시 후 다시 시도해주세요."
             return error.msg
         return "코레일 서버에 연결하지 못했습니다. 잠시 후 다시 시도해주세요."

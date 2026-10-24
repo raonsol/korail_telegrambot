@@ -1,14 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Api, type KorailAccount, type KorailReservation, type KorailTicket } from '../api'
+import { Api, type KorailAccount, type KorailReservation, type KorailTrain } from '../api'
 import { ErrorBox } from '../components/Feedback'
 import { Icon } from '../components/Icon'
 import { Layout } from '../components/Layout'
 import { Segmented } from '../components/Segmented'
 import { Dialog } from '../components/Sheet'
 import { RouteLine, Ticket } from '../components/Ticket'
-import { KORAIL_PAYMENT_URL, formatDate, formatTime } from '../format'
+import {
+  KORAIL_PAYMENT_URL,
+  formatClock,
+  formatDate,
+  formatTime,
+  formatWon,
+  timeLeft,
+  trainNumber,
+} from '../format'
 
 type Tab = 'pending' | 'issued'
 
@@ -37,15 +45,20 @@ export function TicketsPage() {
 
   const cancel = useMutation({
     mutationFn: (rsvId: string) => Api.cancelKorailRsv(rsvId),
-    onSuccess: (data) => {
-      if (data) queryClient.setQueryData(QUERY_KEY, data)
-      else queryClient.invalidateQueries({ queryKey: QUERY_KEY })
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY })
       // 코레일봇이 잡은 예약이면 그 예약 기록도 "코레일 취소"로 바뀜
       queryClient.invalidateQueries({ queryKey: ['reservations'] })
       queryClient.invalidateQueries({ queryKey: ['reservation'] })
       setTarget(null)
     },
   })
+
+  /** 취소 확인 창 열기·닫기 (이전 취소의 오류가 다음 창에 남지 않도록) */
+  const openCancel = (r: KorailReservation | null) => {
+    cancel.reset()
+    setTarget(r)
+  }
 
   const data = query.data
   const loading = query.isPending || (refresh.isPending && !data)
@@ -71,7 +84,7 @@ export function TicketsPage() {
           {refresh.isPending || query.isFetching
             ? '불러오는 중'
             : data
-              ? `${clock(data.fetched_at)} 조회`
+              ? `${formatClock(data.fetched_at)} 조회`
               : error
                 ? '조회 실패'
                 : ''}
@@ -108,7 +121,7 @@ export function TicketsPage() {
           </button>
         </div>
       ) : tab === 'pending' ? (
-        <PendingList account={data} now={now} onCancel={setTarget} />
+        <PendingList account={data} now={now} onCancel={openCancel} />
       ) : (
         <IssuedList account={data} />
       )}
@@ -117,21 +130,21 @@ export function TicketsPage() {
         <Dialog
           title={target.waiting ? '예약대기를 취소할까요?' : '코레일 예약을 취소할까요?'}
           icon={<Icon name="trash" size={18} />}
-          onClose={() => !cancel.isPending && setTarget(null)}
+          onClose={() => !cancel.isPending && openCancel(null)}
         >
           <p>
             <b>
-              {target.train_type} {trainNo(target.train_no)}
+              {target.train_type} {trainNumber(target.train_no)}
             </b>{' '}
             · {formatDate(target.dep_date)} {formatTime(target.dep_time)}
             <br />
-            {target.dep_station} → {target.arr_station} · {won(target.price)} · {target.seat_count}
-            석
+            {target.dep_station} → {target.arr_station} · {formatWon(target.price)} ·{' '}
+            {target.seat_count}석
           </p>
           <p className="kb-hint">취소한 좌석은 되돌릴 수 없습니다.</p>
           <ErrorBox error={cancel.error} />
           <div className="kb-dialog__actions">
-            <button className="kb-btn" disabled={cancel.isPending} onClick={() => setTarget(null)}>
+            <button className="kb-btn" disabled={cancel.isPending} onClick={() => openCancel(null)}>
               아니오
             </button>
             <button
@@ -183,7 +196,7 @@ function PendingList({
                   <span>좌석 배정 대기 중</span>
                 ) : r.pay_deadline ? (
                   <span className="kb-deadline">
-                    {clock(r.pay_deadline)}까지 · {remaining(r.pay_deadline, now)}
+                    {formatClock(r.pay_deadline)}까지 · {timeLeft(r.pay_deadline, now)}
                   </span>
                 ) : null}
               </>
@@ -207,7 +220,7 @@ function PendingList({
               status={r.waiting ? 'queued' : 'running'}
             />
             <div className="kb-ticket__window">
-              {formatDate(r.dep_date)} · <span className="kb-num">{won(r.price)}</span> ·{' '}
+              {formatDate(r.dep_date)} · <span className="kb-num">{formatWon(r.price)}</span> ·{' '}
               {r.seat_count}석
             </div>
             <div className={`kb-ticket__actions${r.waiting ? ' is-single' : ''}`}>
@@ -279,7 +292,7 @@ function IssuedList({ account }: { account: KorailAccount }) {
               status="success"
             />
             <div className="kb-ticket__window">
-              {formatDate(t.dep_date)} · <span className="kb-num">{won(t.price)}</span> ·{' '}
+              {formatDate(t.dep_date)} · <span className="kb-num">{formatWon(t.price)}</span> ·{' '}
               {t.seat_count}석
             </div>
           </Ticket>
@@ -292,16 +305,16 @@ function IssuedList({ account }: { account: KorailAccount }) {
   )
 }
 
-function TrainName({ item }: { item: KorailReservation | KorailTicket }) {
+function TrainName({ item }: { item: KorailTrain }) {
   return (
     <span className={`kb-tag${item.train_type.startsWith('KTX') ? ' kb-tag--brand' : ''}`}>
-      {item.train_type} {trainNo(item.train_no)}
+      {item.train_type} {trainNumber(item.train_no)}
     </span>
   )
 }
 
 /** 코레일봇이 잡은 예약이면 그 예약 기록으로 가는 링크 */
-function Source({ item }: { item: KorailReservation | KorailTicket }) {
+function Source({ item }: { item: KorailTrain }) {
   return item.reservation_id ? (
     <Link className="kb-src kb-src--bot" to={`/r/${item.reservation_id}`}>
       코레일봇 예약
@@ -337,29 +350,4 @@ function useNow(interval: number): number {
     return () => window.clearInterval(timer)
   }, [interval])
   return now
-}
-
-function trainNo(no: string): string {
-  return no.replace(/^0+(?=\d)/, '')
-}
-
-function won(price: number): string {
-  return `${price.toLocaleString()}원`
-}
-
-/** ISO 시각 → KST "오후 11:24" */
-function clock(iso: string): string {
-  return new Intl.DateTimeFormat('ko-KR', {
-    timeZone: 'Asia/Seoul',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(iso))
-}
-
-function remaining(iso: string, now: number): string {
-  const minutes = Math.floor((new Date(iso).getTime() - now) / 60_000)
-  if (minutes < 0) return '기한 지남'
-  if (minutes < 1) return '1분 안에 마감'
-  if (minutes < 60) return `${minutes}분 남음`
-  return `${Math.floor(minutes / 60)}시간 ${minutes % 60}분 남음`
 }

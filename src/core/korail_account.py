@@ -4,8 +4,9 @@
 코레일봇이 잡지 않은 예약(코레일톡 등에서 직접 잡은 것)도 함께 나온다.
 
 - 비밀번호는 호출 측이 넘긴 것만 쓴다 (웹: 로그인 세션, 텔레그램: 대화의 로그인 정보)
-- 그 계정의 예약과 같은 출구(IP)·기기 신원으로 요청하고, 출구별 요청 간격과 차단 대기를
-  예약 워커와 함께 지킨다 (로그인 앞, 그리고 pykorail 이 보내는 목록·상세 요청마다 출구 순서를 받음)
+- 그 계정의 예약과 같은 출구(IP)·기기 신원으로 요청하고 (core.auth.korail_session), 출구별
+  요청 간격과 차단 대기를 예약 워커와 함께 지킨다 (로그인 앞, 그리고 pykorail 이 보내는
+  목록·상세 요청마다 출구 순서를 받음)
 - 예약·승차권마다 상세를 한 번씩 더 조회하므로 (pykorail) 같은 계정은 잠시 캐시한다
 - 코레일이 비밀번호를 거절하면 같은 비밀번호로는 잠시 다시 로그인하지 않는다
   (웹 세션의 비밀번호가 바뀐 뒤 새로고침을 거듭해 코레일 계정이 잠기지 않도록)
@@ -14,27 +15,23 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Callable, Optional
 
 from pydantic import BaseModel, field_serializer
 
+from .auth import korail_session
+from .cache import TTLCache
 from .db import utcnow
-from .egress import EgressPool
-from .auth import raise_login_failure
-from .errors import KorailUnavailable, ServiceError
-from .schemas import account_key, pay_deadline_utc
-
-logger = logging.getLogger(__name__)
+from .egress import EgressPool, wait_for_slot
+from .errors import KorailLoginFailed, KorailUnavailable, ServiceError
+from .schemas import account_key, pay_deadline_utc, utc_iso
 
 # 같은 계정을 다시 열면 이 시간 동안은 코레일에 묻지 않음 (새로고침은 예외)
 CACHE_TTL_SECONDS = 60
 CACHE_MAX_ENTRIES = 200
-# 출구 순서를 이만큼 넘게 기다려야 하면 조회하지 않음 (예약 워커가 출구를 많이 쓰는 중)
-MAX_SLOT_WAIT_SECONDS = 8
 # 코레일이 비밀번호를 거절한 뒤 같은 비밀번호로 다시 로그인하지 않는 시간 (코레일은 5회 실패 시 잠금)
 LOGIN_REJECTED_HOLD_SECONDS = 600
 
@@ -43,7 +40,6 @@ BLOCKED_MESSAGE = (
     "잠시 후 다시 시도해주세요."
 )
 BUSY_MESSAGE = "코레일 조회 요청이 많습니다. 잠시 후 다시 시도해주세요."
-FAILED_MESSAGE = "코레일 예약·승차권을 불러오지 못했습니다. 잠시 후 다시 시도해주세요."
 LOGIN_HELD_MESSAGE = (
     "코레일이 이 비밀번호로 로그인을 거절했습니다. 코레일 비밀번호를 바꿨다면 로그아웃 후 "
     "다시 로그인해주세요. (계정 잠김을 막기 위해 10분 동안 같은 비밀번호로 다시 시도하지 않습니다)"
@@ -74,16 +70,8 @@ def _pace_korail_requests(client, before: Callable[[], None]) -> None:
         setattr(session, name, paced)
 
 
-def _as_utc(value: Optional[datetime]):
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.isoformat()
-
-
-class KorailReservationOut(BaseModel):
-    """결제 전 예약 (예약대기 포함)"""
+class KorailTrainOut(BaseModel):
+    """예약·승차권의 열차 (코레일 예약번호 포함)"""
 
     rsv_id: str
     train_no: str
@@ -95,33 +83,27 @@ class KorailReservationOut(BaseModel):
     arr_station: str
     price: int
     seat_count: int
-    # 좌석이 아니라 예약대기 (결제 기한 없음)
-    waiting: bool
-    pay_deadline: Optional[datetime] = None
     # 코레일봇이 잡은 예약이면 그 예약 기록 id
     reservation_id: Optional[str] = None
 
+
+class KorailReservationOut(KorailTrainOut):
+    """결제 전 예약 (예약대기 포함)"""
+
+    # 좌석이 아니라 예약대기 (결제 기한 없음)
+    waiting: bool
+    pay_deadline: Optional[datetime] = None
+
     @field_serializer("pay_deadline")
     def _deadline(self, value):
-        return _as_utc(value)
+        return utc_iso(value)
 
 
-class KorailTicketOut(BaseModel):
+class KorailTicketOut(KorailTrainOut):
     """발권된 승차권 (원권 번호·반환 비밀번호는 싣지 않음)"""
 
-    rsv_id: str
-    train_no: str
-    train_type: str
-    dep_date: str
-    dep_time: str
-    arr_time: str
-    dep_station: str
-    arr_station: str
     car_no: str
     seats: str  # "12A" 또는 "12A~12B"
-    seat_count: int
-    price: int
-    reservation_id: Optional[str] = None
 
 
 class KorailAccountOut(BaseModel):
@@ -132,7 +114,7 @@ class KorailAccountOut(BaseModel):
 
     @field_serializer("fetched_at")
     def _fetched(self, value):
-        return _as_utc(value)
+        return utc_iso(value)
 
 
 class KorailAccountService:
@@ -155,7 +137,9 @@ class KorailAccountService:
         self._sleep = sleep
         self._clock = clock
         self._pace = pace
-        self._cache: dict[str, tuple[float, KorailAccountOut]] = {}
+        self._cache: TTLCache[str, KorailAccountOut] = TTLCache(
+            CACHE_TTL_SECONDS, CACHE_MAX_ENTRIES, clock
+        )
         # forget() 마다 올림: 조회 중에 취소가 있었으면 그 조회 결과는 캐시하지 않음
         self._generation: dict[str, int] = {}
         # 계정 -> (거절된 시각, 비밀번호 해시)
@@ -165,28 +149,31 @@ class KorailAccountService:
     # ------------------------------------------------------------------ 캐시
 
     def cached(self, korail_id: str) -> Optional[KorailAccountOut]:
-        key = account_key(korail_id)
-        with self._lock:
-            hit = self._cache.get(key)
-        if hit and self._clock() - hit[0] < CACHE_TTL_SECONDS:
-            return hit[1]
-        return None
+        return self._cache.get(account_key(korail_id))
 
-    def forget(self, korail_id: str) -> None:
-        """예약을 취소하는 등 코레일 쪽이 바뀌었으면 다음 조회는 새로 받음"""
+    def forget(self, korail_id: str, rsv_id: Optional[str] = None) -> None:
+        """코레일 쪽이 바뀌었음 (ReservationService.korail_changed)
+
+        rsv_id: 이 예약을 취소함 - 캐시에서 그 예약만 빼 다음 조회는 코레일에 다시 묻지 않음.
+        None 이면 (결과를 모름) 캐시를 버림. 어느 쪽이든 그 사이 진행 중이던 조회 결과는
+        캐시하지 않음 (취소한 예약이 다시 보이지 않도록).
+        """
         key = account_key(korail_id)
         with self._lock:
-            self._cache.pop(key, None)
             self._generation[key] = self._generation.get(key, 0) + 1
-
-    @staticmethod
-    def without(account: KorailAccountOut, rsv_id: str) -> KorailAccountOut:
-        """취소한 예약을 뺀 목록 (화면 갱신용, 캐시에는 넣지 않음)"""
-        return account.model_copy(
-            update={
-                "reservations": [r for r in account.reservations if r.rsv_id != rsv_id]
-            }
-        )
+            if rsv_id is None:
+                self._cache.pop(key)
+            else:
+                self._cache.update(
+                    key,
+                    lambda account: account.model_copy(
+                        update={
+                            "reservations": [
+                                r for r in account.reservations if r.rsv_id != rsv_id
+                            ]
+                        }
+                    ),
+                )
 
     # ------------------------------------------------------------------ 조회
 
@@ -210,7 +197,16 @@ class KorailAccountService:
         ):
             raise ServiceError(LOGIN_HELD_MESSAGE, code="KORAIL_LOGIN_FAILED")
 
-        reservations, tickets = self._fetch(korail_id, password, key, digest)
+        try:
+            reservations, tickets = self._fetch(korail_id, password)
+        except KorailLoginFailed as e:
+            if e.rejected:
+                with self._lock:
+                    self._rejected[key] = (self._clock(), digest)
+            raise
+        with self._lock:
+            self._rejected.pop(key, None)
+
         rsv_ids = {r.rsv_id for r in reservations} | {t.pnr_no for t in tickets}
         links = self.links_for(korail_id, rsv_ids) if rsv_ids else {}
         out = KorailAccountOut(
@@ -221,87 +217,31 @@ class KorailAccountService:
         )
         with self._lock:
             if self._generation.get(key, 0) == generation:
-                self._store(key, out)
+                self._cache.put(key, out)
         return out
 
-    def _store(self, key: str, out: KorailAccountOut) -> None:
-        """self._lock 안에서 호출"""
-        now = self._clock()
-        for k in [
-            k for k, (t, _) in self._cache.items() if now - t >= CACHE_TTL_SECONDS
-        ]:
-            del self._cache[k]
-        # 같은 계정은 지우고 다시 넣어 가장 최근 항목으로 (넘치면 가장 오래된 것부터 버림)
-        self._cache.pop(key, None)
-        if len(self._cache) >= CACHE_MAX_ENTRIES:
-            self._cache.pop(next(iter(self._cache)))
-        self._cache[key] = (now, out)
-
-    def _fetch(self, korail_id: str, password: str, key: str, digest: str):
-        from pykorail import AccessRestrictedError, KorailError
-
-        from telegramBot.korail_client import (
-            APP_OUTDATED_MESSAGE,
-            ReserveHandler,
-            is_app_outdated,
-        )
-
-        egress = self.egresses.for_account(korail_id)
-        gate = self.egresses.gate(egress.id)
-        factory = self._handler_factory or ReserveHandler
-        handler = factory(
-            egress.proxy_url, egress.id, device=self.device_for(korail_id)
-        )
-        try:
-            self._wait_for_slot(gate)
-            if not handler.login(korail_id, password):
-                if getattr(handler, "loginRejected", False) is True:
-                    with self._lock:
-                        self._rejected[key] = (self._clock(), digest)
-                raise_login_failure(handler, gate)
-            with self._lock:
-                self._rejected.pop(key, None)
+    def _fetch(self, korail_id: str, password: str):
+        with korail_session(
+            korail_id,
+            password,
+            self.egresses,
+            device=self.device_for(korail_id),
+            handler_cls=self._handler_factory,
+            action="조회",
+            error_code="KORAIL_ACCOUNT_FAILED",
+            before_login=self._wait_for_slot,
+        ) as (handler, gate):
             client = handler.korail_client
-            try:
-                self._pace(client, lambda: self._wait_for_slot(gate))
-                reservations = client.reservations.all()
-                tickets = client.tickets.all()
-            except AccessRestrictedError as e:
-                # 차단 중에 같은 출구로 계속 요청하면 차단이 길어지므로 예약 워커와 함께 쉼
-                logger.error(
-                    "코레일 서버 차단 응답 (단계=내 승차권, 출구=%s): %s",
-                    egress.id or "direct",
-                    e,
-                )
-                gate.report_block()
-                raise KorailUnavailable(BLOCKED_MESSAGE)
-            except KorailError as e:
-                if is_app_outdated(e):
-                    raise KorailUnavailable(
-                        APP_OUTDATED_MESSAGE, code="KORAIL_APP_OUTDATED"
-                    )
-                logger.warning(f"Korail account lookup refused: {e}")
-                raise ServiceError(
-                    f"코레일이 조회를 거절했습니다: {e.msg or e}",
-                    code="KORAIL_ACCOUNT_FAILED",
-                )
-            except (KorailUnavailable, ServiceError):
-                raise
-            except Exception as e:  # 연결 실패, 코레일 외 HTTP 오류 등
-                logger.warning(f"Korail account lookup failed: {e}")
-                raise ServiceError(FAILED_MESSAGE, code="KORAIL_ACCOUNT_FAILED")
-            return reservations, tickets
-        finally:
-            handler.close()
+            self._pace(client, lambda: self._wait_for_slot(gate))
+            return client.reservations.all(), client.tickets.all()
 
     def _wait_for_slot(self, gate) -> None:
-        if gate.blocked_for() > 0:
-            raise KorailUnavailable(BLOCKED_MESSAGE)
-        delay = gate.reserve_slot()
-        if delay > MAX_SLOT_WAIT_SECONDS:
-            raise ServiceError(BUSY_MESSAGE, code="KORAIL_ACCOUNT_BUSY")
-        if delay > 0:
-            self._sleep(delay)
+        wait_for_slot(
+            gate,
+            self._sleep,
+            blocked=KorailUnavailable(BLOCKED_MESSAGE),
+            busy=ServiceError(BUSY_MESSAGE, code="KORAIL_ACCOUNT_BUSY"),
+        )
 
 
 def _train_fields(train) -> dict:

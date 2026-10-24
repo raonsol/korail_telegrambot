@@ -100,6 +100,15 @@ def _validate_hhmm(value: str) -> str:
     return value
 
 
+def utc_iso(value: Optional[datetime]) -> Optional[str]:
+    """DB 시각(naive UTC)을 ISO 8601 UTC 문자열로 (API 응답)"""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
+
+
 class ReservationStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -220,11 +229,7 @@ class ReservationOut(BaseModel):
         "korail_cancelled_at",
     )
     def _as_utc(self, value: Optional[datetime]):
-        if value is None:
-            return None
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.isoformat()
+        return utc_iso(value)
 
     @classmethod
     def from_model(cls, r) -> "ReservationOut":
@@ -301,11 +306,7 @@ class UserOut(BaseModel):
 
     @field_serializer("created_at", "last_login_at")
     def _as_utc(self, value: Optional[datetime]):
-        if value is None:
-            return None
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.isoformat()
+        return utc_iso(value)
 
     @classmethod
     def from_model(cls, u) -> "UserOut":

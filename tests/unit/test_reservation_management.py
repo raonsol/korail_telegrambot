@@ -729,15 +729,33 @@ class TestTelegram:
         self._confirm_state(bot)
         bot.userDict[1]["userInfo"]["ownerId"] = USER.user_id
 
+        # 성공 메시지의 버튼은 그 예약의 코레일 예약번호로 /mytickets 와 같은 확인·취소를 탐
         await bot._handle_korail_cancel_callback(1, f"kcancel_{rid}")
+        msg = bot.send_message.call_args.args[1]
+        assert "취소할까요" in msg and "서울→부산" in msg
         markup = bot.send_message.call_args.kwargs["reply_markup"]
-        assert markup.inline_keyboard[0][0].callback_data == f"kcancel_yes_{rid}"
+        assert markup.inline_keyboard[0][0].callback_data == "kres_y_PNR123"
         korail_cancel.assert_not_called()
 
-        await bot._handle_korail_cancel_callback(1, f"kcancel_yes_{rid}")
+        await bot._handle_my_tickets_callback(1, "kres_y_PNR123")
         assert korail_cancel.call_args.args == (KORAIL_ID, "correct", "PNR123")
         assert "취소했습니다" in bot.send_message.call_args.args[1]
         assert services.reservations.get(rid, owner=USER).korail_cancelled_at
+
+        # 이미 취소한 예약
+        await bot._handle_korail_cancel_callback(1, f"kcancel_{rid}")
+        assert "이미 코레일에서 취소" in bot.send_message.call_args.args[1]
+
+    @pytest.mark.asyncio
+    async def test_korail_cancel_old_confirm_button(
+        self, bot, services, fake_launcher, valid_request, korail_cancel
+    ):
+        """예전에 보낸 확인 메시지의 '예' 버튼 (kcancel_yes_{예약 id})"""
+        rid = await _succeeded(services, fake_launcher, valid_request)
+        self._confirm_state(bot)
+        bot.userDict[1]["userInfo"]["ownerId"] = USER.user_id
+        await bot._handle_korail_cancel_callback(1, f"kcancel_yes_{rid}")
+        assert korail_cancel.call_args.args == (KORAIL_ID, "correct", "PNR123")
 
     @pytest.mark.asyncio
     async def test_korail_cancel_without_login(
@@ -763,6 +781,17 @@ class TestTelegram:
         await bot._handle_korail_cancel_callback(1, f"kcancel_yes_{rid}")
 
         assert "이미 결제" in bot.send_message.call_args.args[1]
+
+    @pytest.mark.asyncio
+    async def test_korail_cancel_of_someone_elses_reservation(
+        self, bot, services, fake_launcher, valid_request, korail_cancel
+    ):
+        rid = await _succeeded(services, fake_launcher, valid_request)
+        self._confirm_state(bot, chat_id=2)
+        bot.userDict[2]["userInfo"]["ownerId"] = "01099998888"
+        await bot._handle_korail_cancel_callback(2, f"kcancel_{rid}")
+        assert "찾을 수 없습니다" in bot.send_message.call_args.args[1]
+        korail_cancel.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_web_cancel_is_announced_on_telegram(

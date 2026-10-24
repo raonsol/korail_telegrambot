@@ -70,6 +70,7 @@ class FakeHandler:
         self.loginBlocked = behaviour.get("blocked", False)
         self.loginPasswordChange = behaviour.get("password_change", False)
         self.loginRejected = behaviour.get("rejected", False)
+        self.loginAppOutdated = behaviour.get("app_outdated", False)
         self.loginError = behaviour.get("error", "비밀번호 오류")
         self.korail_client = Mock()
         self.korail_client.reservations.all.side_effect = behaviour.get(
@@ -181,13 +182,18 @@ class TestOverview:
         service.forget(KORAIL_ID)
         assert service.cached(KORAIL_ID) is None
 
-    def test_without_drops_cancelled_reservation(self):
+    def test_forget_cancelled_reservation_keeps_rest_cached(self):
         service, _ = _service(
             reservations=lambda: [_reservation("PNR1"), _reservation("PNR2")]
         )
         out = service.overview(KORAIL_ID, "pw")
-        assert [r.rsv_id for r in service.without(out, "PNR1").reservations] == ["PNR2"]
-        assert len(out.reservations) == 2
+        service.forget("01012345678", "PNR1")
+        cached = service.cached(KORAIL_ID)
+        assert [r.rsv_id for r in cached.reservations] == ["PNR2"]
+        assert cached.fetched_at == out.fetched_at
+        assert len(out.reservations) == 2  # 이미 돌려준 결과는 그대로
+        service.forget(KORAIL_ID)
+        assert service.cached(KORAIL_ID) is None
 
     def test_each_korail_call_takes_an_egress_slot(self):
         gate = Mock(**{"blocked_for.return_value": 0, "reserve_slot.return_value": 0})
@@ -231,19 +237,14 @@ class TestOverview:
         assert out.reservations[0].rsv_id == "PNR1"
         assert service.cached(KORAIL_ID) is None
 
-    def test_cache_keeps_others_when_refreshing_and_drops_expired(self):
-        from core import korail_account
+    def test_cache_expires(self):
+        from core.korail_account import CACHE_TTL_SECONDS
 
         now = [0.0]
         service, _ = _service(clock=lambda: now[0])
-        with patch.object(korail_account, "CACHE_MAX_ENTRIES", 2):
-            service.overview("010-0000-0001", "pw")
-            service.overview("010-0000-0002", "pw")
-            service.overview("010-0000-0002", "pw", refresh=True)
-            assert service.cached("010-0000-0001") is not None
-            now[0] = korail_account.CACHE_TTL_SECONDS + 1
-            service.overview("010-0000-0003", "pw")
-            assert set(service._cache) == {"01000000003"}
+        service.overview(KORAIL_ID, "pw")
+        now[0] = CACHE_TTL_SECONDS + 1
+        assert service.cached(KORAIL_ID) is None
 
     def test_busy_egress(self):
         gate = Mock(**{"blocked_for.return_value": 0, "reserve_slot.return_value": 30})
@@ -298,7 +299,7 @@ class TestErrors:
         # 차단 대기 중에는 요청하지 않음
         with pytest.raises(KorailUnavailable):
             service.overview(KORAIL_ID, "pw")
-        assert len(FakeHandler.instances) == 2  # 두 번째는 로그인 전에 멈춤
+        assert len(FakeHandler.instances) == 1  # 두 번째는 요청 전에 멈춤
 
     def test_password_change_notice(self):
         service, _ = _service(login_ok=False, password_change=True)
@@ -308,10 +309,13 @@ class TestErrors:
     def test_app_outdated_at_login(self):
         from telegramBot.korail_client import APP_OUTDATED_MESSAGE
 
-        service, _ = _service(login_ok=False, error=APP_OUTDATED_MESSAGE)
+        service, _ = _service(
+            login_ok=False, app_outdated=True, error=APP_OUTDATED_MESSAGE
+        )
         with pytest.raises(KorailUnavailable) as exc:
             service.overview(KORAIL_ID, "pw")
         assert exc.value.code == "KORAIL_APP_OUTDATED"
+        assert exc.value.message == APP_OUTDATED_MESSAGE
 
     def test_app_outdated_listing(self):
         def outdated():
@@ -419,17 +423,35 @@ class TestCancelByRsv:
             await services.reservations.cancel_korail_rsv(
                 KORAIL_ID, "pw", "PNR1", source="web"
             )
-        changed.assert_called_once_with(KORAIL_ID)
+        changed.assert_called_once_with(KORAIL_ID, None)
 
     @pytest.mark.asyncio
-    async def test_cancel_clears_account_cache(self, services, korail_cancel):
-        services.korail_account._cache["01012345678"] = (0.0, Mock())
-        services.korail_account._clock = lambda: 1.0
-        assert services.korail_account.cached(KORAIL_ID) is not None
+    async def test_cancel_updates_account_cache(self, services, korail_cancel):
+        account = services.korail_account
+        account._cache.put("01012345678", _account_out("PNR1", "PNR2"))
         await services.reservations.cancel_korail_rsv(
             KORAIL_ID, "pw", "PNR1", source="web"
         )
-        assert services.korail_account.cached(KORAIL_ID) is None
+        assert [r.rsv_id for r in account.cached(KORAIL_ID).reservations] == ["PNR2"]
+
+        # 목록에 없었으면(이미 결제·만료) 캐시를 버림
+        korail_cancel.return_value = False
+        with pytest.raises(Conflict):
+            await services.reservations.cancel_korail_rsv(
+                KORAIL_ID, "pw", "PNR2", source="web"
+            )
+        assert account.cached(KORAIL_ID) is None
+
+    @pytest.mark.asyncio
+    async def test_cancel_error_drops_account_cache(self, services, korail_cancel):
+        account = services.korail_account
+        account._cache.put("01012345678", _account_out("PNR1"))
+        korail_cancel.side_effect = KorailUnavailable("차단")
+        with pytest.raises(KorailUnavailable):
+            await services.reservations.cancel_korail_rsv(
+                KORAIL_ID, "pw", "PNR1", source="web"
+            )
+        assert account.cached(KORAIL_ID) is None
 
     @pytest.mark.asyncio
     async def test_korail_links(self, services, fake_launcher, valid_request):
@@ -514,36 +536,19 @@ class TestWebApi:
         assert calls == [(KORAIL_ID, "correct", False), (KORAIL_ID, "correct", True)]
 
     @pytest.mark.asyncio
-    async def test_cancel_returns_list_without_it(
+    async def test_cancel_then_list_comes_from_cache(
         self, client, services, korail_cancel
     ):
-        services.korail_account._cache["01012345678"] = (
-            0.0,
-            _account_out("PNR1", "PNR2"),
-        )
-        services.korail_account._clock = lambda: 1.0
-        services.korail_account.overview = Mock(
-            side_effect=AssertionError("no refetch")
-        )
+        account = services.korail_account
+        account._cache.put("01012345678", _account_out("PNR1", "PNR2"))
+        account._fetch = Mock(side_effect=AssertionError("no Korail lookup"))
 
         response = await client.post("/api/korail/reservations/PNR1/cancel")
-
-        assert response.status_code == 200, response.text
-        assert [r["rsv_id"] for r in response.json()["reservations"]] == ["PNR2"]
+        assert response.status_code == 204, response.text
         assert korail_cancel.call_args.args[:3] == (KORAIL_ID, "correct", "PNR1")
 
-    @pytest.mark.asyncio
-    async def test_cancel_without_cache_does_not_refetch(
-        self, client, services, korail_cancel
-    ):
-        # 취소는 끝났으므로 다시 조회하다 실패해 취소가 실패한 것처럼 보이지 않도록
-        services.korail_account.overview = Mock(
-            side_effect=AssertionError("no refetch")
-        )
-        response = await client.post("/api/korail/reservations/PNR1/cancel")
-        assert response.status_code == 200, response.text
-        assert response.json() is None
-        korail_cancel.assert_called_once()
+        listing = await client.get("/api/korail/account")
+        assert [r["rsv_id"] for r in listing.json()["reservations"]] == ["PNR2"]
 
     @pytest.mark.asyncio
     async def test_cancel_rejects_odd_ids_and_needs_csrf(self, client, korail_cancel):
@@ -771,13 +776,35 @@ class TestLoginFailureKinds:
             "outdated": LoginFailedError("최신 버전으로 업데이트", "-8204"),
             "http": HttpStatusError(502, "bad gateway"),
         }[error]
-        assert ReserveHandler._credentials_rejected(e) is rejected
+        client = Mock(**{"login.side_effect": e})
+        with patch(
+            "telegramBot.korail_client.create_korail_client", return_value=client
+        ):
+            handler = ReserveHandler()
+            assert handler.login(KORAIL_ID, "pw") is False
+        assert handler.loginRejected is rejected
+        assert handler.loginAppOutdated is (error == "outdated")
+        assert handler.loginPasswordChange is (error == "password_change")
+
+    def test_web_login_reports_app_outdated_instead_of_failing(self):
+        from core.auth import default_korail_login
+        from telegramBot.korail_client import APP_OUTDATED_MESSAGE
+
+        handler = FakeHandler(
+            login_ok=False, app_outdated=True, error=APP_OUTDATED_MESSAGE
+        )
+        # 비밀번호 오류가 아니므로 로그인 실패 횟수에 세지 않도록 예외로
+        with pytest.raises(KorailUnavailable) as exc:
+            default_korail_login(KORAIL_ID, "pw", handler_cls=lambda **_: handler)
+        assert exc.value.code == "KORAIL_APP_OUTDATED"
 
     def test_cancel_maps_app_outdated_like_account(self):
         from core.auth import default_korail_cancel
         from telegramBot.korail_client import APP_OUTDATED_MESSAGE
 
-        handler = FakeHandler(login_ok=False, error=APP_OUTDATED_MESSAGE)
+        handler = FakeHandler(
+            login_ok=False, app_outdated=True, error=APP_OUTDATED_MESSAGE
+        )
         with pytest.raises(KorailUnavailable) as exc:
             default_korail_cancel(
                 KORAIL_ID, "pw", "PNR1", handler_cls=lambda **_: handler
