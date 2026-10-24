@@ -166,7 +166,7 @@ def run_reservation(
     on_success: Callable[..., None] = lambda **_: None,
     max_attempts: int = 1000,
     interval: float = 2.0,
-    progress_every: int = 20,
+    progress_every: int = 1,
     relogin_after_errors: int = 10,
     sleep: Callable[[float], None] = time.sleep,
     handler_factory: Optional[Callable[[], ReserveHandler]] = None,

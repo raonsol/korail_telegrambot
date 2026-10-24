@@ -61,7 +61,12 @@ class TestRunReservation:
             "waiting": False,
             "reported": True,
         }
-        assert statuses == ["running", "success"]
+        # 실패한 시도마다 진행 보고 (화면의 시도 횟수가 바로 갱신되도록)
+        assert statuses == ["running", "progress", "progress", "success"]
+        assert [c.kwargs["attempts"] for c in reporter.send.call_args_list[1:3]] == [
+            1,
+            2,
+        ]
         assert reporter.send.call_args.kwargs["train_info"] == "KTX 101"
         # 보고 전에 결과를 남길 수 있도록 결과와 함께 호출
         on_success.assert_called_once_with(
@@ -129,7 +134,7 @@ class TestRunReservation:
         calls = iter([False, False, True])
         result, _, statuses = _run(handler, should_stop=lambda: next(calls))
         assert result == {"status": "stopped", "attempts": 2}
-        assert statuses == ["running"]
+        assert statuses == ["running", "progress", "progress"]
 
     def test_success_report_retried_until_delivered(self):
         """표는 이미 잡혔으므로 웹 서버가 잠시 응답하지 않아도 성공 보고를 다시 보냄"""
@@ -379,8 +384,12 @@ class TestEgress:
         assert result["attempts"] == 3
         # 차단 보고 후 대기 시간이 지날 때까지 다음 시도를 하지 않음
         assert sum(fake.slept) >= BLOCK_BACKOFF_SECONDS[0]
-        progress = [c for c in reporter.send.call_args_list if c.args[0] == "progress"]
-        assert "차단" in progress[0].kwargs["message"]
+        blocked = [
+            c
+            for c in reporter.send.call_args_list
+            if c.args[0] == "progress" and "message" in c.kwargs
+        ]
+        assert "차단" in blocked[0].kwargs["message"]
         # 차단은 오류가 아니므로 재로그인하지 않음
         assert handler.login.call_count == 1
 
