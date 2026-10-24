@@ -20,6 +20,7 @@ from .launchers import (
 )
 from .notifier import Notifier, SSEBroker, WebPushChannel
 from .reservations import ReservationService
+from .trains import TrainSearchService
 from .users import UserService
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ class Services:
     sse: SSEBroker
     reservations: ReservationService
     egresses: EgressPool
+    trains: Optional[TrainSearchService] = None
     push: Optional[WebPushChannel] = None
 
     def init_storage(self) -> None:
@@ -121,6 +123,7 @@ def build_services(
         sse=sse,
         reservations=reservations,
         egresses=egresses,
+        trains=TrainSearchService(egresses, device_for=users.korail_device),
         push=push,
     )
 

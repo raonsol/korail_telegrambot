@@ -501,6 +501,102 @@ a.kb-icon-btn {
   opacity: 0.4;
   cursor: not-allowed;
 }
+/* 시각 시트의 열차 목록 */
+.kb-trains {
+  display: grid;
+  gap: 8px;
+}
+.kb-trains__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.kb-trains__head .kb-caption {
+  flex: 1;
+}
+.kb-trains__head .kb-icon-btn {
+  width: 32px;
+  height: 32px;
+}
+.kb-trains__note {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-body-sm);
+}
+.kb-trains__list {
+  /* 시트 안에서 완료 버튼이 밀려나지 않도록 목록만 스크롤 */
+  max-height: min(260px, 32dvh);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  list-style: none;
+  transition: opacity var(--dur-fast);
+}
+.kb-trains__list.is-updating {
+  opacity: 0.55;
+}
+.kb-train {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 12px;
+  padding: 10px 12px;
+}
+.kb-train + .kb-train {
+  border-top: 1px solid var(--border);
+}
+.kb-train__time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 14.5px;
+  font-weight: var(--fw-semibold);
+}
+.kb-train__time i {
+  color: var(--text-3);
+  font-style: normal;
+  font-weight: var(--fw-regular);
+}
+.kb-train__name {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: var(--fs-caption);
+  font-weight: var(--fw-medium);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-train__name small {
+  margin-left: 6px;
+  color: var(--text-3);
+  font-size: inherit;
+  font-weight: var(--fw-regular);
+}
+.kb-train__seats {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.kb-seatchip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+}
+.kb-seatchip.is-on {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.kb-seatchip.is-wait {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
 .kb-station-more {
   justify-self: center;
 }

@@ -38,6 +38,33 @@ export interface Reservation {
   is_active: boolean
 }
 
+export interface Train {
+  train_no: string // "015"
+  train_type: string // "KTX", "KTX-산천" ...
+  dep_time: string // HHMM
+  arr_time: string // HHMM
+  duration_minutes: number | null
+  general_seat: boolean
+  special_seat: boolean
+  /** 매진이지만 (일반실) 예약대기를 받음 */
+  waitlist: boolean
+}
+
+export interface TrainSearch {
+  trains: Train[]
+  /** 시간대 끝까지 조회하지 못함 (뒤쪽 열차가 더 있을 수 있음) */
+  truncated: boolean
+}
+
+export interface TrainQuery {
+  date: string // YYYY-MM-DD
+  src: string
+  dst: string
+  start: string // HHMM, 이 시각 이후 출발
+  end: string // HHMM, 이 시각 전 출발
+  train_type: TrainType
+}
+
 export interface ReservationInput {
   dep_date: string // YYYY-MM-DD
   src_station: string
@@ -171,6 +198,8 @@ export const Api = {
 
   stations: (q: string, page = 1) =>
     api<StationResult>(`/api/stations?q=${encodeURIComponent(q)}&page=${page}`),
+
+  trains: (q: TrainQuery) => api<TrainSearch>(`/api/trains?${new URLSearchParams({ ...q })}`),
 
   subscribePush: (subscription: PushSubscriptionJSON) =>
     api<void>('/api/push/subscriptions', { method: 'POST', body: subscription }),

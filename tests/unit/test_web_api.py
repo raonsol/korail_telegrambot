@@ -1,7 +1,7 @@
 """웹앱 REST API (세션 쿠키, CSRF, 권한)"""
 
 from datetime import timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
@@ -538,3 +538,84 @@ class TestLifespan:
             r = services.reservations.get(reservation.id, owner)
             assert r.status.value == "error"
             assert "서버가 다시 시작" in r.error
+
+
+class TestTrainsApi:
+    @pytest.mark.asyncio
+    async def test_requires_login(self, client):
+        response = await client.get(
+            "/api/trains",
+            params={
+                "date": _future(),
+                "src": "서울",
+                "dst": "부산",
+                "start": "0900",
+                "end": "1200",
+            },
+        )
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_searches_with_session_account(self, client, services):
+        from core.trains import TrainOut, TrainSearchOut
+
+        train = TrainOut(
+            train_no="015",
+            train_type="KTX",
+            dep_time="0930",
+            arr_time="1145",
+            duration_minutes=135,
+            general_seat=True,
+            special_seat=False,
+            waitlist=False,
+        )
+        services.trains.search = lambda korail_id, query: (
+            calls.append((korail_id, query)) or TrainSearchOut(trains=[train])
+        )
+        calls = []
+        await _login(client)
+
+        response = await client.get(
+            "/api/trains",
+            params={
+                "date": _future(),
+                "src": "서울",
+                "dst": "부산",
+                "start": "0930",
+                "end": "1130",
+                "train_type": "ALL",
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {"trains": [train.model_dump()], "truncated": False}
+        korail_id, query = calls[0]
+        assert korail_id == "010-1234-5678"
+        assert (query.dep_time, query.max_dep_time, query.train_type) == (
+            "0930",
+            "1130",
+            "ALL",
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"start": "1200", "end": "1200"},
+            {"start": "9999", "end": "1200"},
+            {"dst": "서울"},
+            {"date": "2000-01-01"},
+        ],
+    )
+    async def test_rejects_invalid_query(self, client, services, params):
+        services.trains.search = Mock(side_effect=AssertionError("must not search"))
+        await _login(client)
+        base = {
+            "date": _future(),
+            "src": "서울",
+            "dst": "부산",
+            "start": "0900",
+            "end": "1200",
+        }
+        response = await client.get("/api/trains", params={**base, **params})
+        assert response.status_code == 422

@@ -1,7 +1,14 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Api, type Reservation, type ReservationInput, type Station, type TrainType } from '../api'
+import {
+  Api,
+  type Reservation,
+  type ReservationInput,
+  type Station,
+  type TrainQuery,
+  type TrainType,
+} from '../api'
 import { ErrorBox } from '../components/Feedback'
 import { Icon } from '../components/Icon'
 import { Layout } from '../components/Layout'
@@ -14,13 +21,19 @@ import {
   SEAT_SUMMARY,
   compactToIso,
   formatDate,
-  hourLabel,
+  DAY_END,
+  hhmmToMinute,
+  minuteLabel,
+  minuteToHhmm,
   kstNow,
   seatSelectionFrom,
   toSeatType,
   type SeatSelection,
 } from '../format'
 import { recentStations, rememberStations } from '../storage'
+
+/** 출발 시각 범위를 고르는 단위 (분) */
+const TIME_STEP = 30
 
 /** 서버 검증(core/schemas.py MAX_DAYS_AHEAD)과 같은 범위 */
 const MAX_DAYS_AHEAD = 90
@@ -67,8 +80,8 @@ interface Draft {
   src: string
   dst: string
   date: string | null // YYYY-MM-DD (KST)
-  start: number | null // 시 (0~23)
-  end: number | null // 시 (1~24, 24 = 23:59)
+  start: number | null // 0시부터 지난 분 (30분 단위, 0~1410)
+  end: number | null // 0시부터 지난 분 (30분 단위, 30~1440, 1440 = 23:59)
   preset: string
   train: TrainType
   seat: SeatSelection
@@ -93,18 +106,19 @@ function initialDraft(prefill: Reservation | undefined, today: string): Draft {
       waitlist: false,
     }
   }
-  // "같은 조건으로 다시 예약" — 시각은 정각 단위로 맞춤
+  // "같은 조건으로 다시 예약" — 시각은 30분 단위로 맞춤 (시작은 내림, 끝은 올림)
   const date = compactToIso(prefill.dep_date)
-  const start = Number(prefill.dep_time.slice(0, 2))
-  const maxH = Number(prefill.max_dep_time.slice(0, 2))
-  const maxM = Number(prefill.max_dep_time.slice(2, 4))
-  const end = prefill.max_dep_time >= '2359' ? 24 : Math.min(24, maxM > 0 ? maxH + 1 : maxH)
+  const start = Math.floor(hhmmToMinute(prefill.dep_time) / TIME_STEP) * TIME_STEP
+  const end =
+    prefill.max_dep_time >= '2359'
+      ? DAY_END
+      : Math.min(DAY_END, Math.ceil(hhmmToMinute(prefill.max_dep_time) / TIME_STEP) * TIME_STEP)
   return {
     src: prefill.src_station,
     dst: prefill.dst_station,
     date: date >= today ? date : null,
     start,
-    end: Math.max(end, start + 1),
+    end: Math.max(end, start + TIME_STEP),
     preset: '',
     train: prefill.train_type,
     seat: seatSelectionFrom(prefill.seat_type),
@@ -133,7 +147,8 @@ export function NewReservationPage() {
   const now = kstNow()
   const today = now.date
   const maxDate = kstNow(MAX_DAYS_AHEAD).date
-  const nowHour = Number(now.time.slice(0, 2))
+  // 지금이 속한 30분 칸의 시작 (14:52 → 14:30)
+  const nowSlot = Math.floor(hhmmToMinute(now.time) / TIME_STEP) * TIME_STEP
 
   const [draft, setDraft] = useState<Draft>(() => initialDraft(prefill, today))
   const [sheet, setSheet] = useState<SheetKey | null>(null)
@@ -162,13 +177,13 @@ export function NewReservationPage() {
 
   // '지금부터'는 오늘 출발일 때만, 오늘 이미 지난 시간대는 고를 수 없음
   const isToday = draft.date === today
-  const nowPreset: Preset = { key: 'now', label: '지금부터', start: nowHour, end: 24 }
+  const nowPreset: Preset = { key: 'now', label: '지금부터', start: nowSlot, end: DAY_END }
   const presets: Preset[] = [
     ...(isToday ? [nowPreset] : []),
-    { key: 'am', label: '오전', start: 6, end: 12 },
-    { key: 'pm', label: '오후', start: 12, end: 18 },
-    { key: 'eve', label: '저녁', start: 18, end: 24 },
-  ].map((p) => ({ ...p, disabled: isToday && p.end <= nowHour }))
+    { key: 'am', label: '오전', start: 6 * 60, end: 12 * 60 },
+    { key: 'pm', label: '오후', start: 12 * 60, end: 18 * 60 },
+    { key: 'eve', label: '저녁', start: 18 * 60, end: DAY_END },
+  ].map((p) => ({ ...p, disabled: isToday && p.end <= nowSlot }))
 
   const openSheet = (key: SheetKey) => {
     // 시각 시트를 처음 열면 오늘은 지금부터, 다른 날은 오전(06~12)을 기본으로
@@ -197,8 +212,8 @@ export function NewReservationPage() {
       setFormError('출발일이 지났습니다. 출발일을 다시 선택해주세요.')
       return
     }
-    let depTime = `${pad2(draft.start)}00`
-    const maxDepTime = draft.end >= 24 ? '2359' : `${pad2(draft.end)}00`
+    let depTime = minuteToHhmm(draft.start)
+    const maxDepTime = minuteToHhmm(draft.end)
     if (draft.date === current.date && depTime <= current.time.replace(':', '')) {
       depTime = nextMinute(current.time)
     }
@@ -242,7 +257,7 @@ export function NewReservationPage() {
     {
       field: 'time',
       label: '시각',
-      value: hasTime ? `${hourLabel(draft.start!)} ~ ${hourLabel(draft.end!)}` : null,
+      value: hasTime ? `${minuteLabel(draft.start!)} ~ ${minuteLabel(draft.end!)}` : null,
       mono: true,
     },
     { field: 'seat', label: '좌석', value: seatFilled ? SEAT_SUMMARY[seatType!] : null },
@@ -412,8 +427,8 @@ export function NewReservationPage() {
               max={maxDate}
               onSelect={(date) => {
                 // 오늘로 바꿨는데 고른 시간대가 이미 지났으면 지금부터로
-                const expired = date === today && draft.end !== null && draft.end <= nowHour
-                update(expired ? { date, start: nowHour, end: 24, preset: 'now' } : { date })
+                const expired = date === today && draft.end !== null && draft.end <= nowSlot
+                update(expired ? { date, start: nowSlot, end: DAY_END, preset: 'now' } : { date })
                 closeSheet()
               }}
             />
@@ -425,6 +440,11 @@ export function NewReservationPage() {
               end={draft.end}
               preset={draft.preset}
               presets={presets}
+              route={
+                draft.src && draft.dst && draft.date
+                  ? { date: draft.date, src: draft.src, dst: draft.dst, train: draft.train }
+                  : null
+              }
               onChange={(start, end, preset = '') => update({ start, end, preset })}
               onDone={closeSheet}
             />
@@ -705,12 +725,13 @@ function CalendarPicker({
   )
 }
 
-/** 출발 시각 범위 (1시간 단위, 시작 < 끝, 24 = 23:59) */
+/** 출발 시각 범위 (30분 단위, 시작 < 끝, DAY_END = 23:59) + 그 시간대 열차 목록 */
 function TimePicker({
   start,
   end,
   preset,
   presets,
+  route,
   onChange,
   onDone,
 }: {
@@ -718,6 +739,8 @@ function TimePicker({
   end: number
   preset: string
   presets: Preset[]
+  /** 열차 목록 조회 조건 (역·날짜를 아직 안 골랐으면 null) */
+  route: { date: string; src: string; dst: string; train: TrainType } | null
   onChange: (start: number, end: number, preset?: string) => void
   onDone: () => void
 }) {
@@ -735,7 +758,11 @@ function TimePicker({
             onClick={() => onChange(p.start, p.end, p.key)}
           >
             {p.label}
-            <small>{p.key === 'now' ? `${pad2(p.start)}–` : `${pad2(p.start)}–${pad2(p.end)}`}</small>
+            <small>
+              {p.key === 'now'
+                ? `${shortTime(p.start)}–`
+                : `${shortTime(p.start)}–${shortTime(p.end)}`}
+            </small>
           </button>
         ))}
       </div>
@@ -745,7 +772,10 @@ function TimePicker({
           <div className="kb-timebar__track" />
           <div
             className="kb-timebar__range"
-            style={{ left: `${(start / 24) * 100}%`, width: `${((end - start) / 24) * 100}%` }}
+            style={{
+              left: `${(start / DAY_END) * 100}%`,
+              width: `${((end - start) / DAY_END) * 100}%`,
+            }}
           />
         </div>
         <div className="kb-timebar__ticks">
@@ -760,27 +790,155 @@ function TimePicker({
       <div className="kb-row">
         <Stepper
           label="이후 출발"
-          value={hourLabel(start)}
+          value={minuteLabel(start)}
           canDec={start > 0}
-          canInc={start < end - 1}
-          onDec={() => onChange(start - 1, end)}
-          onInc={() => onChange(start + 1, end)}
+          canInc={start < end - TIME_STEP}
+          onDec={() => onChange(start - TIME_STEP, end)}
+          onInc={() => onChange(start + TIME_STEP, end)}
         />
         <Stepper
           label="이전 출발"
-          value={hourLabel(end)}
-          canDec={end > start + 1}
-          canInc={end < 24}
-          onDec={() => onChange(start, end - 1)}
-          onInc={() => onChange(start, end + 1)}
+          value={minuteLabel(end)}
+          canDec={end > start + TIME_STEP}
+          canInc={end < DAY_END}
+          onDec={() => onChange(start, end - TIME_STEP)}
+          onInc={() => onChange(start, end + TIME_STEP)}
         />
       </div>
+
+      <TrainList route={route} start={start} end={end} />
 
       <button type="button" className="kb-btn kb-btn--primary kb-btn--block" onClick={onDone}>
         완료
       </button>
     </div>
   )
+}
+
+/** 06:00 → 06, 14:30 → 14:30 (프리셋 버튼의 짧은 표기) */
+function shortTime(minutes: number): string {
+  if (minutes >= DAY_END) return '24'
+  return minutes % 60 === 0 ? pad2(minutes / 60) : minuteLabel(minutes)
+}
+
+/** 값이 잠시 멈췄을 때만 바뀜 (스테퍼를 연달아 누를 때마다 코레일을 조회하지 않도록) */
+function useDebounced<T>(value: T, delay: number): T {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(value), delay)
+    return () => window.clearTimeout(timer)
+  }, [value, delay])
+  return debounced
+}
+
+/** 고른 시간대에 출발하는 열차와 좌석 현황 (예약 조건과 같은 기준: 시작 이후 ~ 끝 전 출발) */
+function TrainList({
+  route,
+  start,
+  end,
+}: {
+  route: { date: string; src: string; dst: string; train: TrainType } | null
+  start: number
+  end: number
+}) {
+  const query: TrainQuery | null = route && {
+    date: route.date,
+    src: route.src,
+    dst: route.dst,
+    start: minuteToHhmm(start),
+    end: minuteToHhmm(end),
+    train_type: route.train,
+  }
+  const debounced = useDebounced(query, 400)
+  const trains = useQuery({
+    queryKey: ['trains', debounced],
+    queryFn: () => Api.trains(debounced!),
+    enabled: debounced !== null,
+    // 좌석 현황은 계속 바뀌지만 서버도 30초 캐시하므로 그 안에는 다시 묻지 않음
+    staleTime: 30_000,
+    retry: false,
+    placeholderData: keepPreviousData,
+  })
+
+  if (!route) {
+    return (
+      <p className="kb-trains__note">출발역·도착역·출발일을 고르면 이 시간대의 열차를 보여드립니다.</p>
+    )
+  }
+
+  const list = trains.data?.trains ?? []
+  const updating = trains.isFetching || JSON.stringify(query) !== JSON.stringify(debounced)
+
+  return (
+    <section className="kb-trains" aria-label="이 시간대 열차" aria-busy={updating}>
+      <div className="kb-trains__head">
+        <strong>이 시간대 열차</strong>
+        <span className="kb-caption">
+          {updating
+            ? '불러오는 중…'
+            : trains.isSuccess
+              ? `${list.length}개${trains.data.truncated ? '+' : ''} · 좌석은 조회 시점 기준`
+              : ''}
+        </span>
+        <button
+          type="button"
+          className="kb-icon-btn"
+          aria-label="열차 목록 새로고침"
+          disabled={updating}
+          onClick={() => trains.refetch()}
+        >
+          <Icon name="refresh" size={16} />
+        </button>
+      </div>
+
+      {trains.isError ? (
+        <ErrorBox error={trains.error} />
+      ) : trains.isPending ? (
+        <p className="kb-trains__note">열차를 불러오는 중…</p>
+      ) : list.length === 0 ? (
+        <p className="kb-trains__note">이 시간대에 출발하는 열차가 없습니다.</p>
+      ) : (
+        <ul className={`kb-trains__list${updating ? ' is-updating' : ''}`}>
+          {list.map((t) => (
+            <li key={`${t.train_no}-${t.dep_time}`} className="kb-train">
+              <span className="kb-train__time kb-num">
+                {minuteLabel(hhmmToMinute(t.dep_time))}
+                <i aria-hidden="true">→</i>
+                {minuteLabel(hhmmToMinute(t.arr_time))}
+              </span>
+              <span className="kb-train__name">
+                {t.train_type} {t.train_no}
+                {t.duration_minutes !== null && <small>{durationLabel(t.duration_minutes)}</small>}
+              </span>
+              <span className="kb-train__seats">
+                <SeatChip label="일반" available={t.general_seat} />
+                <SeatChip label="특실" available={t.special_seat} />
+                {t.waitlist && <span className="kb-seatchip is-wait">대기</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {trains.data?.truncated && !updating && (
+        <p className="kb-trains__note">이후 열차가 더 있을 수 있습니다. 시간대를 좁히면 모두 볼 수 있습니다.</p>
+      )}
+    </section>
+  )
+}
+
+function SeatChip({ label, available }: { label: string; available: boolean }) {
+  return (
+    <span className={`kb-seatchip${available ? ' is-on' : ''}`}>
+      {label} {available ? '가능' : '매진'}
+    </span>
+  )
+}
+
+/** 135 → 2시간 15분 */
+function durationLabel(minutes: number): string {
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  return [h ? `${h}시간` : '', m ? `${m}분` : ''].filter(Boolean).join(' ') || '0분'
 }
 
 function Stepper({
@@ -802,11 +960,11 @@ function Stepper({
     <div className="kb-stepper">
       <span className="kb-hint">{label}</span>
       <div className="kb-stepper__box">
-        <button type="button" aria-label={`${label} 1시간 앞으로`} disabled={!canDec} onClick={onDec}>
+        <button type="button" aria-label={`${label} 30분 앞으로`} disabled={!canDec} onClick={onDec}>
           −
         </button>
         <span aria-live="polite">{value}</span>
-        <button type="button" aria-label={`${label} 1시간 뒤로`} disabled={!canInc} onClick={onInc}>
+        <button type="button" aria-label={`${label} 30분 뒤로`} disabled={!canInc} onClick={onInc}>
           +
         </button>
       </div>
