@@ -100,8 +100,38 @@ def _device_kwargs(device):
 
 
 def _train_key(train):
-    """조회 쪽 사이에서 같은 열차를 알아보는 키"""
-    return (train.train_no, train.dep_date, train.dep_time)
+    """조회 쪽 사이에서 같은 열차를 알아보는 키
+
+    인근역 조회에서는 같은 열차가 역 조합만 바꿔 여러 번 나오므로 출발·도착역 코드도 포함
+    """
+    return (
+        train.train_no,
+        train.dep_date,
+        train.dep_time,
+        getattr(train, "dep_code", None),
+        getattr(train, "arr_code", None),
+    )
+
+
+def reservation_details(reservation):
+    """예약 결과의 코레일 예약번호와 결제 기한 (KST YYYYMMDDHHMMSS)
+
+    예약 후 관리(코레일 예약 취소, 결제 기한 알림)에 쓴다. 예약대기는 결제 기한이 없고,
+    pykorail 예약이 아니면(이미 같은 예약이 있음 등) 둘 다 None
+    """
+    rsv_id = getattr(reservation, "rsv_id", None)
+    if not isinstance(rsv_id, str) or not rsv_id:
+        return None, None
+    if getattr(reservation, "is_waiting", False) is True:
+        return rsv_id, None
+    date = getattr(reservation, "buy_limit_date", "")
+    time = getattr(reservation, "buy_limit_time", "")
+    if not (isinstance(date, str) and isinstance(time, str)):
+        return rsv_id, None
+    time = time.ljust(6, "0")
+    if len(date) != 8 or len(time) != 6 or not (date + time).isdigit():
+        return rsv_id, None
+    return rsv_id, date + time
 
 
 def _departure(train):
@@ -248,6 +278,7 @@ class ReserveHandler:
         maxDepTime="2400",
         allowWaitlist=False,
         beforePage=None,
+        includeNearby=False,
     ):
         """Single reservation attempt (재시도 루프는 core.runner.run_reservation 담당)
 
@@ -262,6 +293,7 @@ class ReserveHandler:
             allowWaitlist (bool, optional): 모두 매진일 때 예약대기 신청 여부. 기본값은 False.
             beforePage (callable, optional): 둘째 쪽부터 조회 요청 전에 호출. False 를
                 반환하면 이번 시도를 멈춤 (호출 측이 출구별 요청 간격·취소를 확인하는 자리)
+            includeNearby (bool, optional): 인근역 출발·도착 열차도 예약. 기본값은 False.
 
         조회 결과는 한 쪽(보통 10편)씩 받으므로, 범위 안의 열차를 다 볼 때까지 다음 쪽을
         이어 받는다 (최대 MAX_SEARCH_PAGES 쪽). 쪽마다 좌석이 있는 열차를 먼저 예약하고,
@@ -280,6 +312,7 @@ class ReserveHandler:
             depDate, srcLocate, dstLocate, depTime, trainType, special, maxDepTime
         )
         waitlist = allowWaitlist and special in WAITLIST_OPTIONS
+        self.reserveInfo["includeNearby"] = includeNearby is True
 
         stage = "조회"
         try:
@@ -425,6 +458,10 @@ class ReserveHandler:
                     depart_after=cursor,
                     train_type=self.reserveInfo["trainType"],
                     include_no_seats=True,
+                    # 코레일 앱의 "인접역": 인근역 편이 시간순으로 끼어들어 쪽 수가 늘 수 있음
+                    include_nearby_stations=self.reserveInfo.get(
+                        "includeNearby", False
+                    ),
                 )
             except NoResultsError:
                 return
@@ -457,6 +494,26 @@ class ReserveHandler:
         if requested < now and requested.date() == now.date():
             return now
         return requested
+
+    def cancel_reservation(self, rsv_id):
+        """코레일 예약(결제 전) 취소. 결제 대기 목록에 없으면 False
+
+        결제를 마쳤거나 이미 취소·만료된 예약은 목록에 없다. 로그인한 뒤에 호출해야 함
+
+        Raises:
+            AccessRestrictedError: 코레일 차단 응답
+            KorailError: 코레일이 취소를 거절함
+        """
+        stage = "취소"
+        try:
+            reservation = self.korail_client.reservations.find(rsv_id)
+            if reservation is None:
+                return False
+            self.korail_client.reservations.cancel(reservation)
+            return True
+        except AccessRestrictedError as e:
+            _log_block(e, self.egress_id, stage)
+            raise
 
     def _try_reserve(self, train):
         try:

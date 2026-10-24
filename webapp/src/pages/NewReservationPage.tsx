@@ -62,6 +62,7 @@ export function NewReservationPage() {
   const [seat, setSeat] = useState(() => seatSelectionFrom(prefill?.seat_type ?? 'general'))
   const seatType = toSeatType(seat)
   const [waitlist, setWaitlist] = useState(prefill?.allow_waitlist ?? false)
+  const [nearby, setNearby] = useState(prefill?.include_nearby ?? false)
   const waitlistAvailable = seatType !== null && WAITLIST_SEAT_TYPES.includes(seatType)
   const [confirming, setConfirming] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -109,6 +110,7 @@ export function NewReservationPage() {
     train_type: trainType,
     seat_type: seatType ?? 'general',
     allow_waitlist: waitlistAvailable && waitlist,
+    include_nearby: nearby,
   }
 
   return (
@@ -168,6 +170,21 @@ export function NewReservationPage() {
         <div className="field">
           <span className="label">좌석</span>
           <SeatPicker value={seat} onChange={setSeat} />
+        </div>
+
+        <div className="field">
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={nearby}
+              onChange={(e) => setNearby(e.target.checked)}
+            />
+            인근역 출발·도착 열차도 예약
+          </label>
+          <small className="muted">
+            예: 용산 → 대전을 고르면 서울 → 대전, 용산 → 서대전 열차도 찾습니다. 어느 역이
+            인근역인지는 코레일이 정합니다.
+          </small>
         </div>
 
         <div className="field waitlist-field">
@@ -247,6 +264,8 @@ export function NewReservationPage() {
               <dd>{SEAT_SUMMARY[input.seat_type]}</dd>
               <dt>예약대기</dt>
               <dd>{input.allow_waitlist ? '사용 (모두 매진이면 일반실 대기)' : '사용 안 함'}</dd>
+              <dt>인근역</dt>
+              <dd>{input.include_nearby ? '포함' : '포함 안 함'}</dd>
             </dl>
             <p className="muted small">
               예약에 성공하면 알림을 보내드립니다. 결제는 예약 후 20분 안에 코레일에서 직접 해야

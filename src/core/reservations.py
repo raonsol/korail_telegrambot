@@ -18,12 +18,12 @@ import uuid
 from datetime import timedelta
 from typing import Callable, Optional
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, false, func, or_, select
 
 from .crypto import new_token, sha256_hex
 from .db import Database, utcnow
 from .egress import Egress, EgressPool, parse_egresses
-from .errors import LimitExceeded, NotAllowed, NotFound, ServiceError
+from .errors import Conflict, LimitExceeded, NotAllowed, NotFound, ServiceError
 from .launchers import Launcher, SubprocessLauncher
 from .models import Reservation
 from .notifier import Notifier, ReservationEvent
@@ -35,6 +35,8 @@ from .schemas import (
     ReservationRequest,
     ReservationStatus,
     WorkerEvent,
+    account_key,
+    pay_deadline_utc,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,9 @@ WORKER_LOST_MESSAGE = (
     "예약 워커가 종료되어 예약이 중단되었습니다. 예약을 다시 시작해 주세요."
 )
 
+# 결제 기한 이만큼 전에 알림 (코레일은 예약 후 보통 20분 안에 결제해야 함)
+PAYMENT_REMINDER_LEAD = timedelta(minutes=5)
+
 
 class ReservationService:
     def __init__(
@@ -69,8 +74,12 @@ class ReservationService:
         max_duration: Optional[int] = None,
         egresses: Optional[EgressPool] = None,
         device_for: Optional[Callable[[str], Optional[dict]]] = None,
+        korail_cancel: Optional[Callable[..., bool]] = None,
     ):
         self.db = db
+        # 코레일 예약 취소 (core.auth.default_korail_cancel). (코레일 ID, 비밀번호, 예약번호,
+        # device=) -> 취소했으면 True, 결제 대기 목록에 없으면 False
+        self.korail_cancel = korail_cancel
         # 코레일 계정의 기기 신원 (UserService.korail_device) - 워커가 같은 기기로 로그인하도록 spec에 포함
         self.device_for = device_for
         self.launcher = launcher
@@ -252,6 +261,7 @@ class ReservationService:
                         train_type=request.train_type,
                         seat_type=request.seat_type,
                         allow_waitlist=request.allow_waitlist,
+                        include_nearby=request.include_nearby,
                         status=ReservationStatus.QUEUED.value,
                         runner=self.launcher.name,
                         callback_token_hash=sha256_hex(token),
@@ -275,6 +285,7 @@ class ReservationService:
             "train_type": request.train_type,
             "seat_type": request.seat_type,
             "allow_waitlist": request.allow_waitlist,
+            "include_nearby": request.include_nearby,
         }
         spec.update(self._egress_spec(egress))
         if self.max_duration:
@@ -364,6 +375,101 @@ class ReservationService:
             )
         return cancelled
 
+    # ------------------------------------------------------------------ 예약 후 관리
+
+    async def cancel_korail(
+        self,
+        reservation_id: str,
+        *,
+        korail_id: str,
+        korail_pw: str,
+        owner: Optional[Owner] = None,
+        chat_id: Optional[int] = None,
+        source: str,
+    ) -> ReservationOut:
+        """성공한 예약을 코레일에서도 취소 (결제 전에만 가능)
+
+        예약을 만든 코레일 계정의 비밀번호가 필요하다 (웹: 로그인 세션, 텔레그램: 대화의 로그인 정보).
+        코레일 요청은 그 계정의 출구·기기로 보낸다.
+        """
+        if self.korail_cancel is None:
+            raise ServiceError("코레일 예약 취소를 사용할 수 없습니다.")
+        with self.db.session() as s:
+            r = s.get(Reservation, reservation_id)
+            if not r or not self._can_access(r, owner, chat_id):
+                raise NotFound("예약을 찾을 수 없습니다.")
+            if r.korail_cancelled_at is not None:
+                return ReservationOut.from_model(r)
+            if r.status != ReservationStatus.SUCCESS.value or not r.korail_rsv_id:
+                raise Conflict("코레일에서 취소할 수 있는 예약이 아닙니다.")
+            if account_key(r.korail_id) != account_key(korail_id):
+                raise NotAllowed(
+                    "이 예약을 만든 코레일 계정으로 로그인해야 취소할 수 있습니다."
+                )
+            account, rsv_id = r.korail_id, r.korail_rsv_id
+
+        device = self.device_for(account) if self.device_for else None
+        cancelled = await asyncio.to_thread(
+            self.korail_cancel, account, korail_pw, rsv_id, device=device
+        )
+        if not cancelled:
+            raise Conflict(
+                "코레일에 결제 대기 중인 예약이 없습니다. "
+                "이미 결제했거나 취소·만료되었을 수 있습니다."
+            )
+
+        with self.db.session() as s:
+            r = s.get(Reservation, reservation_id)
+            r.korail_cancelled_at = r.updated_at = utcnow()
+            out = ReservationOut.from_model(r)
+            reservation_chat = r.chat_id
+        logger.info(f"Cancelled Korail reservation of {reservation_id} via {source}")
+        await self.notifier.notify(
+            ReservationEvent(
+                out,
+                out.status.value,
+                source=source,
+                chat_id=reservation_chat,
+                kind="korail_cancelled",
+            )
+        )
+        return out
+
+    async def notify_payment_deadlines(
+        self, lead: timedelta = PAYMENT_REMINDER_LEAD
+    ) -> int:
+        """결제 기한이 lead 안으로 다가온 예약을 한 번씩 알림 (예약대기·코레일 취소 제외)"""
+        now = utcnow()
+        with self.db.session() as s:
+            due = list(
+                s.scalars(
+                    select(Reservation).where(
+                        Reservation.status == ReservationStatus.SUCCESS.value,
+                        Reservation.waitlisted == false(),
+                        Reservation.korail_cancelled_at.is_(None),
+                        Reservation.pay_reminded_at.is_(None),
+                        Reservation.pay_deadline.is_not(None),
+                        Reservation.pay_deadline > now,
+                        Reservation.pay_deadline <= now + lead,
+                    )
+                )
+            )
+            reminders = []
+            for r in due:
+                r.pay_reminded_at = now
+                reminders.append((ReservationOut.from_model(r), r.chat_id))
+        for out, chat_id in reminders:
+            await self.notifier.notify(
+                ReservationEvent(
+                    out,
+                    out.status.value,
+                    source="system",
+                    chat_id=chat_id,
+                    kind="payment_reminder",
+                )
+            )
+        return len(reminders)
+
     # ------------------------------------------------------------------ 워커 보고
 
     async def handle_worker_event(self, event: WorkerEvent) -> bool:
@@ -390,6 +496,8 @@ class ReservationService:
             if new_status == ReservationStatus.SUCCESS:
                 r.result_text = event.train_info or event.message
                 r.waitlisted = event.waiting
+                r.korail_rsv_id = event.korail_rsv_id
+                r.pay_deadline = pay_deadline_utc(event.pay_deadline)
                 r.error = None
                 r.finished_at = r.updated_at
             elif new_status in (ReservationStatus.FAILED, ReservationStatus.ERROR):
@@ -436,6 +544,8 @@ class ReservationService:
                     result["train_info"],
                     result.get("attempts"),
                     waiting=result.get("waiting") is True,
+                    korail_rsv_id=result.get("korail_rsv_id"),
+                    pay_deadline=result.get("pay_deadline"),
                 )
         return await self._fail_if_active(reservation_id, message)
 
@@ -445,6 +555,8 @@ class ReservationService:
         train_info: str,
         attempts: Optional[int],
         waiting: bool = False,
+        korail_rsv_id: Optional[str] = None,
+        pay_deadline: Optional[str] = None,
     ) -> bool:
         with self.db.session() as s:
             r = s.get(Reservation, reservation_id)
@@ -457,6 +569,8 @@ class ReservationService:
             r.status = ReservationStatus.SUCCESS.value
             r.result_text = train_info
             r.waitlisted = waiting
+            r.korail_rsv_id = korail_rsv_id
+            r.pay_deadline = pay_deadline_utc(pay_deadline)
             r.error = None
             if attempts is not None:
                 r.attempts = max(r.attempts or 0, attempts)

@@ -109,6 +109,7 @@ class Messages:
 열차종류 : {trainTypeShow}
 객실종류 : {specialInfoShow}
 예약대기 : {waitlistShow}
+인근역 : {nearbyShow}
 ===================
 
 '예'를 선택하시면 예약을 시작합니다.
@@ -157,6 +158,25 @@ https://www.korail.com/ticket/reservation/list
 📱 신청 내역 확인 / 취소:
 코레일톡 → 오른쪽 상단 메뉴 → 승차권 예매 → 예약 승차권 조회/취소
 """
+        NEARBY_NOTE: str = (
+            "인근역 포함 예약입니다. 위 열차 정보의 실제 출발·도착역을 확인하세요."
+        )
+        PAYMENT_REMINDER: str = """
+⏰ 결제 기한이 곧 끝납니다 ({deadline}까지)
+{route}
+{reserveInfo}
+
+기한 안에 결제하지 않으면 예약이 자동으로 취소됩니다.
+🌐 https://www.korail.com/ticket/reservation/list
+"""
+        KORAIL_CANCEL_CONFIRM: str = (
+            "코레일에서 이 예약을 취소할까요? 취소한 좌석은 되돌릴 수 없습니다."
+        )
+        KORAIL_CANCELLED: str = "코레일 예약을 취소했습니다."
+        KORAIL_CANCEL_NEEDS_LOGIN: str = (
+            "코레일 로그인 정보가 없습니다. /start 로 다시 로그인한 뒤 "
+            "취소 버튼을 다시 눌러주세요."
+        )
         RESERVE_FINISHED: str = "예약이 취소되었습니다."
 
     class Error:

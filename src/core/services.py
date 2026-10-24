@@ -7,7 +7,12 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from .auth import AuthService, KorailLogin, default_korail_login
+from .auth import (
+    AuthService,
+    KorailLogin,
+    default_korail_cancel,
+    default_korail_login,
+)
 from .crypto import CredentialVault
 from .db import Database
 from .egress import EgressPool, FileGate, MemoryGate, RedisGate, file_gate_path
@@ -110,6 +115,7 @@ def build_services(
         max_duration=settings.reservation_timeout,
         egresses=egresses,
         device_for=users.korail_device,
+        korail_cancel=functools.partial(default_korail_cancel, egresses=egresses),
     )
     return Services(
         settings=settings,
@@ -161,12 +167,19 @@ async def check_lost_workers(services: Services) -> None:
         logger.error(f"Lost worker check failed: {e}")
 
 
+async def check_payment_deadlines(services: Services) -> None:
+    try:
+        await services.reservations.notify_payment_deadlines()
+    except Exception as e:
+        logger.error(f"Payment deadline check failed: {e}")
+
+
 async def housekeeping_loop(
     services: Services,
     interval: int = HOUSEKEEPING_INTERVAL_SECONDS,
     lost_worker_interval: int = LOST_WORKER_CHECK_SECONDS,
 ) -> None:
-    """정리 작업은 interval마다, 워커 종료 감지(Celery)는 lost_worker_interval마다"""
+    """정리 작업은 interval마다, 워커 종료 감지(Celery)·결제 기한 알림은 lost_worker_interval마다"""
     loop = asyncio.get_running_loop()
     last_housekeeping = None
     while True:
@@ -175,4 +188,5 @@ async def housekeeping_loop(
             await run_housekeeping(services)
             last_housekeeping = now
         await check_lost_workers(services)
+        await check_payment_deadlines(services)
         await asyncio.sleep(min(interval, lost_worker_interval))

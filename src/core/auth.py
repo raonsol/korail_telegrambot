@@ -93,6 +93,73 @@ def default_korail_login(
     return ok, handler.loginError
 
 
+def default_korail_cancel(
+    korail_id: str,
+    password: str,
+    rsv_id: str,
+    egresses: Optional[EgressPool] = None,
+    handler_cls=None,
+    *,
+    device: Optional[dict] = None,
+) -> bool:
+    """코레일 예약(결제 전) 취소 (그 계정의 예약과 같은 출구·기기로 요청)
+
+    Returns:
+        취소했으면 True, 코레일 결제 대기 목록에 없으면(결제·취소·만료) False
+
+    Raises:
+        KorailUnavailable: 출구가 코레일 차단으로 쉬는 중이거나 이번 요청이 차단됨
+        KorailPasswordChangeRequired: 코레일 비밀번호 변경 안내에 걸림
+        ServiceError: 코레일 로그인 실패 또는 코레일이 취소를 거절함
+    """
+    from pykorail import AccessRestrictedError, KorailError
+
+    from telegramBot.korail_client import BLOCKED_LOGIN_MESSAGE, ReserveHandler
+
+    ReserveHandler = handler_cls or ReserveHandler
+    egress = egresses.for_account(korail_id) if egresses else None
+    gate = egresses.gate(egress.id) if egress else None
+    if gate is not None and gate.blocked_for() > 0:
+        raise KorailUnavailable(BLOCKED_LOGIN_MESSAGE)
+
+    handler = (
+        ReserveHandler(proxy_url=egress.proxy_url, egress_id=egress.id, device=device)
+        if egress
+        else ReserveHandler(device=device)
+    )
+    try:
+        if not handler.login(korail_id, password):
+            if handler.loginBlocked is True:
+                if gate is not None:
+                    gate.report_block()
+                raise KorailUnavailable(handler.loginError)
+            if getattr(handler, "loginPasswordChange", False) is True:
+                raise KorailPasswordChangeRequired(handler.loginError)
+            raise ServiceError(
+                f"코레일 로그인에 실패했습니다. {handler.loginError}".strip(),
+                code="KORAIL_LOGIN_FAILED",
+            )
+        try:
+            return handler.cancel_reservation(rsv_id)
+        except AccessRestrictedError:
+            if gate is not None:
+                gate.report_block()
+            raise KorailUnavailable(BLOCKED_LOGIN_MESSAGE)
+        except KorailError as e:
+            raise ServiceError(
+                f"코레일이 취소를 거절했습니다: {e.msg or e}",
+                code="KORAIL_CANCEL_FAILED",
+            )
+        except Exception as e:  # 연결 실패, 코레일 외 HTTP 오류 등
+            logger.error(f"Korail cancel failed for {rsv_id}: {e}")
+            raise ServiceError(
+                "코레일 서버에 연결하지 못했습니다. 잠시 후 다시 시도해주세요.",
+                code="KORAIL_CANCEL_FAILED",
+            )
+    finally:
+        handler.close()
+
+
 def _login_result(result) -> tuple[bool, str]:
     if isinstance(result, tuple):
         return bool(result[0]), result[1] or ""

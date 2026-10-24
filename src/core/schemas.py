@@ -43,6 +43,17 @@ def now_kst() -> datetime:
     return datetime.now(KST)
 
 
+def pay_deadline_utc(value: Optional[str]) -> Optional[datetime]:
+    """워커가 보고한 결제 기한(KST ``YYYYMMDDHHMMSS``)을 DB 기준(naive UTC)으로"""
+    if not value:
+        return None
+    try:
+        local = datetime.strptime(value, "%Y%m%d%H%M%S").replace(tzinfo=KST)
+    except ValueError:
+        return None
+    return local.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 # 휴대폰 번호 입력 안내 (하이픈은 있어도 없어도 됨)
 PHONE_FORMAT_HINT = "010-1234-5678 또는 01012345678"
 # 숫자 사이 구분자로 허용하는 문자 (하이픈, 공백, 점)
@@ -119,6 +130,8 @@ class ReservationRequest(BaseModel):
     seat_type: SeatTypeKey = "general"
     # 범위 안의 열차가 모두 매진이면 (일반실) 예약대기 신청. 특실만 예약에는 적용하지 않음
     allow_waitlist: bool = False
+    # 인근역(코레일 앱의 "인접역") 출발·도착 열차도 예약 (예: 용산→대전에 서울→서대전)
+    include_nearby: bool = False
 
     @field_validator("dep_date", mode="before")
     @classmethod
@@ -182,17 +195,30 @@ class ReservationOut(BaseModel):
     train_type_label: str
     seat_type_label: str
     allow_waitlist: bool = False
+    include_nearby: bool = False
     attempts: int
     result_text: Optional[str] = None
     # 좌석 대신 예약대기를 신청함 (status=success)
     waitlisted: bool = False
     error: Optional[str] = None
+    # 예약 후 관리 (성공한 예약): 코레일 예약번호, 결제 기한, 코레일에서 취소한 시각
+    korail_rsv_id: Optional[str] = None
+    pay_deadline: Optional[datetime] = None
+    korail_cancelled_at: Optional[datetime] = None
+    # 이 서비스에서 코레일 예약을 취소할 수 있는지
+    korail_cancellable: bool = False
     created_at: datetime
     updated_at: datetime
     finished_at: Optional[datetime] = None
     is_active: bool
 
-    @field_serializer("created_at", "updated_at", "finished_at")
+    @field_serializer(
+        "created_at",
+        "updated_at",
+        "finished_at",
+        "pay_deadline",
+        "korail_cancelled_at",
+    )
     def _as_utc(self, value: Optional[datetime]):
         if value is None:
             return None
@@ -217,10 +243,19 @@ class ReservationOut(BaseModel):
             train_type_label=TRAIN_TYPE_LABELS.get(r.train_type, r.train_type),
             seat_type_label=SEAT_TYPE_LABELS.get(r.seat_type, r.seat_type),
             allow_waitlist=bool(r.allow_waitlist),
+            include_nearby=bool(r.include_nearby),
             attempts=r.attempts or 0,
             result_text=r.result_text,
             waitlisted=bool(r.waitlisted),
             error=r.error,
+            korail_rsv_id=r.korail_rsv_id,
+            pay_deadline=r.pay_deadline,
+            korail_cancelled_at=r.korail_cancelled_at,
+            korail_cancellable=(
+                r.status == ReservationStatus.SUCCESS.value
+                and bool(r.korail_rsv_id)
+                and r.korail_cancelled_at is None
+            ),
             created_at=r.created_at,
             updated_at=r.updated_at,
             finished_at=r.finished_at,
@@ -239,6 +274,9 @@ class WorkerEvent(BaseModel):
     train_info: Optional[str] = None
     # success 일 때 좌석이 아니라 예약대기를 신청했는지
     waiting: bool = False
+    # success 일 때 코레일 예약번호와 결제 기한 (KST YYYYMMDDHHMMSS, 예약대기는 없음)
+    korail_rsv_id: Optional[str] = Field(default=None, max_length=20)
+    pay_deadline: Optional[str] = Field(default=None, max_length=14)
 
 
 class Owner(BaseModel):

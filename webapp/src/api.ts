@@ -27,11 +27,19 @@ export interface Reservation {
   seat_type_label: string
   /** 예약 생성 시 고른 예약대기 사용 여부 */
   allow_waitlist: boolean
+  /** 인근역 출발·도착 열차도 예약 (코레일 앱의 "인접역") */
+  include_nearby: boolean
   attempts: number
   result_text: string | null
   /** 좌석 대신 예약대기를 신청함 (status === 'success') */
   waitlisted: boolean
   error: string | null
+  /** 예약 후 관리: 코레일 예약번호, 결제 기한, 코레일에서 취소한 시각 */
+  korail_rsv_id: string | null
+  pay_deadline: string | null
+  korail_cancelled_at: string | null
+  /** 이 앱에서 코레일 예약을 취소할 수 있음 */
+  korail_cancellable: boolean
   created_at: string
   updated_at: string
   finished_at: string | null
@@ -47,6 +55,7 @@ export interface ReservationInput {
   train_type: TrainType
   seat_type: SeatType
   allow_waitlist: boolean
+  include_nearby: boolean
 }
 
 export interface Me {
@@ -155,6 +164,10 @@ export const Api = {
     api<Reservation>('/api/reservations', { method: 'POST', body: input }),
   cancelReservation: (id: string) =>
     api<Reservation>(`/api/reservations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  cancelKorailReservation: (id: string) =>
+    api<Reservation>(`/api/reservations/${encodeURIComponent(id)}/korail-cancel`, {
+      method: 'POST',
+    }),
   cancelAll: (scope: 'mine' | 'all' = 'mine') =>
     api<Reservation[]>(`/api/reservations?scope=${scope}`, { method: 'DELETE' }),
 

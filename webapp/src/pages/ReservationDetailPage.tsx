@@ -31,6 +31,14 @@ export function ReservationDetailPage() {
     },
   })
 
+  const korailCancel = useMutation({
+    mutationFn: () => Api.cancelKorailReservation(id),
+    onSuccess: (reservation) => {
+      queryClient.setQueryData(['reservation', id], reservation)
+      queryClient.invalidateQueries({ queryKey: ['reservations'] })
+    },
+  })
+
   const r = query.data
 
   return (
@@ -42,7 +50,11 @@ export function ReservationDetailPage() {
       ) : (
         <>
           <section className={`hero status-${r.status}`}>
-            <StatusBadge status={r.status} waitlisted={r.waitlisted} />
+            <StatusBadge
+              status={r.status}
+              waitlisted={r.waitlisted}
+              korailCancelled={Boolean(r.korail_cancelled_at)}
+            />
             <div className="hero-route">
               <span>{r.src_station}</span>
               <Icon name="arrow" size={22} />
@@ -62,7 +74,7 @@ export function ReservationDetailPage() {
 
           {justCreated && r.is_active && <PushPrompt />}
 
-          {r.status === 'success' && r.waitlisted && (
+          {r.status === 'success' && r.waitlisted && !r.korail_cancelled_at && (
             <section className="card success-card">
               <h2>예약대기를 신청했습니다</h2>
               {r.result_text && <p className="result-text">{r.result_text}</p>}
@@ -77,12 +89,29 @@ export function ReservationDetailPage() {
             </section>
           )}
 
-          {r.status === 'success' && !r.waitlisted && (
+          {r.status === 'success' && r.korail_cancelled_at && (
+            <section className="card">
+              <h2>코레일 예약을 취소했습니다</h2>
+              {r.result_text && <p className="result-text">{r.result_text}</p>}
+              <p className="muted small">{formatDateTime(r.korail_cancelled_at)}에 취소함</p>
+            </section>
+          )}
+
+          {r.status === 'success' && !r.waitlisted && !r.korail_cancelled_at && (
             <section className="card success-card">
               <h2>예약에 성공했습니다 🎉</h2>
               {r.result_text && <p className="result-text">{r.result_text}</p>}
+              {r.include_nearby && (
+                <p className="muted small">
+                  인근역 포함 예약입니다. 위 열차 정보의 실제 출발·도착역을 확인하세요.
+                </p>
+              )}
               <p>
-                <strong>20분 안에 결제하지 않으면 예약이 취소됩니다.</strong>
+                <strong>
+                  {r.pay_deadline
+                    ? `${formatDateTime(r.pay_deadline)}까지 결제하지 않으면 예약이 취소됩니다.`
+                    : '20분 안에 결제하지 않으면 예약이 취소됩니다.'}
+                </strong>
               </p>
               <a className="button primary block" href={KORAIL_PAYMENT_URL} target="_blank" rel="noreferrer">
                 코레일 홈페이지에서 결제하기
@@ -107,6 +136,14 @@ export function ReservationDetailPage() {
               <dd>{r.seat_type_label}</dd>
               <dt>예약대기</dt>
               <dd>{r.allow_waitlist ? '사용' : '사용 안 함'}</dd>
+              <dt>인근역</dt>
+              <dd>{r.include_nearby ? '포함' : '포함 안 함'}</dd>
+              {r.korail_rsv_id && (
+                <>
+                  <dt>예약번호</dt>
+                  <dd>{r.korail_rsv_id}</dd>
+                </>
+              )}
               <dt>시도 횟수</dt>
               <dd>{r.attempts.toLocaleString()}회</dd>
               <dt>시작</dt>
@@ -123,8 +160,31 @@ export function ReservationDetailPage() {
           </section>
 
           <ErrorBox error={cancel.error} />
+          <ErrorBox error={korailCancel.error} />
 
           <div className="actions">
+            {r.korail_cancellable && (
+              <button
+                className="button danger block"
+                disabled={korailCancel.isPending}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      r.waitlisted
+                        ? '코레일에서 이 예약대기를 취소할까요?'
+                        : '코레일에서 이 예약을 취소할까요? 취소한 좌석은 되돌릴 수 없습니다.',
+                    )
+                  )
+                    korailCancel.mutate()
+                }}
+              >
+                {korailCancel.isPending
+                  ? '코레일에서 취소하는 중…'
+                  : r.waitlisted
+                    ? '코레일 예약대기 취소'
+                    : '코레일 예약 취소'}
+              </button>
+            )}
             {r.is_active ? (
               <button
                 className="button danger block"

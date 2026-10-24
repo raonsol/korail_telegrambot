@@ -18,7 +18,11 @@ export function ReservationCard({
           <span className="route-arrow">→</span>
           {r.dst_station}
         </span>
-        <StatusBadge status={r.status} waitlisted={r.waitlisted} />
+        <StatusBadge
+          status={r.status}
+          waitlisted={r.waitlisted}
+          korailCancelled={Boolean(r.korail_cancelled_at)}
+        />
       </div>
       <div className="card-meta">
         <span>{formatDate(r.dep_date)}</span>

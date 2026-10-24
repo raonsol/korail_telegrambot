@@ -15,7 +15,7 @@ import requests
 from pykorail import ReserveOption, TrainType
 
 from core.egress import EgressGate, NullGate
-from telegramBot.korail_client import ReserveHandler
+from telegramBot.korail_client import ReserveHandler, reservation_details
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,8 @@ class CallbackReporter:
         train_info: Optional[str] = None,
         waiting: bool = False,
         retries: int = 3,
+        korail_rsv_id: Optional[str] = None,
+        pay_deadline: Optional[str] = None,
     ) -> bool:
         payload = {
             "reservation_id": self.reservation_id,
@@ -90,6 +92,10 @@ class CallbackReporter:
             payload["train_info"] = train_info
         if waiting:
             payload["waiting"] = True
+        if korail_rsv_id:
+            payload["korail_rsv_id"] = korail_rsv_id
+        if pay_deadline:
+            payload["pay_deadline"] = pay_deadline
 
         for attempt in range(retries):
             try:
@@ -135,12 +141,19 @@ def result_file(directory: str, reservation_id: str) -> str:
 
 
 def write_result_file(
-    path: str, train_info: str, attempts: int, waiting: bool = False
+    path: str, train_info: str, attempts: int, waiting: bool = False, **korail
 ) -> None:
+    """korail: 코레일 예약번호·결제 기한 (korail_rsv_id, pay_deadline) - 있을 때만"""
     tmp = f"{path}.tmp"
     with open(tmp, "w") as f:
         json.dump(
-            {"train_info": train_info, "attempts": attempts, "waiting": waiting}, f
+            {
+                "train_info": train_info,
+                "attempts": attempts,
+                "waiting": waiting,
+                **korail,
+            },
+            f,
         )
     os.replace(tmp, path)  # 웹 서버가 쓰다 만 파일을 읽지 않도록
 
@@ -181,7 +194,8 @@ def run_reservation(
         reporter: 상태 보고 객체
         should_stop: True를 반환하면 즉시 종료 (Celery 중복 실행 방지용)
         on_success: 성공 직후, 보고 전에 ``on_success(train_info=..., attempts=..., waiting=...)`` 호출
-            (waiting: 좌석 대신 예약대기를 신청함).
+            (waiting: 좌석 대신 예약대기를 신청함). 코레일 예약번호·결제 기한을 알면
+            ``korail_rsv_id=``, ``pay_deadline=``(KST YYYYMMDDHHMMSS)도 넘김.
             보고가 끝내 전달되지 않아도 웹 서버가 결과를 복구할 수 있도록 기록하는 용도
             (subprocess: 결과 파일, Celery: Redis 상태)
         clock: 경과 시간 측정용. ``spec["max_duration"]``(초)을 넘기면 ``failed``로 끝냄
@@ -235,11 +249,25 @@ def _deadline(spec: dict, clock: Callable[[], float]) -> Callable[[], bool]:
     return lambda: clock() - started >= max_duration
 
 
-def _report_success(reporter, attempts, train_info, waiting, sleep, clock) -> bool:
+def _korail_details(reservation) -> dict:
+    """보고·결과 기록에 실을 코레일 예약번호·결제 기한 (아는 것만)"""
+    rsv_id, pay_deadline = reservation_details(reservation)
+    details = {}
+    if rsv_id:
+        details["korail_rsv_id"] = rsv_id
+    if pay_deadline:
+        details["pay_deadline"] = pay_deadline
+    return details
+
+
+def _report_success(
+    reporter, attempts, train_info, waiting, sleep, clock, korail=None
+) -> bool:
     """성공 보고가 전달되거나 거부될 때까지 간격을 늘려 가며 다시 보냄"""
     deadline = clock() + SUCCESS_REPORT_WINDOW_SECONDS
     backoff = 2.0
     extra = {"waiting": True} if waiting else {}
+    extra.update(korail or {})
     while True:
         if reporter.send("success", attempts=attempts, train_info=train_info, **extra):
             return True
@@ -407,6 +435,7 @@ def _run_attempts(
                 maxDepTime=spec["max_dep_time"],
                 allowWaitlist=spec.get("allow_waitlist") is True,
                 beforePage=before_page,
+                includeNearby=spec.get("include_nearby") is True,
             )
         except Exception as e:  # reserve_single_attempt는 보통 예외를 삼키지만 방어
             result = {"success": False, "result": None, "error": str(e)}
@@ -423,9 +452,12 @@ def _run_attempts(
                 )
             else:
                 train_info = str(result["result"])
-            on_success(train_info=train_info, attempts=attempt, waiting=waiting)
+            korail = _korail_details(result["result"])
+            on_success(
+                train_info=train_info, attempts=attempt, waiting=waiting, **korail
+            )
             reported = _report_success(
-                reporter, attempt, train_info, waiting, sleep, clock
+                reporter, attempt, train_info, waiting, sleep, clock, korail
             )
             return {
                 "status": "success",
@@ -433,6 +465,7 @@ def _run_attempts(
                 "train_info": train_info,
                 "waiting": waiting,
                 "reported": reported,
+                **korail,
             }
 
         error = result.get("error") or ""
