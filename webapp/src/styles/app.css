@@ -420,6 +420,14 @@ a.kb-icon-btn {
   margin-left: 6px;
 }
 
+/* 좌석 체크박스 — 글자(✓) 대신 SVG라 폰트에 따라 어긋나지 않음 */
+.kb-seat-check {
+  flex-shrink: 0;
+}
+.kb-seat-check svg {
+  stroke-width: 3;
+}
+
 /* 시트 내용 */
 .kb-sheet-body {
   display: grid;

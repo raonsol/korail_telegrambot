@@ -1,4 +1,5 @@
 import type { SeatSelection } from '../format'
+import { Icon } from './Icon'
 import { Segmented } from './Segmented'
 
 const PRIORITY_OPTIONS: { value: SeatSelection['priority']; label: string; hint: string }[] = [
@@ -37,7 +38,7 @@ export function SeatPicker({
             onClick={() => toggle(key)}
           >
             <span className="kb-seat-check" aria-hidden="true">
-              ✓
+              <Icon name="check" size={14} />
             </span>
             {key === 'general' ? '일반실' : '특실'}
           </button>
