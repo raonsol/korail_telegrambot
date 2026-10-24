@@ -99,3 +99,13 @@ class PushSubscription(Base):
     p256dh: Mapped[str] = mapped_column(String(255))
     auth: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class AppSetting(Base):
+    """관리자 화면에서 바꾼 운영 설정 (없으면 환경변수·코드 기본값, core/app_settings.py)"""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[str] = mapped_column(Text)  # JSON
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

@@ -1,10 +1,11 @@
 """관리자: 사용자 관리"""
 
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import APIRouter, Response
 from pydantic import BaseModel, Field
 
+from core.app_settings import SettingOut
 from core.errors import ValidationFailed
 from core.schemas import UserOut
 
@@ -61,3 +62,19 @@ def delete_user(user_id: str, _: AdminDep, services: ServicesDep):
     services.users.delete(user_id)
     services.auth.revoke_user_sessions(user_id)
     return Response(status_code=204)
+
+
+class SettingsUpdateIn(BaseModel):
+    """바꿀 설정만 보냄. 값이 null 이면 기본값(환경변수)으로 되돌림"""
+
+    values: dict[str, Optional[Union[int, float]]]
+
+
+@router.get("/settings", response_model=list[SettingOut])
+def list_settings(_: AdminDep, services: ServicesDep):
+    return services.app_settings.describe()
+
+
+@router.patch("/settings", response_model=list[SettingOut])
+def update_settings(body: SettingsUpdateIn, _: AdminDep, services: ServicesDep):
+    return services.app_settings.update(body.values)

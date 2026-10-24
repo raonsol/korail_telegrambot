@@ -113,6 +113,24 @@ export interface AdminUser {
   last_login_at: string | null
 }
 
+/** 관리자 운영 설정 (core/app_settings.py) */
+export interface AdminSetting {
+  key: string
+  group: string
+  label: string
+  unit: string
+  help: string
+  value: number
+  /** 환경변수·코드 기본값 */
+  default: number
+  min: number
+  max: number
+  /** 1이면 정수만 */
+  step: number
+  /** 관리자가 바꾼 값인지 */
+  overridden: boolean
+}
+
 /** 보낸 항목만 바뀜. telegram_linked는 false(연결 해제)만 가능 */
 export interface AdminUserPatch {
   name?: string
@@ -212,4 +230,9 @@ export const Api = {
   updateUser: (id: string, patch: AdminUserPatch) =>
     api<AdminUser>(`/api/admin/users/${id}`, { method: 'PATCH', body: patch }),
   deleteUser: (id: string) => api<void>(`/api/admin/users/${id}`, { method: 'DELETE' }),
+
+  adminSettings: () => api<AdminSetting[]>('/api/admin/settings'),
+  /** null이면 기본값으로 되돌림 */
+  updateAdminSettings: (values: Record<string, number | null>) =>
+    api<AdminSetting[]>('/api/admin/settings', { method: 'PATCH', body: { values } }),
 }

@@ -166,6 +166,32 @@ def build_reporter(spec: dict) -> CallbackReporter:
     )
 
 
+# 관리자 설정(core/app_settings.py)으로 웹 서버가 spec["runner"]에 싣는 반복 설정
+RUNNER_OPTION_TYPES = {
+    "interval": float,
+    "max_attempts": int,
+    "relogin_after_errors": int,
+    "same_error_limit": int,
+    "progress_every": int,
+}
+
+
+def runner_options(spec: dict) -> dict:
+    """spec["runner"]의 반복 설정을 run_reservation 인자로 (없거나 잘못된 값은 기본값 사용)"""
+    given = spec.get("runner")
+    if not isinstance(given, dict):
+        return {}
+    options = {}
+    for key, cast in RUNNER_OPTION_TYPES.items():
+        value = given.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        value = cast(value)
+        if value > 0:
+            options[key] = value
+    return options
+
+
 def run_reservation(
     spec: dict,
     reporter: CallbackReporter,

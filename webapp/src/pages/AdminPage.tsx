@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { Api, type AdminUser, type AdminUserPatch, type Reservation } from '../api'
+import { Api, type AdminSetting, type AdminUser, type AdminUserPatch, type Reservation } from '../api'
 import { ErrorBox, Spinner } from '../components/Feedback'
 import { Icon } from '../components/Icon'
 import { Logo } from '../components/Layout'
@@ -20,12 +20,13 @@ import {
   timeRange,
 } from '../format'
 
-type Tab = 'reservations' | 'users'
+type Tab = 'reservations' | 'users' | 'settings'
 type StatusFilter = 'all' | 'active' | 'success' | 'failed' | 'cancelled'
 type Sort = 'started' | 'date' | 'attempts'
 
 const RESERVATIONS_KEY = ['reservations', 'all', 'all']
 const USERS_KEY = ['admin', 'users']
+const SETTINGS_KEY = ['admin', 'settings']
 
 const FILTERS: { value: StatusFilter; label: string; match: (r: Reservation) => boolean }[] = [
   { value: 'all', label: '전체', match: () => true },
@@ -121,6 +122,14 @@ export function AdminPage() {
           >
             사용자
           </button>
+          <button
+            role="tab"
+            aria-selected={tab === 'settings'}
+            className={tab === 'settings' ? 'is-active' : ''}
+            onClick={() => setTab('settings')}
+          >
+            설정
+          </button>
         </div>
         <span className="kb-admin__spacer" />
         {reservations.dataUpdatedAt > 0 && (
@@ -140,8 +149,10 @@ export function AdminPage() {
       <main className="kb-admin__main">
         {tab === 'reservations' ? (
           <ReservationsTab query={reservations} users={users.data ?? []} />
-        ) : (
+        ) : tab === 'users' ? (
           <UsersTab query={users} reservations={reservations.data ?? []} />
+        ) : (
+          <SettingsTab />
         )}
       </main>
     </div>
@@ -723,4 +734,158 @@ function UserEditDialog({
       </form>
     </Dialog>
   )
+}
+
+/** 운영 설정 — 바꾼 항목만 보냄. 예약 한도는 바로, 워커 설정은 새로 시작하는 예약부터 */
+function SettingsTab() {
+  const queryClient = useQueryClient()
+  const query = useQuery({ queryKey: SETTINGS_KEY, queryFn: Api.adminSettings })
+  // 입력 중인 값 (문자열 그대로 두어 지우고 다시 쓰는 중에도 막지 않음)
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const save = useMutation({
+    mutationFn: Api.updateAdminSettings,
+    onSuccess: (settings) => {
+      queryClient.setQueryData(SETTINGS_KEY, settings)
+      setDrafts({})
+    },
+  })
+
+  const settings = query.data ?? []
+  const problems: Record<string, string> = {}
+  const changes: Record<string, number | null> = {}
+  for (const s of settings) {
+    const draft = drafts[s.key]
+    if (draft === undefined) continue
+    const problem = checkSetting(s, draft)
+    if (problem) problems[s.key] = problem
+    else if (Number(draft) !== s.value) changes[s.key] = Number(draft)
+  }
+  const changedCount = Object.keys(changes).length
+  const invalid = Object.keys(problems).length > 0
+  const groups = [...new Set(settings.map((s) => s.group))]
+
+  const reset = (s: AdminSetting) => save.mutate({ [s.key]: null })
+
+  return (
+    <>
+      <div className="kb-pagehead">
+        <div>
+          <h1>설정</h1>
+          <p className="kb-hint">
+            예약 한도는 바로 적용되고, 시도 설정과 분당 조회 수는 새로 시작하는 예약부터 적용됩니다.
+            진행 중인 예약은 시작할 때의 값을 유지합니다.
+          </p>
+        </div>
+      </div>
+
+      <ErrorBox error={query.error ?? save.error} />
+
+      {query.isPending ? (
+        <Spinner />
+      ) : (
+        <form
+          className="kb-settings-form"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (changedCount > 0 && !invalid) save.mutate(changes)
+          }}
+        >
+          {groups.map((group) => (
+            <section key={group} className="kb-card kb-card--flush kb-settings-group">
+              <h2>{group}</h2>
+              {settings
+                .filter((s) => s.group === group)
+                .map((s) => {
+                  const draft = drafts[s.key] ?? String(s.value)
+                  const id = `setting-${s.key}`
+                  return (
+                    <div key={s.key} className="kb-setting-row">
+                      <div className="kb-setting-row__text">
+                        <label htmlFor={id}>
+                          {s.label}
+                          {s.overridden && <span className="kb-setting-row__badge">변경됨</span>}
+                        </label>
+                        <p className="kb-hint">{s.help}</p>
+                        <p className="kb-setting-row__meta">
+                          기본값 {formatNumber(s.default)}
+                          {s.unit} · 범위 {formatNumber(s.min)}~{formatNumber(s.max)}
+                          {derivedHint(s.key, Number(draft))}
+                          {s.overridden && (
+                            <button
+                              type="button"
+                              className="kb-link-btn"
+                              disabled={save.isPending}
+                              onClick={() => reset(s)}
+                            >
+                              기본값으로
+                            </button>
+                          )}
+                        </p>
+                        {problems[s.key] && <p className="kb-setting-row__error">{problems[s.key]}</p>}
+                      </div>
+                      <div className="kb-setting-row__input">
+                        <input
+                          id={id}
+                          className={`kb-input kb-input--num${problems[s.key] ? ' is-invalid' : ''}`}
+                          type="number"
+                          inputMode={s.step === 1 ? 'numeric' : 'decimal'}
+                          min={s.min}
+                          max={s.max}
+                          step={s.step}
+                          value={draft}
+                          aria-invalid={Boolean(problems[s.key])}
+                          onChange={(e) => setDrafts((d) => ({ ...d, [s.key]: e.target.value }))}
+                        />
+                        <span>{s.unit}</span>
+                      </div>
+                    </div>
+                  )
+                })}
+            </section>
+          ))}
+
+          <div className="kb-settings-actions">
+            <button
+              type="button"
+              className="kb-btn kb-btn--ghost"
+              disabled={Object.keys(drafts).length === 0 || save.isPending}
+              onClick={() => setDrafts({})}
+            >
+              되돌리기
+            </button>
+            <button
+              className="kb-btn kb-btn--primary"
+              disabled={changedCount === 0 || invalid || save.isPending}
+            >
+              {save.isPending ? '저장하는 중…' : changedCount ? `${changedCount}개 저장` : '저장'}
+            </button>
+          </div>
+        </form>
+      )}
+    </>
+  )
+}
+
+function checkSetting(s: AdminSetting, draft: string): string | null {
+  if (draft.trim() === '') return '값을 입력해주세요.'
+  const value = Number(draft)
+  if (!Number.isFinite(value)) return '숫자를 입력해주세요.'
+  if (value < s.min || value > s.max) return `${formatNumber(s.min)}~${formatNumber(s.max)} 사이로 입력해주세요.`
+  const steps = value / s.step
+  if (Math.abs(steps - Math.round(steps)) > 1e-9) {
+    return s.step === 1 ? '정수를 입력해주세요.' : `${s.step} 단위로 입력해주세요.`
+  }
+  return null
+}
+
+function formatNumber(n: number): string {
+  return n.toLocaleString('ko-KR', { maximumFractionDigits: 2 })
+}
+
+/** 간격·분당 횟수를 초당·분당으로 바꿔 보여줌 */
+function derivedHint(key: string, value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return ''
+  if (key === 'attempt_interval') return ` · 예약 1건당 최대 분당 ${formatNumber(60 / value)}회`
+  if (key === 'korail_egress_rpm') return ` · 출구당 초당 ${formatNumber(value / 60)}회`
+  return ''
 }

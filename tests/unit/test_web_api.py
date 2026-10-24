@@ -619,3 +619,46 @@ class TestTrainsApi:
         }
         response = await client.get("/api/trains", params={**base, **params})
         assert response.status_code == 422
+
+
+class TestAdminSettingsApi:
+    @pytest.mark.asyncio
+    async def test_admin_reads_and_updates_settings(self, client, services):
+        await _admin_login(client)
+
+        listed = await client.get("/api/admin/settings")
+        assert listed.status_code == 200
+        by_key = {s["key"]: s for s in listed.json()}
+        assert by_key["same_error_limit"]["value"] == 10
+        assert by_key["attempt_interval"]["step"] == 0.5
+        assert by_key["same_error_limit"]["group"] == "예약 시도"
+
+        updated = await client.patch(
+            "/api/admin/settings",
+            json={"values": {"same_error_limit": 4, "attempt_interval": 1.5}},
+        )
+        assert updated.status_code == 200, updated.text
+        by_key = {s["key"]: s for s in updated.json()}
+        assert by_key["same_error_limit"]["value"] == 4
+        assert by_key["same_error_limit"]["overridden"] is True
+        assert services.reservations.runner_options["interval"] == 1.5
+
+        reset = await client.patch(
+            "/api/admin/settings", json={"values": {"same_error_limit": None}}
+        )
+        assert {s["key"]: s for s in reset.json()}["same_error_limit"]["value"] == 10
+
+        bad = await client.patch(
+            "/api/admin/settings", json={"values": {"same_error_limit": 0}}
+        )
+        assert bad.status_code == 422
+        assert "같은 오류 중단 기준" in bad.json()["message"]
+
+    @pytest.mark.asyncio
+    async def test_non_admin_forbidden(self, client):
+        await _login(client)
+        assert (await client.get("/api/admin/settings")).status_code == 403
+        response = await client.patch(
+            "/api/admin/settings", json={"values": {"same_error_limit": 3}}
+        )
+        assert response.status_code == 403
