@@ -148,8 +148,11 @@ export const Api = {
   updateSettings: (settings: { telegram_notify?: boolean }) =>
     api<Me>('/api/auth/me/settings', { method: 'PATCH', body: settings }),
 
-  reservations: (status: 'active' | 'history' | 'all', scope: 'mine' | 'all' = 'mine') =>
-    api<Reservation[]>(`/api/reservations?status=${status}&scope=${scope}`),
+  reservations: (
+    status: 'active' | 'history' | 'all',
+    scope: 'mine' | 'all' = 'mine',
+    limit = 100,
+  ) => api<Reservation[]>(`/api/reservations?status=${status}&scope=${scope}&limit=${limit}`),
   reservation: (id: string) => api<Reservation>(`/api/reservations/${encodeURIComponent(id)}`),
   createReservation: (input: ReservationInput) =>
     api<Reservation>('/api/reservations', { method: 'POST', body: input }),

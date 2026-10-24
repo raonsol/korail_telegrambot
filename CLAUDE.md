@@ -123,10 +123,14 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 #### Web App (`webapp/`)
 - Vite + React + TypeScript, TanStack Query, react-router (basename `/app`)
 - `src/sw.ts`: Workbox precache (offline shell), push + notificationclick handlers (`injectManifest`)
-- Screens: login (user/admin), home (active + 30-day history), new reservation, detail, settings (push/Telegram notify/install), admin (users, all reservations)
+- Screens: login (user/admin), home (active + 30-day history), new reservation, detail, settings (push/Telegram notify/theme/install), admin (desktop tables: all reservations with search/filter/sort/bulk cancel, users)
+- Design system "코레일봇" (rail blue, route line `.kb-route` + ticket `.kb-ticket` motifs): `src/styles/` holds the design handoff CSS verbatim (`colors/typography/spacing/base/components/motifs.css`, all `kb-*` classes + `--*` tokens); app-specific layout goes in `src/styles/app.css` only. Fonts (Pretendard, Martian Mono) are loaded from CDNs in `index.html`
+- Theme: `<html data-theme="light|dark">`, set before render by an inline script in `index.html` and by `src/theme.ts` (system / light / dark, localStorage `theme`)
+- New reservation = an empty ticket that is the form: tapping a field opens a bottom sheet (station grid + search, month calendar, hour-range presets/steppers, train type, seat), no separate confirm step. Times are whole hours (end 24 → `2359`); for today a past start is sent as now + 1 min
 - Seat choice (`components/SeatPicker.tsx`): 일반실/특실 toggles + a priority choice when both are on; `format.ts` `seatSelectionFrom` / `toSeatType` map it to the same four `seat_type` values the API and Telegram use (both → `general`/`special`, one → `*_only`, none → blocked in the form)
+- `format.ts` `parseResultText` reads train no. / times / fare / payment deadline from `result_text` (pykorail `Reservation` repr) for display only; it must tolerate any other text
 - Dates/times are validated in **KST** on both client and server
-- Icons: `npm run generate-icons` from `public/icon.svg`
+- Icons: `public/icon.svg` is the app symbol (ticket design, B안) and also the in-app logo (`Layout.tsx` `Logo`); after changing it run `npm run generate-icons` (PWA PNGs + favicon, background `#1a56d6` in `pwa-assets.config.ts`)
 
 ### Docker Architecture
 
@@ -243,7 +247,7 @@ User types new text → searches again (lastAction stays at 5 until selection)
 - **`station_keyboard.py`**: `search_stations()` (async httpx call) + `create_station_keyboard()` (2-column layout)
 - **`bot.py`**: `_input_src/dst_station()` triggers search, `_select_src/dst_station()` finalizes selection
 - **Two-phase flow**: Text input = search (lastAction unchanged), button click = select (lastAction advances)
-- **`webapp/src/components/StationInput.tsx`**: same rule — a station is confirmed only when chosen from results
+- **`webapp/src/pages/NewReservationPage.tsx` `StationPicker`**: same rule — a station is confirmed only when chosen from the grid (recent + major stations before searching)
 
 ### Conversation Flow Architecture (Telegram)
 

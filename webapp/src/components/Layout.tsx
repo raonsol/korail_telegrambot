@@ -8,51 +8,81 @@ interface LayoutProps {
   title: string
   back?: boolean
   actions?: ReactNode
+  /** 화면 하단에 붙는 버튼 영역 (탭바 대신) */
+  footer?: ReactNode
+  /** 기본: 뒤로 가기가 없는 화면에만 탭바 */
+  tabbar?: boolean
+  contentClassName?: string
   children: ReactNode
 }
 
-export function Layout({ title, back, actions, children }: LayoutProps) {
+export function Logo({ size = 28 }: { size?: number }) {
+  return <img src={`${import.meta.env.BASE_URL}icon.svg`} alt="" width={size} height={size} />
+}
+
+export function Layout({
+  title,
+  back,
+  actions,
+  footer,
+  tabbar = !back && !footer,
+  contentClassName,
+  children,
+}: LayoutProps) {
   const navigate = useNavigate()
   const online = useOnline()
   const { me } = useAuth()
 
   return (
-    <div className="shell">
-      <header className="topbar">
+    <div className={`kb-shell${tabbar ? ' has-tabbar' : ''}`}>
+      <header className={`kb-topbar${back ? ' kb-topbar--back' : ''}`}>
         {back ? (
-          <button className="icon-button" onClick={() => navigate(-1)} aria-label="뒤로">
+          <button
+            className="kb-icon-btn"
+            // 알림 등으로 바로 들어온 경우 돌아갈 화면이 없으면 홈으로
+            onClick={() => (window.history.state?.idx > 0 ? navigate(-1) : navigate('/'))}
+            aria-label="뒤로"
+          >
             <Icon name="back" />
           </button>
         ) : (
-          <span className="topbar-logo" aria-hidden="true">
-            <img src="/app/icon.svg" alt="" width={28} height={28} />
+          <span className="kb-topbar__logo" aria-hidden="true">
+            <Logo />
           </span>
         )}
         <h1>{title}</h1>
-        <div className="topbar-actions">{actions}</div>
+        {actions}
       </header>
 
       {!online && (
-        <div className="offline-banner" role="status">
+        <div className="kb-offline" role="status">
           <Icon name="wifiOff" size={16} /> 오프라인 상태입니다. 연결되면 자동으로 갱신됩니다.
         </div>
       )}
 
-      <main className="content">{children}</main>
+      <main className={`kb-content${contentClassName ? ` ${contentClassName}` : ''}`}>{children}</main>
 
-      <nav className="tabbar" aria-label="메뉴">
-        <Tab to="/" icon="home" label="홈" end />
-        <Tab to="/new" icon="plus" label="새 예약" />
-        {me?.user.is_admin && <Tab to="/admin" icon="shield" label="관리" />}
-        <Tab to="/settings" icon="settings" label="설정" />
-      </nav>
+      {footer && (
+        <div className="kb-actionbar">
+          <div className="kb-actionbar__inner">{footer}</div>
+        </div>
+      )}
+
+      {tabbar && (
+        <nav className="kb-tabbar" aria-label="메뉴">
+          <Tab to="/" icon="home" label="홈" end />
+          <Tab to="/new" icon="plus" label="새 예약" />
+          {me?.user.is_admin && <Tab to="/admin" icon="shield" label="관리" />}
+          <Tab to="/settings" icon="settings" label="설정" />
+        </nav>
+      )}
     </div>
   )
 }
 
 function Tab({ to, icon, label, end }: { to: string; icon: IconName; label: string; end?: boolean }) {
   return (
-    <NavLink to={to} end={end} className={({ isActive }) => `tab${isActive ? ' active' : ''}`}>
+    <NavLink to={to} end={end} className={({ isActive }) => `kb-tab${isActive ? ' is-active' : ''}`}>
       <Icon name={icon} size={22} />
       <span>{label}</span>
     </NavLink>

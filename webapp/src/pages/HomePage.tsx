@@ -23,16 +23,16 @@ export function HomePage() {
   const greeting = me?.user.is_admin ? '관리자' : me?.user.name || me?.user.phone
 
   return (
-    <Layout title="코레일 예약">
-      <p className="greeting">
+    <Layout title="코레일봇" contentClassName="kb-content--fab">
+      <p className="kb-greeting">
         안녕하세요, <strong>{greeting}</strong>님
       </p>
 
-      <section className="section">
-        <div className="section-head">
+      <section className="kb-section kb-section--first">
+        <div className="kb-section-head">
           <h2>진행 중인 예약</h2>
           {active.data && active.data.length > 0 && (
-            <span className="count">{active.data.length}</span>
+            <span className="kb-count">{active.data.length}</span>
           )}
         </div>
         {active.isPending ? (
@@ -42,12 +42,12 @@ export function HomePage() {
         ) : active.data.length === 0 ? (
           <EmptyState title="진행 중인 예약이 없습니다">
             <p>원하는 열차 조건을 등록하면 빈 좌석이 나올 때까지 계속 찾아 예약합니다.</p>
-            <Link to="/new" className="button primary">
-              <Icon name="plus" size={18} /> 새 예약 시작
+            <Link to="/new" className="kb-btn kb-btn--primary">
+              새 예약 시작
             </Link>
           </EmptyState>
         ) : (
-          <div className="list">
+          <div className="kb-list">
             {active.data.map((r) => (
               <ReservationCard key={r.id} reservation={r} />
             ))}
@@ -55,8 +55,8 @@ export function HomePage() {
         )}
       </section>
 
-      <section className="section">
-        <div className="section-head">
+      <section className="kb-section kb-section--near">
+        <div className="kb-section-head">
           <h2>최근 30일 이력</h2>
         </div>
         {history.isPending ? (
@@ -64,9 +64,9 @@ export function HomePage() {
         ) : history.isError ? (
           <ErrorBox error={history.error} />
         ) : history.data.length === 0 ? (
-          <p className="muted">아직 완료된 예약이 없습니다.</p>
+          <p className="kb-muted kb-small">아직 완료된 예약이 없습니다.</p>
         ) : (
-          <div className="list">
+          <div className="kb-list">
             {history.data.map((r) => (
               <ReservationCard key={r.id} reservation={r} />
             ))}
@@ -74,7 +74,7 @@ export function HomePage() {
         )}
       </section>
 
-      <Link to="/new" className="fab" aria-label="새 예약">
+      <Link to="/new" className="kb-fab kb-fab--float" aria-label="새 예약">
         <Icon name="plus" size={26} />
       </Link>
     </Layout>

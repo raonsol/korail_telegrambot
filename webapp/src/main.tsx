@@ -6,6 +6,7 @@ import { ApiError } from './api'
 import { App } from './App'
 import { AuthProvider, ME_KEY, clearSnapshot } from './auth'
 import './styles.css'
+import { watchSystemTheme } from './theme'
 
 // 세션이 만료되면(401) 로그인 화면으로
 function onError(error: unknown) {
@@ -27,6 +28,8 @@ const queryClient = new QueryClient({
     },
   },
 })
+
+watchSystemTheme()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
