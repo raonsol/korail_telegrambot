@@ -123,7 +123,8 @@ export function AdminPage() {
         <span className="kb-admin__spacer" />
         {reservations.dataUpdatedAt > 0 && (
           <span className="kb-caption">
-            관리자 · {kstClock.format(new Date(reservations.dataUpdatedAt))} 기준
+            <span className="kb-admin__role">관리자 · </span>
+            {kstClock.format(new Date(reservations.dataUpdatedAt))} 기준
           </span>
         )}
       </header>

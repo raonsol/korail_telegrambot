@@ -752,8 +752,14 @@ a.kb-icon-btn {
 }
 
 @media (max-width: 720px) {
+  /* 긴 표를 내려도 탭을 바로 바꿀 수 있게 상단바 고정. 화면을 덜 가리도록
+     기준 시각을 로고 옆 한 줄로 올리고(좁으면 말줄임) 여백을 줄임 */
   .kb-admin__head {
-    padding-inline: 16px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    gap: 10px 12px;
+    padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
   }
   .kb-admin__head .kb-tabs {
     order: 3;
@@ -761,9 +767,20 @@ a.kb-icon-btn {
     margin-left: 0;
   }
   .kb-admin__spacer {
-  flex: 1;
-}
-.kb-admin__main {
+    display: none;
+  }
+  .kb-admin__role {
+    display: none;
+  }
+  .kb-admin__head > .kb-caption {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .kb-admin__main {
     padding: 20px 16px 40px;
   }
 }
