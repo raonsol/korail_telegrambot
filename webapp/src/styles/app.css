@@ -264,7 +264,8 @@ a.kb-icon-btn {
 }
 .kb-ticket-form__route {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  /* 역 이름은 글자만큼, 노선은 남는 폭을 모두 (긴 역 이름이면 최소 96px까지 줄어듦) */
+  grid-template-columns: minmax(0, max-content) minmax(96px, 1fr) minmax(0, max-content);
   align-items: center;
   gap: 8px;
   margin: 6px 0 14px;
@@ -311,22 +312,24 @@ a.kb-icon-btn {
 }
 .kb-route--mini {
   grid-template-columns: minmax(40px, 1fr);
-  width: 64px;
 }
 .kb-route--mini .kb-route__track {
   margin: 0 6px;
 }
-/* 노선 바로 아래 출발/도착 바꾸기 (노선은 세로 가운데 그대로) */
+/* 출발/도착 바꾸기 — 노선 한가운데 얹힘 */
 .kb-ticket-form__rail {
   position: relative;
+  display: grid;
+  align-items: center;
+  min-height: 36px;
 }
 .kb-swap-btn {
   position: absolute;
-  top: calc(50% + 10px);
+  top: 50%;
   left: 50%;
-  width: 32px;
-  height: 32px;
-  transform: translateX(-50%);
+  width: 34px;
+  height: 34px;
+  transform: translate(-50%, -50%);
   transition: transform var(--dur) var(--ease-out), background var(--dur-fast);
 }
 .kb-swap-btn svg {
@@ -336,14 +339,15 @@ a.kb-icon-btn {
   background: var(--brand-soft);
 }
 .kb-swap-btn:active {
-  transform: translateX(-50%) scale(0.92);
+  transform: translate(-50%, -50%) scale(0.92);
 }
 .kb-swap-btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
+/* 노선이 비치지 않도록 불투명하게 두고 색만 흐리게 */
 .kb-swap-btn:disabled {
-  opacity: 0.4;
+  color: var(--text-3);
   cursor: default;
   background: var(--surface);
 }
