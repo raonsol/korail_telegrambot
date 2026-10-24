@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import symbolUrl from '../assets/symbol.svg'
 import { useAuth } from '../auth'
 import { useOnline } from '../hooks'
 import { Icon, type IconName } from './Icon'
@@ -18,7 +17,7 @@ interface LayoutProps {
 }
 
 export function Logo({ size = 28 }: { size?: number }) {
-  return <img src={symbolUrl} alt="" width={size} height={size} />
+  return <img src={`${import.meta.env.BASE_URL}icon.svg`} alt="" width={size} height={size} />
 }
 
 export function Layout({

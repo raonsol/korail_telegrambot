@@ -130,7 +130,7 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 - Seat choice (`components/SeatPicker.tsx`): 일반실/특실 toggles + a priority choice when both are on; `format.ts` `seatSelectionFrom` / `toSeatType` map it to the same four `seat_type` values the API and Telegram use (both → `general`/`special`, one → `*_only`, none → blocked in the form)
 - `format.ts` `parseResultText` reads train no. / times / fare / payment deadline from `result_text` (pykorail `Reservation` repr) for display only; it must tolerate any other text
 - Dates/times are validated in **KST** on both client and server
-- Icons: `npm run generate-icons` from `public/icon.svg`
+- Icons: `public/icon.svg` is the app symbol (ticket design, B안) and also the in-app logo (`Layout.tsx` `Logo`); after changing it run `npm run generate-icons` (PWA PNGs + favicon, background `#1a56d6` in `pwa-assets.config.ts`)
 
 ### Docker Architecture
 
