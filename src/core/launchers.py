@@ -130,7 +130,8 @@ class SubprocessLauncher:
             return len(self._processes)
 
     def recover_success(self, reservation_id: str) -> Optional[dict]:
-        """워커가 남긴 성공 결과 파일 ({"train_info", "attempts", "waiting"}). 읽으면 삭제"""
+        """워커가 남긴 성공 결과 파일 ({"train_info", "attempts", "waiting"}
+        + 있으면 "korail_rsv_id", "pay_deadline"). 읽으면 삭제"""
         from .runner import read_result_file, result_file
 
         path = result_file(LOGS_DIR, reservation_id)
@@ -217,7 +218,8 @@ class CeleryLauncher:
         ]
 
     def recover_success(self, reservation_id: str) -> Optional[dict]:
-        """태스크가 Redis에 남긴 성공 결과 ({"train_info", "attempts", "waiting"})"""
+        """태스크가 Redis에 남긴 성공 결과 ({"train_info", "attempts", "waiting"}
+        + 있으면 "korail_rsv_id", "pay_deadline")"""
         if not self.redis_client:
             return None
         state = self.redis_client.hgetall(state_key(reservation_id))
@@ -227,6 +229,11 @@ class CeleryLauncher:
             "train_info": state["train_info"],
             "attempts": int(state.get("attempts") or 0),
             "waiting": state.get("waiting") == "1",
+            **{
+                key: state[key]
+                for key in ("korail_rsv_id", "pay_deadline")
+                if state.get(key)
+            },
         }
 
 

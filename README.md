@@ -13,6 +13,9 @@
 - 📊 **실시간 업데이트**: 웹훅 기반 상태 알림
 - 🌐 **웹앱(PWA)**: 홈 화면 설치, 오프라인 셸, 푸시 알림, 로그인 화면, 관리자 화면
 - 🗂️ **사용자 DB 관리 / 30일 예약 이력**: SQLite(기본) 또는 PostgreSQL
+- 🔀 **인근역 포함**: 코레일 앱의 "인접역"처럼 인근역 출발·도착 열차도 예약 (예: 용산→대전에 서울→서대전). 기본은 꺼짐
+- 🧾 **예약 후 관리**: 성공한 예약을 웹/텔레그램에서 바로 코레일 취소(결제 전), 결제 기한 5분 전 알림
+- 🎫 **내 승차권**: 내 코레일 계정의 결제 대기 예약·예약대기·발권 승차권을 코레일톡에서 직접 잡은 것까지 한 번에 조회, 결제 전 예약 취소 (웹 "승차권" 탭, 텔레그램 `/mytickets`)
 
 ## 아키텍처 개요
 
@@ -279,6 +282,9 @@ GET    /api/reservations?status=active|history|all&scope=mine|all
 POST   /api/reservations
 GET    /api/reservations/{id}
 DELETE /api/reservations/{id}
+POST   /api/reservations/{id}/korail-cancel   (성공한 예약을 코레일에서 취소, 결제 전)
+GET    /api/korail/account?refresh=   (내 코레일 결제 대기 예약·발권 승차권, 계정별 60초 캐시)
+POST   /api/korail/reservations/{rsv_id}/cancel   (코레일 예약번호로 결제 전 예약 취소)
 GET    /api/stations?q=
 GET    /api/events                (SSE)
 POST   /api/push/subscriptions | /api/push/unsubscribe
@@ -291,6 +297,7 @@ GET    /api/admin/users           (관리자)
 - `/help` - 도움말 메시지 표시
 - `/cancel` - 현재 예약 프로세스 취소
 - `/status` - 현재 예약 상태 확인
+- `/mytickets` - 내 코레일 결제 대기 예약·발권 승차권 조회, 결제 전 예약 취소
 
 ## 프로젝트 구조
 
@@ -359,6 +366,7 @@ KORAIL_EGRESS_MAX_ACTIVE=0    # 출구별 동시 예약 수 (0 = 제한 없음)
 - **계정 고정**: 같은 코레일 계정은 예약·로그인 확인(웹/텔레그램) 모두 항상 같은 출구를 씁니다. 출구를 추가·삭제하면 그 출구에 배정된 계정만 옮겨집니다.
 - **차단 대기**: 코레일 차단 응답(code -2000)을 받으면 그 출구의 모든 예약이 5분 → 15분 → 30분 → 60분 쉽니다(2시간 동안 차단이 없으면 처음부터). 다른 출구로 옮기지 않습니다. 한 계정이 여러 IP에서 보이면 그 자체로 매크로 신호이기 때문입니다.
 - **요청 간격**: 출구별로 `KORAIL_EGRESS_RPM`을 넘지 않도록 순서를 정합니다. 예약별 최소 간격(2초)은 그대로입니다.
+- **조회 페이지**: 코레일은 조회 한 번에 열차를 보통 10편만 주므로, 시간 범위 안의 열차를 다 볼 때까지 다음 페이지를 이어 받습니다(시도당 최대 10페이지). 페이지마다 출구 요청 간격을 지키므로 시간 범위가 넓을수록 한 번의 시도가 길어집니다.
 - **상태 공유**: subprocess 모드는 `logs/egress_{ID}.json`(파일 잠금), Celery 모드는 Redis(`egress_*` 키)로 모든 워커가 공유합니다.
 - **프록시**: 직접 소유한 회선의 SOCKS5/HTTP 프록시를 권장합니다(예: Tailscale/WireGuard로 연결한 집 서버의 3proxy). 데이터센터·VPN 출구는 WARP처럼 차단될 수 있습니다. 코레일은 IPv4 전용이므로 프록시의 IPv4 출구가 있어야 합니다.
 - **보안**: 프록시 주소(인증 정보 포함 가능)는 로그에 남기지 않으며, Celery 브로커에는 `WEBAPP_ENC_KEY`로 암호화해 싣습니다.

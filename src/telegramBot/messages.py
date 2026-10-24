@@ -1,5 +1,9 @@
 from dataclasses import dataclass
+from core.schemas import MAX_DAYS_AHEAD
 from version import VERSION
+
+# 코레일 홈페이지 결제 화면 (결제 전 예약 목록)
+KORAIL_PAYMENT_URL = "https://www.korail.com/ticket/reservation/list"
 
 
 @dataclass
@@ -108,6 +112,7 @@ class Messages:
 열차종류 : {trainTypeShow}
 객실종류 : {specialInfoShow}
 예약대기 : {waitlistShow}
+인근역 : {nearbyShow}
 ===================
 
 '예'를 선택하시면 예약을 시작합니다.
@@ -122,13 +127,15 @@ class Messages:
 - 예약 시작 : /start
 - 구독 시작 : /subscribe
 - 예약 상태 확인 : /status
+- 내 코레일 예약·승차권 : /mytickets
 - 전체 취소 : /cancelall
 - 전체 유저 확인 : /allusers
 - 등록 사용자 목록 : /users (관리자)
 - 사용자 등록 : /adduser 010-1234-5678 [이름] (관리자)
 - 사용자 삭제 : /deluser 010-1234-5678 (관리자)
 """
-        RESERVE_SUCCESS: str = """
+        RESERVE_SUCCESS: str = (
+            """
 열차 예약에 성공했습니다!!
 예약에 성공한 열차 정보는 다음과 같습니다.
 ===================
@@ -138,11 +145,14 @@ class Messages:
 20분내에 사이트에서 결제를 완료하지 않으면 예약이 취소되니 서두르세요!
 
 🌐 웹 링크에서 결제하기:
-https://www.korail.com/ticket/reservation/list
+"""
+            + KORAIL_PAYMENT_URL
+            + """
 
 📱 코레일톡 앱에서 결제하기:
 코레일톡 → 오른쪽 상단 메뉴 → 승차권 예매 → 예약 승차권 조회/취소
 """
+        )
         WAITLIST_SUCCESS: str = """
 빈 좌석이 없어 예약대기를 신청했습니다.
 예약대기를 신청한 열차 정보는 다음과 같습니다.
@@ -156,6 +166,32 @@ https://www.korail.com/ticket/reservation/list
 📱 신청 내역 확인 / 취소:
 코레일톡 → 오른쪽 상단 메뉴 → 승차권 예매 → 예약 승차권 조회/취소
 """
+        NEARBY_NOTE: str = (
+            "인근역 포함 예약입니다. 위 열차 정보의 실제 출발·도착역을 확인하세요."
+        )
+        PAYMENT_REMINDER: str = (
+            """
+⏰ 결제 기한이 곧 끝납니다 ({deadline}까지)
+{route}
+{reserveInfo}
+
+기한 안에 결제하지 않으면 예약이 자동으로 취소됩니다.
+🌐 """
+            + KORAIL_PAYMENT_URL
+            + "\n"
+        )
+        KORAIL_CANCELLED: str = "코레일 예약을 취소했습니다."
+        KORAIL_PAYMENT_URL: str = KORAIL_PAYMENT_URL
+        # 코레일 로그인이 필요한 기능 (/mytickets, 코레일 예약 취소)
+        KORAIL_NEEDS_LOGIN: str = (
+            "코레일 로그인 정보가 없습니다. /start 로 다시 로그인한 뒤 다시 시도해주세요."
+        )
+        MYTICKETS_LOADING: str = "코레일에서 예약·승차권을 불러오는 중입니다…"
+        MYTICKETS_MORE: str = '… 외 {count}건은 웹앱 "승차권" 화면에서 볼 수 있습니다.'
+        MYTICKETS_FOOTER: str = (
+            "결제는 기한 안에 코레일에서 직접 해야 합니다.\n"
+            "환불·변경은 코레일톡 앱에서 해주세요."
+        )
         RESERVE_FINISHED: str = "예약이 취소되었습니다."
 
     class Error:
@@ -191,6 +227,10 @@ https://www.korail.com/ticket/reservation/list
 예매 희망일 8자를 입력해주십시오.
 (ex_ 20210124) <- 2021년 1월 24일
 """
+        INPUT_DATE_TOO_FAR: str = (
+            f"코레일은 오늘부터 {MAX_DAYS_AHEAD}일 이내(2개월) 열차만 판매합니다. "
+            "다른 날짜를 선택해주세요."
+        )
         INPUT_DEP_TIME_FAILURE: str = (
             "입력하신 값이 HHMM 형식에 맞지 않습니다. 다시 입력해주세요."
         )

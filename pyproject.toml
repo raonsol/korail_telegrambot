@@ -18,7 +18,7 @@ dependencies = [
     "psycopg[binary]",
     "cryptography",
     # create_korail_client() 가 비공개 client._api._session 을 쓰므로 정확히 고정 (CLAUDE.md 참고)
-    "pykorail==0.2.2",
+    "pykorail==0.4.0",
 ]
 
 [dependency-groups]

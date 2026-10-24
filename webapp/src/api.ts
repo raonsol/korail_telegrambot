@@ -27,11 +27,19 @@ export interface Reservation {
   seat_type_label: string
   /** 예약 생성 시 고른 예약대기 사용 여부 */
   allow_waitlist: boolean
+  /** 인근역 출발·도착 열차도 예약 (코레일 앱의 "인접역") */
+  include_nearby: boolean
   attempts: number
   result_text: string | null
   /** 좌석 대신 예약대기를 신청함 (status === 'success') */
   waitlisted: boolean
   error: string | null
+  /** 예약 후 관리: 코레일 예약번호, 결제 기한, 코레일에서 취소한 시각 */
+  korail_rsv_id: string | null
+  pay_deadline: string | null
+  korail_cancelled_at: string | null
+  /** 이 앱에서 코레일 예약을 취소할 수 있음 */
+  korail_cancellable: boolean
   created_at: string
   updated_at: string
   finished_at: string | null
@@ -48,6 +56,9 @@ export interface Train {
   special_seat: boolean
   /** 매진이지만 (일반실) 예약대기를 받음 */
   waitlist: boolean
+  /** 실제 출발·도착역 (인근역 포함 조회에서는 고른 역과 다를 수 있음) */
+  dep_station: string | null
+  arr_station: string | null
 }
 
 export interface TrainSearch {
@@ -63,6 +74,8 @@ export interface TrainQuery {
   start: string // HHMM, 이 시각 이후 출발
   end: string // HHMM, 이 시각 전 출발
   train_type: TrainType
+  /** 'true' 이면 인근역 출발·도착 열차도 */
+  nearby: 'true' | 'false'
 }
 
 export interface ReservationInput {
@@ -74,6 +87,43 @@ export interface ReservationInput {
   train_type: TrainType
   seat_type: SeatType
   allow_waitlist: boolean
+  include_nearby: boolean
+}
+
+/** "내 승차권" 예약·승차권의 열차 (코레일 예약번호 포함) */
+export interface KorailTrain {
+  rsv_id: string
+  train_no: string
+  train_type: string
+  dep_date: string // YYYYMMDD
+  dep_time: string // HHMM
+  arr_time: string // HHMM
+  dep_station: string
+  arr_station: string
+  price: number
+  seat_count: number
+  /** 코레일봇이 잡은 예약이면 그 예약 기록 id */
+  reservation_id: string | null
+}
+
+/** 코레일 계정의 결제 전 예약 (예약대기 포함) */
+export interface KorailReservation extends KorailTrain {
+  /** 좌석이 아니라 예약대기 (결제 기한 없음) */
+  waiting: boolean
+  pay_deadline: string | null
+}
+
+/** 코레일 계정의 발권된 승차권 */
+export interface KorailTicket extends KorailTrain {
+  car_no: string
+  seats: string // "12A" 또는 "12A~12B"
+}
+
+export interface KorailAccount {
+  korail_id: string
+  reservations: KorailReservation[]
+  tickets: KorailTicket[]
+  fetched_at: string
 }
 
 export interface Me {
@@ -211,6 +261,17 @@ export const Api = {
     api<Reservation>('/api/reservations', { method: 'POST', body: input }),
   cancelReservation: (id: string) =>
     api<Reservation>(`/api/reservations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  cancelKorailReservation: (id: string) =>
+    api<Reservation>(`/api/reservations/${encodeURIComponent(id)}/korail-cancel`, {
+      method: 'POST',
+    }),
+  korailAccount: (refresh = false) =>
+    api<KorailAccount>(`/api/korail/account${refresh ? '?refresh=true' : ''}`),
+  cancelKorailRsv: (rsvId: string) =>
+    // 목록은 다시 받음 (서버 캐시에서 그 예약만 빠지므로 코레일에 다시 묻지 않음)
+    api<void>(`/api/korail/reservations/${encodeURIComponent(rsvId)}/cancel`, {
+      method: 'POST',
+    }),
   cancelAll: (scope: 'mine' | 'all' = 'mine') =>
     api<Reservation[]>(`/api/reservations?scope=${scope}`, { method: 'DELETE' }),
 

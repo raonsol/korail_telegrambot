@@ -20,6 +20,30 @@ class TestTelegramBot:
             services.notifier.add(bot)
             return bot
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "days, accepted", [(0, True), (60, True), (61, False), (-1, False)]
+    )
+    async def test_input_date_within_sale_period(self, bot_instance, days, accepted):
+        """Korail sells trains up to 2 months (today + 60 days) ahead"""
+        from datetime import datetime, timedelta
+        from core.schemas import now_kst
+
+        chat_id = 1
+        bot_instance.userDict[chat_id] = {"lastAction": 4, "trainInfo": {}}
+        bot_instance.send_message = AsyncMock()
+        date = datetime.combine(
+            now_kst().date() + timedelta(days=days), datetime.min.time()
+        )
+
+        await bot_instance._input_date(chat_id, date)
+
+        state = bot_instance.userDict[chat_id]
+        assert (state["lastAction"] == 5) is accepted
+        assert ("depDate" in state["trainInfo"]) is accepted
+        if days > 60:
+            assert "2개월" in bot_instance.send_message.call_args.args[1]
+
     def test_bot_initialization(self, services):
         """Bot keeps only conversation state and delegates reservations to services"""
         with patch("telegramBot.bot.ApplicationBuilder"):

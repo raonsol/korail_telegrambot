@@ -27,6 +27,8 @@ class ReservationEvent:
     # 상태 변경 주체: worker | web | telegram | admin | system
     source: str
     chat_id: Optional[int] = None
+    # status: 상태 변경 | payment_reminder: 결제 기한 임박 | korail_cancelled: 코레일 예약 취소
+    kind: str = "status"
 
     @property
     def status(self) -> str:
@@ -34,7 +36,11 @@ class ReservationEvent:
 
     @property
     def is_terminal_change(self) -> bool:
-        return (not self.reservation.is_active) and self.previous_status != self.status
+        return (
+            self.kind == "status"
+            and (not self.reservation.is_active)
+            and self.previous_status != self.status
+        )
 
 
 class NotificationChannel(Protocol):
@@ -98,11 +104,17 @@ class SSEBroker:
 
 
 def push_message(event: ReservationEvent) -> Optional[dict]:
-    """Web Push 알림 내용 (종료 상태만 알림)"""
+    """Web Push 알림 내용 (종료 상태와 결제 기한 임박만 알림)"""
     r = event.reservation
     route = f"{r.src_station} → {r.dst_station}"
     date = f"{r.dep_date[4:6]}/{r.dep_date[6:]}"
     status = r.status
+    if event.kind == "payment_reminder":
+        title = "⏰ 결제 기한이 곧 끝납니다"
+        body = f"{date} {route}\n{r.result_text or ''}".strip()
+        return {"title": title, "body": body, "url": f"/app/r/{r.id}", "tag": r.id}
+    if event.kind != "status":
+        return None
     if status == ReservationStatus.SUCCESS and r.waitlisted:
         title = "🕒 예약대기 신청 완료"
         body = f"{date} {route}\n좌석이 배정되면 코레일이 알려드립니다.".strip()
@@ -164,7 +176,7 @@ class WebPushChannel:
             return True
 
     async def deliver(self, event: ReservationEvent) -> None:
-        if not event.is_terminal_change:
+        if not event.is_terminal_change and event.kind != "payment_reminder":
             return
         payload = push_message(event)
         if not payload:

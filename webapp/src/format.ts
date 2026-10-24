@@ -29,6 +29,33 @@ export function formatDateTime(iso: string | null): string {
   }).format(new Date(iso))
 }
 
+/** ISO 시각 → KST "오후 11:24" */
+export function formatClock(iso: string): string {
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(iso))
+}
+
+/** 기한까지 남은 시간 ("14분 남음", "1시간 5분 남음") */
+export function timeLeft(iso: string, now: number): string {
+  const minutes = Math.floor((new Date(iso).getTime() - now) / 60_000)
+  if (minutes < 0) return '기한 지남'
+  if (minutes < 1) return '1분 안에 마감'
+  if (minutes < 60) return `${minutes}분 남음`
+  return `${Math.floor(minutes / 60)}시간 ${minutes % 60}분 남음`
+}
+
+export function formatWon(price: number): string {
+  return `${price.toLocaleString()}원`
+}
+
+/** 코레일 열차 번호 "00403" → "403" */
+export function trainNumber(no: string): string {
+  return no.replace(/^0+(?=\d)/, '')
+}
+
 export function relativeTime(iso: string): string {
   const diff = (Date.now() - new Date(iso).getTime()) / 1000
   if (diff < 60) return '방금 전'
@@ -74,6 +101,11 @@ export function formatPhoneInput(value: string): string {
   if (digits.length < 4) return digits
   if (digits.length < 8) return `${digits.slice(0, 3)}-${digits.slice(3)}`
   return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`
+}
+
+/** 화면 색을 정하는 상태 (성공했지만 코레일에서 취소한 예약은 취소 색) */
+export function displayStatus(r: Reservation): ReservationStatus {
+  return r.status === 'success' && r.korail_cancelled_at ? 'cancelled' : r.status
 }
 
 export const KORAIL_PAYMENT_URL =
@@ -150,6 +182,8 @@ export interface ResultInfo {
   arrTime?: string
   fare?: string // "59,800원 · 1석"
   payBy?: string // "오후 2:52"
+  depStation?: string // 실제 출발역 (인근역 포함 예약은 고른 역과 다를 수 있음)
+  arrStation?: string
 }
 
 /**
@@ -162,11 +196,15 @@ export function parseResultText(text: string | null): ResultInfo {
   const times = text.match(/(\d{2}:\d{2})~(\d{2}:\d{2})/)
   const fare = text.match(/([\d,]+)원\((\d+)석\)/)
   const limit = text.match(/구입기한[^,]*?(\d{1,2}:\d{2})/)
+  // 시각 뒤의 "출발역~도착역" (인근역 포함 예약은 고른 역과 다를 수 있음)
+  const stations = text.match(/\d{2}:\d{2}~\d{2}:\d{2}\s+(\S+)~(\S+)/)
   return {
+    depStation: stations?.[1],
+    arrStation: stations?.[2],
     trainNo: train ? `${train[1].trim()} ${train[2]}`.trim() : undefined,
     depTime: times?.[1],
     arrTime: times?.[2],
-    fare: fare ? `${Number(fare[1].replace(/,/g, '')).toLocaleString()}원 · ${fare[2]}석` : undefined,
+    fare: fare ? `${formatWon(Number(fare[1].replace(/,/g, '')))} · ${fare[2]}석` : undefined,
     payBy: limit ? meridiemTime(limit[1]) : undefined,
   }
 }

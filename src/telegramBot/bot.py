@@ -1,5 +1,6 @@
+import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -25,10 +26,12 @@ from .time_keyboard import (
 from .station_keyboard import search_stations, create_station_keyboard
 from config import settings
 from core.auth import default_korail_login
-from core.errors import KorailUnavailable, ServiceError
+from core.errors import KorailPasswordChangeRequired, KorailUnavailable, ServiceError
 from core.notifier import ReservationEvent
 from core.schemas import (
     ADMIN_USER_ID,
+    KST,
+    MAX_DAYS_AHEAD,
     PHONE_FORMAT_HINT,
     SEAT_TYPE_LABELS,
     TRAIN_TYPE_LABELS,
@@ -39,6 +42,7 @@ from core.schemas import (
     format_phone,
     is_valid_phone,
     normalize_phone,
+    now_kst,
 )
 
 logger = logging.getLogger(__name__)
@@ -79,6 +83,10 @@ def is_past_time(time: str):
     time_alt = datetime.strptime(time, "%H%M").time()
     current_time = datetime.now().time()
     return time_alt < current_time
+
+
+# /mytickets 에 종류별로 보여 줄 최대 항목 수 (텔레그램 메시지는 4096자까지)
+MYTICKETS_MAX_ITEMS = 10
 
 
 class TelegramBot:
@@ -143,6 +151,7 @@ class TelegramBot:
         command_handlers = {
             "start": self.start_func,
             "cancel": self.cancel_func,
+            "mytickets": self.my_tickets,
             "subscribe": self.subscribe_user,
             "status": self.get_status_info,
             "cancelall": self.cancel_all,
@@ -233,6 +242,12 @@ class TelegramBot:
             await self._input_waitlist(chat_id, query.data)
         elif query.data.startswith("confirm_"):
             await self._start_reserve(chat_id, query.data)
+        elif query.data == "nearby_toggle":
+            await self._toggle_nearby(chat_id)
+        elif query.data.startswith("kcancel_"):
+            await self._handle_korail_cancel_callback(chat_id, query.data)
+        elif query.data.startswith("kres_"):
+            await self._handle_my_tickets_callback(chat_id, query.data)
         elif query.data.startswith("calendar_"):
             selected, date = await handle_calendar_action(update, context)
             if selected:
@@ -395,8 +410,10 @@ class TelegramBot:
                 }
             )
 
+            self.userDict[chat_id]["userInfo"].pop("korailLogin", None)
             loginSuc, loginError = self._korail_login(username, password)
             if loginSuc:
+                self.userDict[chat_id]["userInfo"]["korailLogin"] = (username, password)
                 msg = Messages.Info.INPUT_DATE
                 self.userDict[chat_id]["lastAction"] = 4
                 await self.send_message(chat_id, msg, reply_markup=create_calendar())
@@ -429,7 +446,7 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
                 # 그 계정의 고정 기기 신원 (예약 워커와 같은 Android ID)
                 device=self.users.korail_device(username),
             )
-        except KorailUnavailable as e:
+        except (KorailUnavailable, KorailPasswordChangeRequired) as e:
             return False, e.message
 
     async def _input_id(self, chat_id, data):
@@ -448,6 +465,8 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
             self.userDict[chat_id]["userInfo"]["korailId"] = format_phone(
                 normalized_data
             )
+            # 새 계정으로 로그인하는 중: 비밀번호 확인 전까지는 로그인한 계정이 없음
+            self.userDict[chat_id]["userInfo"].pop("korailLogin", None)
             self.userDict[chat_id]["userInfo"]["ownerId"] = normalized_data
             self.userDict[chat_id]["userInfo"]["isAdmin"] = False
             self.userDict[chat_id]["lastAction"] = 3
@@ -458,10 +477,13 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
     # 패스워드 입력 함수
     async def _input_pw(self, chat_id, data):
         self.userDict[chat_id]["userInfo"]["korailPw"] = data
+        self.userDict[chat_id]["userInfo"].pop("korailLogin", None)
         username = self.userDict[chat_id]["userInfo"]["korailId"]
         password = self.userDict[chat_id]["userInfo"]["korailPw"]
         loginSuc, loginError = self._korail_login(username, password)
         if loginSuc:
+            # 코레일이 확인한 계정만 /mytickets, 코레일 예약 취소에 씀
+            self.userDict[chat_id]["userInfo"]["korailLogin"] = (username, password)
             owner_id = self.userDict[chat_id]["userInfo"].get("ownerId")
             if owner_id:
                 # 웹에서 시작한 예약 결과도 이 채팅으로 받을 수 있도록 연결
@@ -503,8 +525,11 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
 
     # 출발일 입력 함수 (캘린더 키보드 선택시)
     async def _input_date(self, chat_id, data: datetime):
-        today = datetime.today().date()
-        if data.date() >= today:
+        today = now_kst().date()
+        if data.date() > today + timedelta(days=MAX_DAYS_AHEAD):
+            msg = Messages.Error.INPUT_DATE_TOO_FAR
+            await self.send_message(chat_id, msg, reply_markup=create_calendar())
+        elif data.date() >= today:
             formatted_date = data.strftime("%Y년 %m월 %d일")
             self.userDict[chat_id]["trainInfo"]["depDate"] = data.strftime("%Y%m%d")
             self.userDict[chat_id]["lastAction"] = 5
@@ -728,8 +753,19 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
         await self._send_confirm_reserve(chat_id)
         return None
 
+    async def _toggle_nearby(self, chat_id):
+        """확인 화면에서 인근역 포함 여부를 바꿈"""
+        state = self.userDict.get(chat_id, {})
+        if state.get("lastAction") != 11:
+            return None  # 이전 확인 화면의 버튼 (예약 진행 중 등) - 무시
+        train_info = state["trainInfo"]
+        train_info["includeNearby"] = not train_info.get("includeNearby", False)
+        await self._send_confirm_reserve(chat_id)
+        return None
+
     async def _send_confirm_reserve(self, chat_id):
         train_info = self.userDict[chat_id]["trainInfo"]
+        nearby = train_info.get("includeNearby", False)
 
         msg = Messages.Info.CONFIRM_DETAILS.format(
             depDate=train_info["depDate"],
@@ -740,12 +776,21 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
             trainTypeShow=train_info["trainTypeShow"],
             specialInfoShow=train_info["specialInfoShow"],
             waitlistShow=train_info.get("waitlistShow", "사용 안 함"),
+            nearbyShow=(
+                "포함 (인근역 출발·도착 열차도 예약)" if nearby else "포함 안 함"
+            ),
         )
 
         keyboard = [
             [
                 InlineKeyboardButton("예", callback_data="confirm_yes"),
                 InlineKeyboardButton("아니오", callback_data="confirm_no"),
+            ],
+            [
+                InlineKeyboardButton(
+                    "인근역 빼기" if nearby else "🔀 인근역 포함하기",
+                    callback_data="nearby_toggle",
+                )
             ],
             [
                 InlineKeyboardButton(
@@ -798,6 +843,7 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
                     train_type=train_info["trainType"],
                     seat_type=train_info["specialInfo"],
                     allow_waitlist=train_info.get("allowWaitlist", False),
+                    include_nearby=train_info.get("includeNearby", False),
                 )
                 reservation = await self.reservations.start(
                     owner,
@@ -1085,6 +1131,289 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
             msg = e.message
         await self.send_message(chat_id, msg)
 
+    # ------------------------------------------------------------------ 예약 후 관리
+
+    async def _handle_korail_cancel_callback(self, chat_id, callback_data):
+        """성공 메시지의 '코레일 예약 취소' 버튼 (kcancel_{예약 id})
+
+        그 예약의 코레일 예약번호로 /mytickets 와 같은 확인·취소 흐름을 탄다.
+        kcancel_yes_/kcancel_no 는 예전에 보낸 확인 메시지의 버튼
+        """
+        if callback_data == "kcancel_no":
+            await self._handle_my_tickets_callback(chat_id, "kres_n")
+            return
+        if self._chat_korail_login(chat_id) is None:
+            await self.send_message(chat_id, Messages.Info.KORAIL_NEEDS_LOGIN)
+            return
+        confirmed = callback_data.startswith("kcancel_yes_")
+        reservation_id = callback_data.removeprefix(
+            "kcancel_yes_" if confirmed else "kcancel_"
+        )
+        try:
+            r = self.reservations.get(
+                reservation_id, owner=self._chat_owner(chat_id), chat_id=chat_id
+            )
+        except ServiceError as e:
+            await self.send_message(chat_id, e.message)
+            return
+        if r.korail_cancelled_at is not None:
+            await self.send_message(chat_id, "이미 코레일에서 취소한 예약입니다.")
+        elif r.status != ReservationStatus.SUCCESS or not r.korail_rsv_id:
+            await self.send_message(
+                chat_id, "코레일에서 취소할 수 있는 예약이 아닙니다."
+            )
+        elif confirmed:
+            await self._cancel_my_ticket(chat_id, r.korail_rsv_id)
+        else:
+            await self._confirm_my_ticket_cancel(
+                chat_id,
+                r.korail_rsv_id,
+                fallback=(f"{self._route(r)}\n{r.result_text or ''}", r.waitlisted),
+            )
+
+    @staticmethod
+    def _route(r) -> str:
+        return f"{r.dep_date[4:6]}/{r.dep_date[6:]} {r.src_station}→{r.dst_station}"
+
+    @staticmethod
+    def _kst_hhmm(value) -> str:
+        """DB 시각(naive UTC)을 KST HH:MM 으로"""
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(KST).strftime("%H:%M")
+
+    async def _deliver_management(self, event: ReservationEvent) -> None:
+        """결제 기한 알림, 다른 채널(웹)에서 한 코레일 예약 취소 알림"""
+        r = event.reservation
+        if event.kind == "payment_reminder" and r.pay_deadline:
+            msg = Messages.Info.PAYMENT_REMINDER.format(
+                deadline=self._kst_hhmm(r.pay_deadline),
+                route=self._route(r),
+                reserveInfo=r.result_text or "",
+            )
+        elif event.kind == "korail_cancelled" and event.source != "telegram":
+            msg = f"{self._route(r)}\n{Messages.Info.KORAIL_CANCELLED}"
+        else:
+            return
+        for chat_id in self._notification_targets(event):
+            await self.send_message(chat_id, msg)
+
+    # ------------------------------------------------------------------ 내 코레일 예약·승차권
+
+    async def my_tickets(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """/mytickets: 코레일 계정에 지금 있는 결제 전 예약과 발권된 승차권"""
+        chat_id = update.message.chat_id
+        self.ensure_user_exists(chat_id)
+        await self._show_my_tickets(chat_id)
+
+    def _chat_korail_login(self, chat_id):
+        """이 대화에서 코레일 로그인에 성공한 (아이디, 비밀번호). 없으면 None
+
+        korailId/korailPw 는 로그인 확인 전에 입력값으로 채워지므로 쓰지 않음 (틀린 비밀번호로
+        남의 계정 캐시를 보거나 남의 계정에 로그인 실패를 쌓지 않도록). 비밀번호는 메모리에만 있음
+        """
+        user_info = self.userDict.get(chat_id, {}).get("userInfo", {})
+        return user_info.get("korailLogin")
+
+    async def _show_my_tickets(self, chat_id, refresh=False):
+        login = self._chat_korail_login(chat_id)
+        if login is None:
+            await self.send_message(chat_id, Messages.Info.KORAIL_NEEDS_LOGIN)
+            return
+        korail_id, korail_pw = login
+        account = self.services.korail_account
+        data = None if refresh else account.cached(korail_id)
+        if data is None:
+            await self.send_message(chat_id, Messages.Info.MYTICKETS_LOADING)
+            try:
+                # 코레일 요청(블로킹)과 출구 순서 대기는 스레드에서
+                data = await asyncio.to_thread(
+                    account.overview, korail_id, korail_pw, refresh
+                )
+            except ServiceError as e:
+                await self.send_message(chat_id, e.message)
+                return
+            except Exception as e:
+                logger.error(f"/mytickets failed for chat {chat_id}: {e}")
+                await self.send_message(
+                    chat_id,
+                    "코레일 예약·승차권을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.",
+                )
+                return
+        await self.send_message(
+            chat_id,
+            self._my_tickets_message(data),
+            reply_markup=self._my_tickets_keyboard(data),
+        )
+
+    @staticmethod
+    def _mark(index: int) -> str:
+        """①②③ (20개 넘으면 21.)"""
+        return chr(0x2460 + index) if index < 20 else f"{index + 1}."
+
+    @staticmethod
+    def _train_line(item) -> str:
+        try:
+            day = datetime.strptime(item.dep_date, "%Y%m%d")
+            date = f"{day.month}/{day.day}({'월화수목금토일'[day.weekday()]})"
+        except ValueError:
+            date = item.dep_date
+        return (
+            f"{item.train_type} {item.train_no.lstrip('0') or item.train_no}  {date} "
+            f"{item.dep_time[:2]}:{item.dep_time[2:]}→{item.arr_time[:2]}:{item.arr_time[2:]}"
+        )
+
+    def _my_tickets_message(self, data) -> str:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        lines = [
+            "🎫 내 코레일 예약·승차권",
+            f"{data.korail_id} · {self._kst_hhmm(data.fetched_at)} 조회",
+            "",
+            f"💳 결제 대기 {len(data.reservations)}건",
+        ]
+        for i, r in enumerate(data.reservations[:MYTICKETS_MAX_ITEMS]):
+            lines.append(f"{self._mark(i)} {self._train_line(r)}")
+            lines.append(
+                f"    {r.dep_station}→{r.arr_station} · {r.price:,}원 · {r.seat_count}석"
+            )
+            source = "코레일봇 예약" if r.reservation_id else "직접 예약"
+            if r.waiting:
+                lines.append(f"    🕒 예약대기 (좌석 배정 대기 중) · {source}")
+            elif r.pay_deadline:
+                minutes = int((r.pay_deadline - now).total_seconds() // 60)
+                left = f"{minutes}분 남음" if minutes >= 0 else "기한 지남"
+                lines.append(
+                    f"    ⏰ {self._kst_hhmm(r.pay_deadline)}까지 결제 ({left}) · {source}"
+                )
+            else:
+                lines.append(f"    {source}")
+        if not data.reservations:
+            lines.append("결제를 기다리는 예약이 없습니다.")
+        lines += self._more_items(data.reservations)
+        lines += ["", f"✅ 발권 완료 {len(data.tickets)}건"]
+        offset = min(len(data.reservations), MYTICKETS_MAX_ITEMS)
+        for i, t in enumerate(data.tickets[:MYTICKETS_MAX_ITEMS]):
+            lines.append(f"{self._mark(offset + i)} {self._train_line(t)}")
+            lines.append(
+                f"    {t.dep_station}→{t.arr_station} · {t.car_no}호차 {t.seats} · {t.price:,}원"
+            )
+        if not data.tickets:
+            lines.append("발권한 승차권이 없습니다.")
+        lines += self._more_items(data.tickets)
+        lines += ["", Messages.Info.MYTICKETS_FOOTER]
+        return "\n".join(lines)
+
+    @staticmethod
+    def _more_items(items) -> list[str]:
+        hidden = len(items) - MYTICKETS_MAX_ITEMS
+        return [Messages.Info.MYTICKETS_MORE.format(count=hidden)] if hidden > 0 else []
+
+    def _my_tickets_keyboard(self, data):
+        cancel_buttons, seen = [], set()
+        for i, r in enumerate(data.reservations[:MYTICKETS_MAX_ITEMS]):
+            # 환승 예약은 구간마다 항목이 있지만 예약번호는 하나 (취소도 한 번)
+            if r.rsv_id in seen:
+                continue
+            seen.add(r.rsv_id)
+            cancel_buttons.append(
+                InlineKeyboardButton(
+                    f"❌ {self._mark(i)} {'예약대기 취소' if r.waiting else '예약 취소'}",
+                    callback_data=f"kres_c_{r.rsv_id}",
+                )
+            )
+        rows = [cancel_buttons[i : i + 2] for i in range(0, len(cancel_buttons), 2)]
+        if any(not r.waiting for r in data.reservations):
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        "💳 코레일에서 결제하기", url=Messages.Info.KORAIL_PAYMENT_URL
+                    )
+                ]
+            )
+        rows.append([InlineKeyboardButton("🔄 새로고침", callback_data="kres_r")])
+        return InlineKeyboardMarkup(rows)
+
+    async def _handle_my_tickets_callback(self, chat_id, callback_data):
+        self.ensure_user_exists(chat_id)
+        if callback_data == "kres_r":
+            await self._show_my_tickets(chat_id, refresh=True)
+        elif callback_data == "kres_l":
+            await self._show_my_tickets(chat_id)
+        elif callback_data == "kres_n":
+            await self.send_message(chat_id, "코레일 예약 취소를 그만두었습니다.")
+        elif callback_data.startswith("kres_c_"):
+            await self._confirm_my_ticket_cancel(
+                chat_id, callback_data.removeprefix("kres_c_")
+            )
+        elif callback_data.startswith("kres_y_"):
+            await self._cancel_my_ticket(chat_id, callback_data.removeprefix("kres_y_"))
+
+    def _cached_reservation(self, chat_id, rsv_id):
+        login = self._chat_korail_login(chat_id)
+        data = self.services.korail_account.cached(login[0]) if login else None
+        return next(
+            (r for r in (data.reservations if data else []) if r.rsv_id == rsv_id), None
+        )
+
+    async def _confirm_my_ticket_cancel(self, chat_id, rsv_id, fallback=None):
+        """fallback: 최근 목록에 없을 때 보여 줄 (내용, 예약대기 여부)"""
+        r = self._cached_reservation(chat_id, rsv_id)
+        if r is None:
+            detail, waiting = fallback or (f"예약번호 {rsv_id}", False)
+        else:
+            detail = (
+                f"{self._train_line(r)}\n"
+                f"{r.dep_station}→{r.arr_station} · {r.price:,}원 · {r.seat_count}석"
+            )
+            waiting = r.waiting
+        question = (
+            "코레일에서 이 예약대기를 취소할까요?"
+            if waiting
+            else "코레일에서 이 예약을 취소할까요?"
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "예, 취소합니다", callback_data=f"kres_y_{rsv_id}"
+                ),
+                InlineKeyboardButton("아니오", callback_data="kres_n"),
+            ]
+        ]
+        await self.send_message(
+            chat_id,
+            f"{question}\n\n{detail}\n\n취소한 좌석은 되돌릴 수 없습니다.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+
+    async def _cancel_my_ticket(self, chat_id, rsv_id):
+        login = self._chat_korail_login(chat_id)
+        if login is None:
+            await self.send_message(chat_id, Messages.Info.KORAIL_NEEDS_LOGIN)
+            return
+        r = self._cached_reservation(chat_id, rsv_id)
+        try:
+            await self.reservations.cancel_korail_rsv(
+                login[0], login[1], rsv_id, source="telegram"
+            )
+        except ServiceError as e:
+            await self.send_message(chat_id, e.message)
+            return
+        except Exception as e:
+            logger.error(f"Korail cancel failed for {rsv_id}: {e}")
+            await self.send_message(
+                chat_id,
+                "코레일 예약 취소 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+            )
+            return
+        detail = f"\n{self._train_line(r)} {r.dep_station}→{r.arr_station}" if r else ""
+        await self.send_message(
+            chat_id,
+            f"✅ {Messages.Info.KORAIL_CANCELLED}{detail}",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("📋 목록 보기", callback_data="kres_l")]]
+            ),
+        )
+
     # ------------------------------------------------------------------ 알림 채널
 
     def _notification_targets(self, event: ReservationEvent) -> set:
@@ -1107,6 +1436,8 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
                 else Messages.Info.RESERVE_SUCCESS
             )
             msg = template.format(reserveInfo=r.result_text or "")
+            if r.include_nearby:
+                msg += f"\n{Messages.Info.NEARBY_NOTE}"
         elif status == ReservationStatus.FAILED:
             msg = Messages.Error.RESERVE_FAILED
         elif status == ReservationStatus.ERROR:
@@ -1131,6 +1462,9 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
 
     async def deliver(self, event: ReservationEvent) -> None:
         """예약이 종료되면 텔레그램으로 결과 전송 (Notifier 채널)"""
+        if event.kind != "status":
+            await self._deliver_management(event)
+            return
         if not event.is_terminal_change:
             return
         # 텔레그램에서 직접 취소한 경우 이미 응답했으므로 생략
@@ -1142,8 +1476,20 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
         msg = self._notification_message(event)
         if not msg:
             return
+        reply_markup = None
+        if event.reservation.korail_cancellable:
+            reply_markup = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "코레일 예약 취소",
+                            callback_data=f"kcancel_{event.reservation.id}",
+                        )
+                    ]
+                ]
+            )
         for chat_id in self._notification_targets(event):
-            await self.send_message(chat_id, msg)
+            await self.send_message(chat_id, msg, reply_markup=reply_markup)
             state = self.userDict.get(chat_id)
             if (
                 state

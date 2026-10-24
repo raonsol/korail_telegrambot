@@ -271,6 +271,8 @@ def _run_task(spec: dict, reporter, redis_client, key: str) -> dict:
         train_info: str | None = None,
         attempts: int | None = None,
         waiting: bool = False,
+        korail_rsv_id: str | None = None,
+        pay_deadline: str | None = None,
     ):
         # 성공 보고 전에 결과를 남겨 둠: 보고가 전달되지 않아도 웹 서버가
         # heartbeat가 사라진 뒤 이 값으로 성공을 복구함 (CeleryLauncher.recover_success)
@@ -282,6 +284,11 @@ def _run_task(spec: dict, reporter, redis_client, key: str) -> dict:
                 fields["attempts"] = attempts
             if waiting:
                 fields["waiting"] = "1"
+            # 코레일 예약번호·결제 기한 (예약 후 관리에 필요)
+            if korail_rsv_id:
+                fields["korail_rsv_id"] = korail_rsv_id
+            if pay_deadline:
+                fields["pay_deadline"] = pay_deadline
             try:
                 redis_client.hset(key, mapping=fields)
             except Exception as e:

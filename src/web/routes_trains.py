@@ -24,13 +24,14 @@ async def search_trains(
     start: str = Query(description="HHMM, 이 시각 이후 출발"),
     end: str = Query(description="HHMM, 이 시각 전 출발 (예약 조건과 같은 기준)"),
     train_type: TrainTypeKey = "KTX",
+    nearby: bool = Query(default=False, description="인근역 출발·도착 열차도 포함"),
 ):
-    query = _query(dep_date, src, dst, start, end, train_type)
+    query = _query(dep_date, src, dst, start, end, train_type, nearby)
     # 코레일 요청(블로킹)과 출구 순서 대기는 스레드에서
     return await asyncio.to_thread(services.trains.search, session.korail_id, query)
 
 
-def _query(dep_date, src, dst, start, end, train_type) -> TrainQuery:
+def _query(dep_date, src, dst, start, end, train_type, nearby=False) -> TrainQuery:
     try:
         start, end = _validate_hhmm(start), _validate_hhmm(end)
     except ValueError as e:
@@ -43,4 +44,4 @@ def _query(dep_date, src, dst, start, end, train_type) -> TrainQuery:
         raise ValidationFailed("조회할 수 없는 출발일입니다.")
     if end <= start:
         raise ValidationFailed("끝 시각이 시작 시각보다 늦어야 합니다.")
-    return TrainQuery(dep_date, src, dst, start, end, train_type)
+    return TrainQuery(dep_date, src, dst, start, end, train_type, nearby)

@@ -760,7 +760,7 @@ requires-dist = [
     { name = "httpx" },
     { name = "psycopg", extras = ["binary"] },
     { name = "pydantic-settings" },
-    { name = "pykorail", specifier = "==0.2.2" },
+    { name = "pykorail", specifier = "==0.4.0" },
     { name = "pyopenssl" },
     { name = "python-telegram-bot" },
     { name = "pywebpush" },
@@ -1124,16 +1124,16 @@ wheels = [
 
 [[package]]
 name = "pykorail"
-version = "0.2.2"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
     { name = "curl-cffi" },
     { name = "pycryptodome" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3e/e6/53ead97bbba201aaba25b9e19b6c2b5d18dd845e328be87d90033e94cbea/pykorail-0.2.2.tar.gz", hash = "sha256:324ef6d93acdbef35dd9c67e244727b2990c6195e1da27eccb0e265daac833d0", size = 105403, upload-time = "2026-10-06T04:37:37.925Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/48/ce1d749f3a05d191cdaf70cd25ec7a5f5383215ea5aefd39035a03ac85a9/pykorail-0.4.0.tar.gz", hash = "sha256:cac8240c897361794516a8ebf34821f37106c0b5f226e3f61fd1325e0d4fd5d1", size = 490688, upload-time = "2026-10-16T09:58:36.127Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/21/41/e34f069501b4f4402ad40b92a2f688ab9929590d259be6812beb4bb5a58c/pykorail-0.2.2-py3-none-any.whl", hash = "sha256:be639a15b65006dd805ae16905db776b40404ebb2062e8387b7a03cb79111d4c", size = 70382, upload-time = "2026-10-06T04:37:36.477Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/27/ea5249dd3f73160d23b50c5ffcb62fe6fd42b02912fe00677bf5033fa116/pykorail-0.4.0-py3-none-any.whl", hash = "sha256:4c45e193f900e63ff14ae0e11ff54d44dfa26d59ce28aa63ff4d345e22a0d124", size = 162675, upload-time = "2026-10-16T09:58:34.39Z" },
 ]
 
 [[package]]

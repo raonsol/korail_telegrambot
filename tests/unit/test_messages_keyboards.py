@@ -65,6 +65,7 @@ class TestMessages:
             trainTypeShow="KTX",
             specialInfoShow="일반실 우선 예약",
             waitlistShow="사용 안 함",
+            nearbyShow="포함 안 함",
         )
 
         assert "20250115" in formatted
@@ -75,6 +76,7 @@ class TestMessages:
         assert "KTX" in formatted
         assert "일반실 우선 예약" in formatted
         assert "예약대기 : 사용 안 함" in formatted
+        assert "인근역 : 포함 안 함" in formatted
 
     def test_reserve_success_formatting(self):
         """Test RESERVE_SUCCESS message formatting"""

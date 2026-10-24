@@ -322,6 +322,32 @@ class RedisGate:
             return float(backoff_seconds(1))
 
 
+# 화면에서 기다리는 요청(열차 시간표, 내 승차권)이 출구 순서를 기다리는 최대 시간
+INTERACTIVE_MAX_WAIT_SECONDS = 8
+
+
+def wait_for_slot(
+    gate,
+    sleep: Callable[[float], None],
+    *,
+    blocked: Exception,
+    busy: Exception,
+    max_wait: float = INTERACTIVE_MAX_WAIT_SECONDS,
+) -> None:
+    """화면에서 기다리는 요청의 출구 순서 받기
+
+    출구가 차단 대기 중이면 blocked, 예약 워커가 출구를 많이 써서 max_wait 넘게 기다려야
+    하면 busy 를 발생시킨다 (예약 워커처럼 오래 기다리지 않음 - runner._wait_for_egress)
+    """
+    if gate.blocked_for() > 0:
+        raise blocked
+    delay = gate.reserve_slot()
+    if delay > max_wait:
+        raise busy
+    if delay > 0:
+        sleep(delay)
+
+
 class NullGate:
     """제한 없음"""
 

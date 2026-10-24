@@ -15,7 +15,7 @@ import requests
 from pykorail import ReserveOption, TrainType
 
 from core.egress import EgressGate, NullGate
-from telegramBot.korail_client import ReserveHandler
+from telegramBot.korail_client import ReserveHandler, reservation_details
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,8 @@ SUCCESS_REPORT_MAX_BACKOFF_SECONDS = 30
 
 # 출구(차단 대기·요청 순서)를 기다리는 동안 취소·최대 실행 시간을 확인하는 간격
 WAIT_STEP_SECONDS = 5.0
-# 차단 대기 중에도 이 간격으로 진행 보고 (웹 서버의 30분 무응답 정리에 걸리지 않도록)
+# 차단 대기 중이나 시도가 오래 걸릴 때도(조회 페이지마다 출구 순서를 기다림) 이 간격으로
+# 진행 보고 (웹 서버의 30분 무응답 정리에 걸리지 않도록)
 WAIT_KEEPALIVE_SECONDS = 300.0
 
 # 웹 서버가 이 예약을 받아들이지 않는 응답 (예약 없음 / 토큰 불일치)
@@ -82,6 +83,8 @@ class CallbackReporter:
         train_info: Optional[str] = None,
         waiting: bool = False,
         retries: int = 3,
+        korail_rsv_id: Optional[str] = None,
+        pay_deadline: Optional[str] = None,
     ) -> bool:
         payload = {
             "reservation_id": self.reservation_id,
@@ -96,6 +99,10 @@ class CallbackReporter:
             payload["train_info"] = train_info
         if waiting:
             payload["waiting"] = True
+        if korail_rsv_id:
+            payload["korail_rsv_id"] = korail_rsv_id
+        if pay_deadline:
+            payload["pay_deadline"] = pay_deadline
 
         for attempt in range(retries):
             try:
@@ -141,12 +148,19 @@ def result_file(directory: str, reservation_id: str) -> str:
 
 
 def write_result_file(
-    path: str, train_info: str, attempts: int, waiting: bool = False
+    path: str, train_info: str, attempts: int, waiting: bool = False, **korail
 ) -> None:
+    """korail: 코레일 예약번호·결제 기한 (korail_rsv_id, pay_deadline) - 있을 때만"""
     tmp = f"{path}.tmp"
     with open(tmp, "w") as f:
         json.dump(
-            {"train_info": train_info, "attempts": attempts, "waiting": waiting}, f
+            {
+                "train_info": train_info,
+                "attempts": attempts,
+                "waiting": waiting,
+                **korail,
+            },
+            f,
         )
     os.replace(tmp, path)  # 웹 서버가 쓰다 만 파일을 읽지 않도록
 
@@ -214,7 +228,8 @@ def run_reservation(
         reporter: 상태 보고 객체
         should_stop: True를 반환하면 즉시 종료 (Celery 중복 실행 방지용)
         on_success: 성공 직후, 보고 전에 ``on_success(train_info=..., attempts=..., waiting=...)`` 호출
-            (waiting: 좌석 대신 예약대기를 신청함).
+            (waiting: 좌석 대신 예약대기를 신청함). 코레일 예약번호·결제 기한을 알면
+            ``korail_rsv_id=``, ``pay_deadline=``(KST YYYYMMDDHHMMSS)도 넘김.
             보고가 끝내 전달되지 않아도 웹 서버가 결과를 복구할 수 있도록 기록하는 용도
             (subprocess: 결과 파일, Celery: Redis 상태)
         clock: 경과 시간 측정용. ``spec["max_duration"]``(초)을 넘기면 ``failed``로 끝냄
@@ -269,11 +284,25 @@ def _deadline(spec: dict, clock: Callable[[], float]) -> Callable[[], bool]:
     return lambda: clock() - started >= max_duration
 
 
-def _report_success(reporter, attempts, train_info, waiting, sleep, clock) -> bool:
+def _korail_details(reservation) -> dict:
+    """보고·결과 기록에 실을 코레일 예약번호·결제 기한 (아는 것만)"""
+    rsv_id, pay_deadline = reservation_details(reservation)
+    details = {}
+    if rsv_id:
+        details["korail_rsv_id"] = rsv_id
+    if pay_deadline:
+        details["pay_deadline"] = pay_deadline
+    return details
+
+
+def _report_success(
+    reporter, attempts, train_info, waiting, sleep, clock, korail=None
+) -> bool:
     """성공 보고가 전달되거나 거부될 때까지 간격을 늘려 가며 다시 보냄"""
     deadline = clock() + SUCCESS_REPORT_WINDOW_SECONDS
     backoff = 2.0
     extra = {"waiting": True} if waiting else {}
+    extra.update(korail or {})
     while True:
         if reporter.send("success", attempts=attempts, train_info=train_info, **extra):
             return True
@@ -410,6 +439,7 @@ def _run_attempts(
         return {"status": "rejected", "attempts": 0}
 
     consecutive_errors = 0
+    last_progress = clock()
     # 같은 오류가 연속으로 온 횟수 (재로그인해도 이어서 셈)
     last_error, same_errors = None, 0
     for attempt in range(1, max_attempts + 1):
@@ -422,6 +452,16 @@ def _run_attempts(
         if stop:
             return stop
 
+        paging_stop = {}
+
+        def before_page() -> bool:
+            # 다음 쪽 조회도 출구별 요청 간격을 지키고, 기다리는 동안 취소·만료를 확인
+            stop = wait_for_egress(attempt - 1)
+            if stop:
+                paging_stop["result"] = stop
+                return False
+            return True
+
         try:
             result = handler.reserve_single_attempt(
                 depDate=spec["dep_date"],
@@ -432,9 +472,13 @@ def _run_attempts(
                 special=seat_type,
                 maxDepTime=spec["max_dep_time"],
                 allowWaitlist=spec.get("allow_waitlist") is True,
+                beforePage=before_page,
+                includeNearby=spec.get("include_nearby") is True,
             )
         except Exception as e:  # reserve_single_attempt는 보통 예외를 삼키지만 방어
             result = {"success": False, "result": None, "error": str(e)}
+        if paging_stop:
+            return paging_stop["result"]
 
         if result["success"]:
             waiting = result.get("waiting") is True
@@ -446,9 +490,12 @@ def _run_attempts(
                 )
             else:
                 train_info = str(result["result"])
-            on_success(train_info=train_info, attempts=attempt, waiting=waiting)
+            korail = _korail_details(result["result"])
+            on_success(
+                train_info=train_info, attempts=attempt, waiting=waiting, **korail
+            )
             reported = _report_success(
-                reporter, attempt, train_info, waiting, sleep, clock
+                reporter, attempt, train_info, waiting, sleep, clock, korail
             )
             return {
                 "status": "success",
@@ -456,6 +503,7 @@ def _run_attempts(
                 "train_info": train_info,
                 "waiting": waiting,
                 "reported": reported,
+                **korail,
             }
 
         error = result.get("error") or ""
@@ -481,7 +529,7 @@ def _run_attempts(
                 logger.error(f"Stopping reservation: {message}")
                 reporter.send("error", message=message, attempts=attempt)
                 return {"status": "error", "message": message, "attempts": attempt}
-            needs_login = any(
+            needs_login = result.get("needs_login") is True or any(
                 word in error.lower() for word in ("login", "session", "로그인")
             )
             if needs_login or consecutive_errors >= relogin_after_errors:
@@ -505,7 +553,11 @@ def _run_attempts(
             consecutive_errors = 0
             last_error, same_errors = None, 0
 
-        if attempt % progress_every == 0:
+        if (
+            attempt % progress_every == 0
+            or clock() - last_progress >= WAIT_KEEPALIVE_SECONDS
+        ):
+            last_progress = clock()
             reporter.send("progress", attempts=attempt)
             if _rejected(reporter):
                 # 취소·만료됐거나 웹 서버가 모르는 예약 (예: DB 초기화 후 남은 워커)

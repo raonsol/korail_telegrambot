@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import logging
-import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -16,7 +15,8 @@ from typing import Callable, Optional
 
 from pydantic import BaseModel
 
-from .egress import EgressPool, NullGate
+from .cache import TTLCache
+from .egress import EgressPool, NullGate, wait_for_slot
 from .errors import KorailUnavailable, ServiceError
 from .schemas import KST, now_kst
 
@@ -27,8 +27,6 @@ CACHE_TTL_SECONDS = 30
 CACHE_MAX_ENTRIES = 200
 # 코레일은 한 번에 열차 10개 정도만 돌려주므로 시간대가 넓으면 이어서 조회 (출구 요청 수 제한)
 MAX_PAGES = 3
-# 출구 순서를 이만큼 넘게 기다려야 하면 조회하지 않음 (예약 워커가 출구를 많이 쓰는 중)
-MAX_SLOT_WAIT_SECONDS = 8
 
 BLOCKED_MESSAGE = (
     "코레일 서버가 요청을 일시적으로 차단해 열차를 조회할 수 없습니다. "
@@ -48,6 +46,9 @@ class TrainOut(BaseModel):
     special_seat: bool
     # 매진이지만 (일반실) 예약대기를 받는 열차
     waitlist: bool
+    # 실제 출발·도착역 (인근역 포함 조회에서는 고른 역과 다를 수 있음)
+    dep_station: Optional[str] = None
+    arr_station: Optional[str] = None
 
 
 class TrainSearchOut(BaseModel):
@@ -64,6 +65,8 @@ class TrainQuery:
     dep_time: str  # HHMM (이 시각 이후 출발)
     max_dep_time: str  # HHMM (이 시각 전 출발, 예약 조건과 같은 기준)
     train_type: str  # "KTX" | "ALL"
+    # 인근역(코레일 앱의 "인접역") 출발·도착 열차도 포함 (예약 조건의 include_nearby)
+    include_nearby: bool = False
 
 
 class TrainSearchService:
@@ -79,9 +82,9 @@ class TrainSearchService:
         self.device_for = device_for
         self._client_factory = client_factory
         self._sleep = sleep
-        self._clock = clock
-        self._cache: dict[TrainQuery, tuple[float, TrainSearchOut]] = {}
-        self._lock = threading.Lock()
+        self._cache: TTLCache[TrainQuery, TrainSearchOut] = TTLCache(
+            CACHE_TTL_SECONDS, CACHE_MAX_ENTRIES, clock
+        )
 
     def search(self, korail_id: str, query: TrainQuery) -> TrainSearchOut:
         """블로킹 (코레일 HTTP 요청) - 웹에서는 스레드에서 호출"""
@@ -90,23 +93,13 @@ class TrainSearchService:
             # 오늘 이미 지난 시간대
             return TrainSearchOut(trains=[])
 
-        cached = self._cached(query)
+        cached = self._cache.get(query)
         if cached is not None:
             return cached
 
         result = self._search_pages(korail_id, query, depart_after)
-        with self._lock:
-            if len(self._cache) >= CACHE_MAX_ENTRIES:
-                self._cache.pop(next(iter(self._cache)))
-            self._cache[query] = (self._clock(), result)
+        self._cache.put(query, result)
         return result
-
-    def _cached(self, query: TrainQuery) -> Optional[TrainSearchOut]:
-        with self._lock:
-            hit = self._cache.get(query)
-        if hit and self._clock() - hit[0] < CACHE_TTL_SECONDS:
-            return hit[1]
-        return None
 
     def _search_pages(
         self, korail_id: str, query: TrainQuery, depart_after: datetime
@@ -127,7 +120,7 @@ class TrainSearchService:
         # 역 이름은 화면의 역 목록에서만 고르므로 역 마스터 확인 요청(조회마다 1회)을 생략
         client.trains.validate_stations = False
 
-        trains: dict[str, TrainOut] = {}
+        trains: dict[tuple, TrainOut] = {}
         truncated = False
         try:
             for page in range(MAX_PAGES):
@@ -139,12 +132,20 @@ class TrainSearchService:
                         depart_after=depart_after,
                         train_type=TRAIN_TYPES.get(query.train_type, TrainType.KTX),
                         include_no_seats=True,
+                        include_nearby_stations=query.include_nearby,
                     )
                 except NoResultsError:
                     break
                 in_range = [t for t in found if t.dep_time[:4] < query.max_dep_time]
                 for train in in_range:
-                    trains.setdefault(f"{train.train_no}{train.dep_time}", _out(train))
+                    # 인근역 조회는 같은 열차가 역 조합마다 나오므로 역 코드까지 키에 포함
+                    key = (
+                        train.train_no,
+                        train.dep_time,
+                        getattr(train, "dep_code", None),
+                        getattr(train, "arr_code", None),
+                    )
+                    trains.setdefault(key, _out(train))
                 last = found[-1].dep_time
                 if len(in_range) < len(found) or last[:4] >= query.max_dep_time:
                     break  # 시간대 끝을 지남
@@ -182,13 +183,12 @@ class TrainSearchService:
         return TrainSearchOut(trains=ordered, truncated=truncated)
 
     def _wait_for_slot(self, gate) -> None:
-        if gate.blocked_for() > 0:
-            raise KorailUnavailable(BLOCKED_MESSAGE)
-        delay = gate.reserve_slot()
-        if delay > MAX_SLOT_WAIT_SECONDS:
-            raise ServiceError(BUSY_MESSAGE, code="TRAIN_SEARCH_BUSY")
-        if delay > 0:
-            self._sleep(delay)
+        wait_for_slot(
+            gate,
+            self._sleep,
+            blocked=KorailUnavailable(BLOCKED_MESSAGE),
+            busy=ServiceError(BUSY_MESSAGE, code="TRAIN_SEARCH_BUSY"),
+        )
 
 
 def _depart_after(query: TrainQuery) -> Optional[datetime]:
@@ -214,4 +214,10 @@ def _out(train) -> TrainOut:
         general_seat=train.has_general_seat(),
         special_seat=train.has_special_seat(),
         waitlist=not train.has_seat() and train.has_waiting_list(),
+        dep_station=_text(getattr(train, "dep_name", None)),
+        arr_station=_text(getattr(train, "arr_name", None)),
     )
+
+
+def _text(value) -> Optional[str]:
+    return value if isinstance(value, str) and value else None

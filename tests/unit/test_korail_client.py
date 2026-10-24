@@ -11,11 +11,18 @@ from pykorail import (
     SoldOutError,
     NoResultsError,
     LoginFailedError,
+    NeedToLoginError,
+    PasswordChangeRequiredError,
     StationNotFoundError,
     PastDepartureError,
     HttpStatusError,
     AccessRestrictedError,
 )
+
+
+def _search(handler, before_page=None):
+    """_search_pages 의 쪽들을 이어 붙인 열차 목록"""
+    return [train for page in handler._search_pages(before_page) for train in page]
 
 
 class TestReserveHandler:
@@ -101,6 +108,31 @@ class TestReserveHandler:
             assert reserve_handler.login("me@example.com", "pw") is False
 
         assert reserve_handler.loginError == "로그인 정보를 다시 확인해 주세요."
+
+    def test_login_failure_for_password_change_notice(self, reserve_handler):
+        """A password change notice is not a wrong password and is flagged separately"""
+        from telegramBot.korail_client import PASSWORD_CHANGE_MESSAGE
+
+        mock_client = Mock()
+        mock_client.login = Mock(
+            side_effect=PasswordChangeRequiredError(
+                "비밀번호를 변경해주세요", "WRC000420"
+            )
+        )
+
+        with patch("telegramBot.korail_client.Korail", return_value=mock_client):
+            assert reserve_handler.login("010-1234-5678", "pw") is False
+
+        assert reserve_handler.loginPasswordChange is True
+        assert reserve_handler.loginBlocked is False
+        assert reserve_handler.loginError == PASSWORD_CHANGE_MESSAGE
+        mock_client.close.assert_called_once()
+
+        # 다음 로그인이 다른 이유로 실패하면 플래그가 풀림
+        mock_client.login = Mock(side_effect=LoginFailedError("x", "WRR000101"))
+        with patch("telegramBot.korail_client.Korail", return_value=mock_client):
+            assert reserve_handler.login("010-1234-5678", "pw") is False
+        assert reserve_handler.loginPasswordChange is False
 
     def test_login_failure_reason_for_http_rejection(self, reserve_handler):
         """A non-block HTTP rejection (e.g. 502) is not shown as a password/network error"""
@@ -219,7 +251,7 @@ class TestReserveHandler:
             "maxDepTime": "1200",
         }
 
-        trains = reserve_handler._search_trains()
+        trains = _search(reserve_handler)
 
         assert len(trains) == 1
         assert trains[0] == sample_train_data
@@ -227,6 +259,8 @@ class TestReserveHandler:
         assert args == ("서울", "부산")
         assert kwargs["train_type"] == TrainType.KTX
         assert kwargs["depart_after"].strftime("%Y%m%d%H%M%S") == "20250115090000"
+        # 다음 쪽 기준 시각을 알려면 매진 열차도 받아야 함
+        assert kwargs["include_no_seats"] is True
 
     def test_search_trains_no_results(self, reserve_handler, mock_korail_client):
         """Test train search with no results"""
@@ -241,7 +275,7 @@ class TestReserveHandler:
             "maxDepTime": "1200",
         }
 
-        trains = reserve_handler._search_trains()
+        trains = _search(reserve_handler)
 
         assert trains == []
 
@@ -260,7 +294,7 @@ class TestReserveHandler:
             "maxDepTime": "0800",  # Earlier than train departure
         }
 
-        trains = reserve_handler._search_trains()
+        trains = _search(reserve_handler)
 
         assert trains == []
 
@@ -280,7 +314,7 @@ class TestReserveHandler:
             "maxDepTime": "1200",
         }
 
-        assert reserve_handler._search_trains() == [early]
+        assert _search(reserve_handler) == [early]
 
     @pytest.mark.parametrize(
         "depDate, depTime, expected",
@@ -516,11 +550,17 @@ class TestKorailBlockLogging:
     """Korail server block responses (code -2000) are written to the server log"""
 
     def test_proxy_applies_only_to_korail_session(self):
+        """The proxy reaches the curl_cffi session pykorail actually sends with
+        (pykorail 0.4.0 wraps it in IdempotentSession). Re-check this when upgrading pykorail.
+        """
+        from curl_cffi import Session
         from telegramBot.korail_client import create_korail_client
 
         client = create_korail_client("socks5h://user:pw@100.64.0.2:1080")
         try:
-            assert client._api._session.proxies == {
+            sent_with = client._api._session._session
+            assert isinstance(sent_with, Session)
+            assert sent_with.proxies == {
                 "http": "socks5h://user:pw@100.64.0.2:1080",
                 "https": "socks5h://user:pw@100.64.0.2:1080",
             }
@@ -529,9 +569,19 @@ class TestKorailBlockLogging:
 
         direct = create_korail_client()
         try:
-            assert not direct._api._session.proxies
+            assert not direct._api._session._session.proxies
         finally:
             direct.close()
+
+    def test_proxy_fails_loudly_if_pykorail_session_changes(self):
+        """If pykorail's session layout changes, refuse instead of silently going direct"""
+        from telegramBot.korail_client import create_korail_client
+
+        client = Mock()
+        client._api._session._session = object()
+        with patch("telegramBot.korail_client.Korail", return_value=client):
+            with pytest.raises(RuntimeError):
+                create_korail_client("socks5h://h:1080")
 
     def test_handler_uses_its_egress(self):
         from telegramBot.korail_client import ReserveHandler
@@ -597,6 +647,20 @@ class TestKorailBlockLogging:
         assert f"단계={stage}" in caplog.text
         assert "출구=direct" in caplog.text
 
+    def test_logged_out_attempt_needs_login(self):
+        """P058 is flagged by type: its server text may not mention login"""
+        from telegramBot.korail_client import ReserveHandler
+
+        handler = ReserveHandler()
+        handler.korail_client = Mock()
+        handler.korail_client.trains.search.side_effect = NeedToLoginError(
+            "로그아웃되었습니다", "P058"
+        )
+        result = handler.reserve_single_attempt("20990101", "서울", "부산", "090000")
+        assert result["success"] is False
+        assert result["needs_login"] is True
+        assert "P058" in result["error"]
+
     def test_other_http_rejection_is_not_a_block(self, caplog):
         """A non-block HTTP error (e.g. 502) is retried as a normal failure, not logged as a block"""
         import logging
@@ -636,3 +700,179 @@ class TestKorailBlockLogging:
             assert client._api._parse(response) == payload
         finally:
             client.close()
+
+
+def _train(dep_time, seat=False, waitlist=False, no=None):
+    train = Mock()
+    train.train_no = no or dep_time
+    train.dep_date = "20991231"
+    train.dep_time = dep_time
+    train.has_seat.return_value = seat
+    train.has_waiting_list.return_value = waitlist
+    return train
+
+
+class TestSearchPaging:
+    """Korail returns one page (~10 trains) per search; the attempt follows the next pages"""
+
+    @staticmethod
+    def _handler(pages, create=None):
+        from telegramBot.korail_client import ReserveHandler
+
+        handler = ReserveHandler()
+        handler.korail_client = Mock()
+        handler.korail_client.trains.search = Mock(side_effect=pages)
+        handler.korail_client.reservations.create = Mock(
+            side_effect=create or (lambda train, option: f"reserved {train.dep_time}")
+        )
+        return handler
+
+    @staticmethod
+    def _attempt(handler, maxDepTime="1200", waitlist=False, before_page=None):
+        return handler.reserve_single_attempt(
+            "20991231",
+            "서울",
+            "부산",
+            "090000",
+            maxDepTime=maxDepTime,
+            allowWaitlist=waitlist,
+            beforePage=before_page,
+        )
+
+    @staticmethod
+    def _cursors(handler):
+        return [
+            c.kwargs["depart_after"].strftime("%H%M%S")
+            for c in handler.korail_client.trains.search.call_args_list
+        ]
+
+    def test_reserves_train_on_a_later_page(self):
+        a, b, c = _train("090000"), _train("093000"), _train("100000", seat=True)
+        # 다음 쪽은 앞 쪽 마지막 열차의 출발 시각부터라 경계 열차(b)가 다시 나옴
+        handler = self._handler([[a, b], [b, c]])
+
+        result = self._attempt(handler)
+
+        assert result["success"] is True
+        assert result["result"] == "reserved 100000"
+        assert self._cursors(handler) == ["090000", "093000"]
+        handler.korail_client.reservations.create.assert_called_once()
+
+    def test_next_page_never_searches_the_past(self):
+        """A busy egress can delay page 2 past the last train's departure"""
+        from telegramBot import korail_client
+        from telegramBot.korail_client import KST
+
+        class Clock(datetime):
+            current = datetime(2099, 12, 31, 10, 0, tzinfo=KST)
+
+            @classmethod
+            def now(cls, tz=None):
+                return cls.current
+
+        def slow_egress_wait():
+            Clock.current = datetime(2099, 12, 31, 10, 10, tzinfo=KST)
+            return True
+
+        handler = self._handler(
+            [[_train("100000"), _train("100500")], NoResultsError()]
+        )
+        with patch.object(korail_client, "datetime", Clock):
+            handler.reserve_single_attempt(
+                "20991231", "서울", "부산", "100000", beforePage=slow_egress_wait
+            )
+
+        # 앞 쪽 마지막 열차(10:05)가 아니라 다음 쪽을 요청하는 시각(10:10)부터
+        assert self._cursors(handler) == ["100000", "101000"]
+
+    def test_stops_at_max_departure_time(self):
+        handler = self._handler([[_train("090000"), _train("103000")]])
+
+        result = self._attempt(handler, maxDepTime="1000")
+
+        assert result["error"] == "All trains sold out"
+        assert handler.korail_client.trains.search.call_count == 1
+
+    def test_stops_when_no_new_trains(self):
+        a, b = _train("090000"), _train("093000")
+        handler = self._handler([[a, b], [b]])
+
+        result = self._attempt(handler)
+
+        assert result["error"] == "All trains sold out"
+        assert handler.korail_client.trains.search.call_count == 2
+
+    def test_no_results_on_next_page_keeps_earlier_pages(self):
+        handler = self._handler([[_train("090000")], NoResultsError()])
+
+        assert self._attempt(handler)["error"] == "All trains sold out"
+
+    def test_no_trains_at_all(self):
+        handler = self._handler([NoResultsError()])
+
+        assert self._attempt(handler)["error"] == "No trains available"
+
+    def test_page_limit(self):
+        from telegramBot.korail_client import MAX_SEARCH_PAGES
+
+        # 쪽마다 새 열차 하나 (09:10, 09:20, ...) - 범위가 끝나지 않아도 상한에서 멈춤
+        pages = [[_train(f"{9 + i // 6:02d}{i % 6 * 10:02d}00")] for i in range(1, 30)]
+        handler = self._handler(pages)
+
+        self._attempt(handler, maxDepTime="2400")
+
+        assert handler.korail_client.trains.search.call_count == MAX_SEARCH_PAGES
+
+    def test_seat_on_a_later_page_beats_waitlist(self):
+        """Waitlist only when every train in range is sold out, across all pages"""
+        open_ = _train("090000", waitlist=True)
+        seat = _train("100000", seat=True)
+        handler = self._handler([[open_, _train("093000")], [_train("093000"), seat]])
+
+        result = self._attempt(handler, waitlist=True)
+
+        assert result["result"] == "reserved 100000"
+        assert result["waiting"] is False
+
+    def test_waitlist_after_all_pages_sold_out(self):
+        first, later = _train("090000"), _train("100000", waitlist=True)
+        handler = self._handler(
+            [[first, _train("093000")], [_train("093000"), later], [later]]
+        )
+
+        result = self._attempt(handler, waitlist=True)
+
+        assert result["success"] is True
+        assert result["waiting"] is False  # Mock 예약은 is_waiting 이 아님
+        created = handler.korail_client.reservations.create.call_args
+        assert created.args[0] is later
+        assert created.kwargs["option"] == ReserveOption.GENERAL_ONLY
+
+    def test_before_page_is_called_before_each_next_page(self):
+        calls = []
+        a, b, c = _train("090000"), _train("093000"), _train("100000")
+        handler = self._handler([[a, b], [b, c], [c]])
+
+        self._attempt(handler, before_page=lambda: calls.append(1) or True)
+
+        # 첫 쪽은 호출 측이 시도 전에 이미 간격을 지켰으므로 둘째 쪽부터
+        assert len(calls) == 2
+
+    def test_before_page_can_stop_the_attempt(self):
+        open_ = _train("090000", waitlist=True)
+        handler = self._handler([[open_, _train("093000")]])
+
+        result = self._attempt(handler, waitlist=True, before_page=lambda: False)
+
+        assert result["success"] is False
+        assert result["stopped"] is True
+        assert handler.korail_client.trains.search.call_count == 1
+        # 멈췄으면 앞 쪽의 예약대기도 신청하지 않음
+        handler.korail_client.reservations.create.assert_not_called()
+
+    def test_block_on_a_later_page(self):
+        handler = self._handler([[_train("090000"), _train("093000")], _block()])
+
+        result = self._attempt(handler)
+
+        assert result["blocked"] is True

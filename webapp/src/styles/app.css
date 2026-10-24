@@ -371,6 +371,15 @@ a.kb-icon-btn {
   outline: none;
   box-shadow: var(--focus-ring);
 }
+/* 예약 폼의 스위치 줄 (인근역): 시트를 열지 않고 바로 켜고 끔 */
+.kb-rowswitch {
+  cursor: default;
+}
+.kb-rowswitch > b {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 .kb-waitlist {
   display: grid;
   gap: 1px;
@@ -569,6 +578,9 @@ a.kb-icon-btn {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.kb-train__name small.kb-train__stations {
+  color: var(--brand);
+}
 .kb-train__name small {
   margin-left: 6px;
   color: var(--text-3);
@@ -627,6 +639,10 @@ a.kb-icon-btn {
 .kb-result-card h2 {
   color: var(--success);
   font: var(--type-title-3);
+}
+/* 코레일에서 취소한 예약: 성공 색 대신 기본 글자색 */
+.kb-result-card--cancelled h2 {
+  color: var(--text);
 }
 .kb-result-card p {
   margin: 0;
@@ -1023,4 +1039,62 @@ a.kb-icon-btn {
   .kb-settings-actions > .kb-btn {
     flex: 1;
   }
+}
+
+/* 내 승차권 (코레일 계정의 결제 전 예약·발권 승차권) */
+.kb-account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 2px 0 14px;
+  color: var(--text-2);
+  font-size: var(--fs-body-sm);
+}
+.kb-account b {
+  color: var(--text);
+}
+.kb-tickets-tabs {
+  margin-bottom: 14px;
+}
+.kb-tickets-tabs + .kb-error {
+  margin-bottom: 14px;
+}
+.kb-tickets-note {
+  margin-top: 14px;
+}
+.kb-tickets-loading {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  min-height: 150px;
+}
+.kb-ticket__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 14px;
+}
+.kb-ticket__actions.is-single {
+  grid-template-columns: 1fr;
+}
+.kb-src {
+  margin-left: 6px;
+  color: var(--text-3);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-semibold);
+}
+a.kb-src--bot {
+  color: var(--brand-text);
+  text-decoration: none;
+}
+.kb-deadline {
+  color: var(--danger);
+  font-weight: var(--fw-bold);
+}
+.kb-dialog__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 6px;
 }

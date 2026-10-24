@@ -1,11 +1,12 @@
 import type { Reservation } from '../api'
-import { SEAT_SUMMARY, formatDate, relativeTime, timeRange } from '../format'
+import { SEAT_SUMMARY, displayStatus, formatDate, relativeTime, timeRange } from '../format'
 import { StatusBadge, TrainTag } from './StatusBadge'
 import { RouteLine, Ticket, type TicketTone } from './Ticket'
 
 export function ticketTone(r: Reservation, activeTone: TicketTone = 'plain'): TicketTone {
   if (r.is_active) return activeTone
-  return r.status === 'success' ? 'success' : 'muted'
+  // 코레일에서 취소한 예약은 상태가 success 여도 취소 색
+  return displayStatus(r) === 'success' ? 'success' : 'muted'
 }
 
 export function ReservationCard({ reservation: r }: { reservation: Reservation }) {
@@ -30,9 +31,13 @@ export function ReservationCard({ reservation: r }: { reservation: Reservation }
     >
       <div className="kb-ticket__head">
         <TrainTag reservation={r} />
-        <StatusBadge status={r.status} waitlisted={r.waitlisted} />
+        <StatusBadge
+          status={r.status}
+          waitlisted={r.waitlisted}
+          korailCancelled={Boolean(r.korail_cancelled_at)}
+        />
       </div>
-      <RouteLine from={r.src_station} to={r.dst_station} status={r.status} />
+      <RouteLine from={r.src_station} to={r.dst_station} status={displayStatus(r)} />
       <div className="kb-ticket__window">
         {formatDate(r.dep_date)} · <span className="kb-num">{timeRange(r)}</span>
       </div>

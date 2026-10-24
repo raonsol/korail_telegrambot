@@ -12,6 +12,7 @@ import { RouteLine, Ticket } from '../components/Ticket'
 import {
   KORAIL_PAYMENT_URL,
   SEAT_SUMMARY,
+  displayStatus,
   formatDate,
   formatDateTime,
   parseResultText,
@@ -42,7 +43,18 @@ export function ReservationDetailPage() {
     },
   })
 
+  const korailCancel = useMutation({
+    mutationFn: () => Api.cancelKorailReservation(id),
+    onSuccess: (reservation) => {
+      queryClient.setQueryData(['reservation', id], reservation)
+      queryClient.invalidateQueries({ queryKey: ['reservations'] })
+    },
+  })
+
   const r = query.data
+  const info = r?.status === 'success' ? parseResultText(r.result_text) : {}
+  // 결제 기한: 서버가 받은 값이 있으면 그것, 없으면 결과 문구에서 읽은 시각
+  const payBy = r?.pay_deadline ? formatDateTime(r.pay_deadline) : info.payBy
 
   return (
     <Layout title="예약 상세" back>
@@ -52,11 +64,19 @@ export function ReservationDetailPage() {
         <ErrorBox error={query.error ?? '예약을 찾을 수 없습니다.'} />
       ) : (
         <div className="kb-stack">
-          <DetailTicket reservation={r} info={r.status === 'success' ? parseResultText(r.result_text) : {}} />
+          <DetailTicket reservation={r} info={info} payBy={payBy} />
 
           {justCreated && r.is_active && <PushPrompt />}
 
-          {r.status === 'success' && r.waitlisted && (
+          {r.status === 'success' && r.korail_cancelled_at && (
+            <section className="kb-card kb-result-card kb-result-card--cancelled">
+              <h2>코레일 예약을 취소했습니다</h2>
+              {r.result_text && <p className="kb-result-text kb-num">{r.result_text}</p>}
+              <p className="kb-hint">{formatDateTime(r.korail_cancelled_at)}에 취소함</p>
+            </section>
+          )}
+
+          {r.status === 'success' && r.waitlisted && !r.korail_cancelled_at && (
             <section className="kb-card kb-card--success kb-result-card">
               <h2>예약대기를 신청했습니다</h2>
               {r.result_text && <p className="kb-result-text kb-num">{r.result_text}</p>}
@@ -71,12 +91,21 @@ export function ReservationDetailPage() {
             </section>
           )}
 
-          {r.status === 'success' && !r.waitlisted && (
+          {r.status === 'success' && !r.waitlisted && !r.korail_cancelled_at && (
             <section className="kb-card kb-card--success kb-result-card">
               <h2>예약에 성공했습니다</h2>
               {r.result_text && <p className="kb-result-text kb-num">{r.result_text}</p>}
+              {r.include_nearby && (
+                <p className="kb-hint">
+                  인근역 포함 예약입니다. 실제 출발·도착역을 확인하세요.
+                </p>
+              )}
               <p className="kb-small">
-                <strong>20분 안에 결제하지 않으면 예약이 취소됩니다.</strong>
+                <strong>
+                  {payBy
+                    ? `${payBy}까지 결제하지 않으면 예약이 취소됩니다.`
+                    : '20분 안에 결제하지 않으면 예약이 취소됩니다.'}
+                </strong>
               </p>
               <a
                 className="kb-btn kb-btn--primary kb-btn--block"
@@ -106,6 +135,14 @@ export function ReservationDetailPage() {
               <dd>{SEAT_SUMMARY[r.seat_type]}</dd>
               <dt>예약대기</dt>
               <dd>{r.allow_waitlist ? '사용' : '사용 안 함'}</dd>
+              <dt>인근역</dt>
+              <dd>{r.include_nearby ? '포함' : '포함 안 함'}</dd>
+              {r.korail_rsv_id && (
+                <>
+                  <dt>예약번호</dt>
+                  <dd className="kb-num">{r.korail_rsv_id}</dd>
+                </>
+              )}
               <dt>시작</dt>
               <dd>
                 {formatDateTime(r.created_at)} ({r.origin === 'web' ? '웹' : '텔레그램'})
@@ -120,6 +157,30 @@ export function ReservationDetailPage() {
           </section>
 
           <ErrorBox error={cancel.error} />
+          <ErrorBox error={korailCancel.error} />
+
+          {r.korail_cancellable && (
+            <button
+              className="kb-btn kb-btn--danger kb-btn--block kb-detail-action"
+              disabled={korailCancel.isPending}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    r.waitlisted
+                      ? '코레일에서 이 예약대기를 취소할까요?'
+                      : '코레일에서 이 예약을 취소할까요? 취소한 좌석은 되돌릴 수 없습니다.',
+                  )
+                )
+                  korailCancel.mutate()
+              }}
+            >
+              {korailCancel.isPending
+                ? '코레일에서 취소하는 중…'
+                : r.waitlisted
+                  ? '코레일 예약대기 취소'
+                  : '코레일 예약 취소'}
+            </button>
+          )}
 
           {r.is_active ? (
             <button
@@ -146,16 +207,26 @@ export function ReservationDetailPage() {
 }
 
 /** 상태에 따라 용지 색이 바뀌는 상단 승차권 */
-function DetailTicket({ reservation: r, info }: { reservation: Reservation; info: ResultInfo }) {
+function DetailTicket({
+  reservation: r,
+  info,
+  payBy,
+}: {
+  reservation: Reservation
+  info: ResultInfo
+  payBy?: string
+}) {
   const stubRight =
-    r.status === 'queued'
+    r.status === 'success' && r.korail_cancelled_at
+      ? `${formatDateTime(r.korail_cancelled_at)} 코레일 취소`
+      : r.status === 'queued'
       ? '시작 대기'
       : r.is_active
         ? `${relativeTime(r.updated_at)} 갱신`
         : r.status === 'success' && r.waitlisted
           ? '예약대기 신청'
-          : r.status === 'success' && info.payBy
-            ? `결제 기한 ${info.payBy}`
+          : r.status === 'success' && payBy
+            ? `결제 기한 ${payBy}`
             : `${formatDateTime(r.finished_at ?? r.updated_at)} 종료`
 
   return (
@@ -174,15 +245,20 @@ function DetailTicket({ reservation: r, info }: { reservation: Reservation; info
         <span className="kb-caption kb-caption--strong">
           {formatDate(r.dep_date)} · {info.trainNo ?? r.train_type_label}
         </span>
-        <StatusBadge status={r.status} waitlisted={r.waitlisted} />
+        <StatusBadge
+          status={r.status}
+          waitlisted={r.waitlisted}
+          korailCancelled={Boolean(r.korail_cancelled_at)}
+        />
       </div>
       <RouteLine
         size="lg"
-        from={r.src_station}
-        to={r.dst_station}
+        // 인근역 포함 예약은 실제로 탄 역을 보여 줌 (결과 문구에서 읽음)
+        from={(r.include_nearby && info.depStation) || r.src_station}
+        to={(r.include_nearby && info.arrStation) || r.dst_station}
         fromTime={info.depTime}
         toTime={info.arrTime}
-        status={r.status}
+        status={displayStatus(r)}
       />
       <div className="kb-ticket__window--detail">
         <span className="kb-caption">{info.fare ? '운임' : '출발 시각 범위'}</span>

@@ -55,6 +55,21 @@ async def cancel_reservation(
     )
 
 
+@router.post("/{reservation_id}/korail-cancel", response_model=ReservationOut)
+async def cancel_korail_reservation(
+    reservation_id: str, session: SessionDep, services: ServicesDep
+):
+    """성공한 예약을 코레일에서도 취소 (결제 전). 로그인한 코레일 계정의 예약만"""
+    korail_id, korail_pw = await asyncio.to_thread(services.auth.credentials, session)
+    return await services.reservations.cancel_korail(
+        reservation_id,
+        korail_id=korail_id,
+        korail_pw=korail_pw,
+        owner=session.owner,
+        source="web",
+    )
+
+
 @router.delete("", response_model=list[ReservationOut])
 async def cancel_all_reservations(
     session: SessionDep,

@@ -10,16 +10,25 @@ import hmac
 import logging
 import time
 from collections import defaultdict, deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Iterator, Optional
 
 from sqlalchemy import delete
 
 from .crypto import CredentialVault, new_token, sha256_hex
 from .db import Database, utcnow
-from .egress import EgressPool
-from .errors import AuthFailed, KorailUnavailable, NotAllowed, RateLimited, ServiceError
+from .egress import EgressPool, NullGate
+from .errors import (
+    AuthFailed,
+    KorailLoginFailed,
+    KorailPasswordChangeRequired,
+    KorailUnavailable,
+    NotAllowed,
+    RateLimited,
+    ServiceError,
+)
 from .models import User, WebSession
 from .schemas import (
     ADMIN_USER_ID,
@@ -56,31 +65,159 @@ def default_korail_login(
     device: 계정의 고정 기기 신원 (UserService.korail_device)
 
     Raises:
-        KorailUnavailable: 출구가 코레일 차단으로 쉬는 중이거나 이번 요청이 차단됨
+        KorailUnavailable: 출구가 코레일 차단으로 쉬는 중이거나 이번 요청이 차단됨,
+            또는 코레일 앱 버전 정책 (-8204, KORAIL_APP_OUTDATED)
+        KorailPasswordChangeRequired: 코레일 비밀번호 변경 안내에 걸림 (비밀번호는 맞음)
     """
-    from telegramBot.korail_client import BLOCKED_LOGIN_MESSAGE, ReserveHandler
-
-    ReserveHandler = handler_cls or ReserveHandler
-    egress = egresses.for_account(korail_id) if egresses else None
-    gate = egresses.gate(egress.id) if egress else None
-    if gate is not None and gate.blocked_for() > 0:
-        # 차단 중에 같은 출구로 요청하면 차단이 길어짐
-        raise KorailUnavailable(BLOCKED_LOGIN_MESSAGE)
-
-    handler = (
-        ReserveHandler(proxy_url=egress.proxy_url, egress_id=egress.id, device=device)
-        if egress
-        else ReserveHandler(device=device)
-    )
+    egress, gate = _egress_of(korail_id, egresses)
+    handler = _open_handler(egress, gate, handler_cls, device)
     try:
         ok = handler.login(korail_id, password)
     finally:
         handler.close()
-    if handler.loginBlocked is True:
-        if gate is not None:
-            gate.report_block()
-        raise KorailUnavailable(handler.loginError)
+    # 비밀번호 오류가 아닌 실패는 예외로 (로그인 실패 횟수에 세지 않음)
+    _raise_if_not_credentials(handler, gate)
     return ok, handler.loginError
+
+
+@contextmanager
+def korail_session(
+    korail_id: str,
+    password: str,
+    egresses: Optional[EgressPool],
+    *,
+    device: Optional[dict] = None,
+    handler_cls=None,
+    action: str,
+    error_code: str,
+    before_login: Optional[Callable[[object], None]] = None,
+) -> Iterator[tuple[object, object]]:
+    """그 계정의 출구·기기로 코레일에 로그인한 (ReserveHandler, 출구 gate) - 코레일 취소, 내 승차권
+
+    - 출구가 차단 대기 중이면 요청하지 않음. 차단 응답은 출구를 쉬게 하고 KorailUnavailable
+    - 로그인 실패는 raise_login_failure, 코레일 앱 버전 정책(-8204)은 KORAIL_APP_OUTDATED (503)
+    - 그 밖의 코레일 거절·연결 실패는 ServiceError(error_code)
+    before_login(gate): 로그인 앞에서 할 일 (출구 순서 받기 등)
+    action: 오류 문구·로그에 쓰는 작업 이름 ("취소", "조회")
+    """
+    from pykorail import AccessRestrictedError, KorailError
+
+    from telegramBot.korail_client import (
+        APP_OUTDATED_MESSAGE,
+        BLOCKED_LOGIN_MESSAGE,
+        is_app_outdated,
+    )
+
+    egress, gate = _egress_of(korail_id, egresses)
+    handler = _open_handler(egress, gate, handler_cls, device)
+    try:
+        if before_login is not None:
+            before_login(gate)
+        if not handler.login(korail_id, password):
+            raise_login_failure(handler, gate)
+        try:
+            yield handler, gate
+        except ServiceError:
+            raise
+        except AccessRestrictedError as e:
+            # 차단 중에 같은 출구로 계속 요청하면 차단이 길어지므로 예약 워커와 함께 쉼
+            logger.error(
+                "코레일 서버 차단 응답 (단계=%s, 출구=%s): %s",
+                action,
+                egress.id if egress else "direct",
+                e,
+            )
+            gate.report_block()
+            raise KorailUnavailable(BLOCKED_LOGIN_MESSAGE)
+        except KorailError as e:
+            if is_app_outdated(e):
+                raise KorailUnavailable(
+                    APP_OUTDATED_MESSAGE, code="KORAIL_APP_OUTDATED"
+                )
+            logger.warning(f"Korail {action} refused: {e}")
+            raise ServiceError(
+                f"코레일이 {action}를 거절했습니다: {e.msg or e}", code=error_code
+            )
+        except Exception as e:  # 연결 실패, 코레일 외 HTTP 오류 등
+            logger.warning(f"Korail {action} failed: {e}")
+            raise ServiceError(
+                "코레일 서버에 연결하지 못했습니다. 잠시 후 다시 시도해주세요.",
+                code=error_code,
+            )
+    finally:
+        handler.close()
+
+
+def default_korail_cancel(
+    korail_id: str,
+    password: str,
+    rsv_id: str,
+    egresses: Optional[EgressPool] = None,
+    handler_cls=None,
+    *,
+    device: Optional[dict] = None,
+) -> bool:
+    """코레일 예약(결제 전) 취소 (그 계정의 예약과 같은 출구·기기로 요청)
+
+    Returns:
+        취소했으면 True, 코레일 결제 대기 목록에 없으면(결제·취소·만료) False
+
+    Raises:
+        KorailUnavailable, KorailPasswordChangeRequired, ServiceError: korail_session
+    """
+    with korail_session(
+        korail_id,
+        password,
+        egresses,
+        device=device,
+        handler_cls=handler_cls,
+        action="취소",
+        error_code="KORAIL_CANCEL_FAILED",
+    ) as (handler, _gate):
+        return handler.cancel_reservation(rsv_id)
+
+
+def raise_login_failure(handler, gate) -> None:
+    """ReserveHandler.login() 이 False 일 때 사유에 맞는 오류
+
+    Raises:
+        KorailUnavailable, KorailPasswordChangeRequired: _raise_if_not_credentials
+        KorailLoginFailed: 그 밖의 로그인 실패 (rejected: 코레일이 비밀번호를 거절함)
+    """
+    _raise_if_not_credentials(handler, gate)
+    raise KorailLoginFailed(
+        f"코레일 로그인에 실패했습니다. {handler.loginError}".strip(),
+        rejected=getattr(handler, "loginRejected", False) is True,
+    )
+
+
+def _raise_if_not_credentials(handler, gate) -> None:
+    """비밀번호 문제가 아닌 로그인 실패: 차단(출구를 쉬게 함), 비밀번호 변경 안내, 앱 버전 정책(-8204)"""
+    if handler.loginBlocked is True:
+        gate.report_block()
+        raise KorailUnavailable(handler.loginError)
+    if getattr(handler, "loginPasswordChange", False) is True:
+        raise KorailPasswordChangeRequired(handler.loginError)
+    if getattr(handler, "loginAppOutdated", False) is True:
+        raise KorailUnavailable(handler.loginError, code="KORAIL_APP_OUTDATED")
+
+
+def _egress_of(korail_id: str, egresses: Optional[EgressPool]):
+    """그 계정의 출구와 gate (출구 설정이 없으면 직접 요청, 제한 없음)"""
+    egress = egresses.for_account(korail_id) if egresses else None
+    return egress, egresses.gate(egress.id) if egress else NullGate()
+
+
+def _open_handler(egress, gate, handler_cls, device):
+    from telegramBot.korail_client import BLOCKED_LOGIN_MESSAGE, ReserveHandler
+
+    if gate.blocked_for() > 0:
+        # 차단 중에 같은 출구로 요청하면 차단이 길어짐
+        raise KorailUnavailable(BLOCKED_LOGIN_MESSAGE)
+    handler_cls = handler_cls or ReserveHandler
+    if egress is None:
+        return handler_cls(device=device)
+    return handler_cls(proxy_url=egress.proxy_url, egress_id=egress.id, device=device)
 
 
 def _login_result(result) -> tuple[bool, str]:

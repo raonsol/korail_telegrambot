@@ -35,8 +35,8 @@ import { recentStations, rememberStations } from '../storage'
 /** 출발 시각 범위를 고르는 단위 (분) */
 const TIME_STEP = 30
 
-/** 서버 검증(core/schemas.py MAX_DAYS_AHEAD)과 같은 범위 */
-const MAX_DAYS_AHEAD = 90
+/** 서버 검증(core/schemas.py MAX_DAYS_AHEAD)과 같은 범위 - 코레일은 2개월 이내 열차만 판매 */
+const MAX_DAYS_AHEAD = 60
 
 /** 검색 전에 보여 줄 주요 역 (최근 이용 역 다음에) */
 const MAJOR_STATIONS = ['서울', '용산', '광명', '오송', '대전', '동대구', '부산', '광주송정', '강릉']
@@ -87,6 +87,8 @@ interface Draft {
   seat: SeatSelection
   seatDone: boolean
   waitlist: boolean
+  /** 인근역 출발·도착 열차도 예약 (코레일 앱의 "인접역") */
+  nearby: boolean
 }
 
 const EMPTY_SEAT: SeatSelection = { general: true, special: false, priority: 'general' }
@@ -104,6 +106,7 @@ function initialDraft(prefill: Reservation | undefined, today: string): Draft {
       seat: EMPTY_SEAT,
       seatDone: false,
       waitlist: false,
+      nearby: false,
     }
   }
   // "같은 조건으로 다시 예약" — 시각은 30분 단위로 맞춤 (시작은 내림, 끝은 올림)
@@ -124,6 +127,7 @@ function initialDraft(prefill: Reservation | undefined, today: string): Draft {
     seat: seatSelectionFrom(prefill.seat_type),
     seatDone: true,
     waitlist: prefill.allow_waitlist,
+    nearby: prefill.include_nearby ?? false,
   }
 }
 
@@ -153,6 +157,7 @@ export function NewReservationPage() {
   const [draft, setDraft] = useState<Draft>(() => initialDraft(prefill, today))
   const [sheet, setSheet] = useState<SheetKey | null>(null)
   const [waitInfoOpen, setWaitInfoOpen] = useState(false)
+  const [nearbyInfoOpen, setNearbyInfoOpen] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const update = (patch: Partial<Draft>) => {
     setDraft((d) => ({ ...d, ...patch }))
@@ -230,6 +235,7 @@ export function NewReservationPage() {
       train_type: draft.train,
       seat_type: seatType ?? 'general',
       allow_waitlist: waitlistAvailable && draft.waitlist,
+      include_nearby: draft.nearby,
     })
   }
 
@@ -245,6 +251,7 @@ export function NewReservationPage() {
       seat: EMPTY_SEAT,
       seatDone: false,
       waitlist: false,
+      nearby: false,
     })
   }
 
@@ -369,6 +376,25 @@ export function NewReservationPage() {
                     <Icon name="chevron" size={16} />
                   </button>
                 ))}
+                <div className="kb-rowbtn kb-rowswitch">
+                  <span>인근역</span>
+                  <b>
+                    {draft.nearby ? '포함' : '포함 안 함'}
+                    <button
+                      type="button"
+                      className="kb-info-btn"
+                      aria-label="인근역 포함 설명"
+                      onClick={() => setNearbyInfoOpen(true)}
+                    >
+                      <Icon name="info" size={16} />
+                    </button>
+                  </b>
+                  <Switch
+                    checked={draft.nearby}
+                    onChange={() => update({ nearby: !draft.nearby })}
+                    label="인근역 출발·도착 열차도 예약"
+                  />
+                </div>
               </div>
             </div>
 
@@ -442,7 +468,13 @@ export function NewReservationPage() {
               presets={presets}
               route={
                 draft.src && draft.dst && draft.date
-                  ? { date: draft.date, src: draft.src, dst: draft.dst, train: draft.train }
+                  ? {
+                      date: draft.date,
+                      src: draft.src,
+                      dst: draft.dst,
+                      train: draft.train,
+                      nearby: draft.nearby,
+                    }
                   : null
               }
               onChange={(start, end, preset = '') => update({ start, end, preset })}
@@ -479,6 +511,24 @@ export function NewReservationPage() {
             </div>
           )}
         </Sheet>
+      )}
+
+      {nearbyInfoOpen && (
+        <Dialog
+          title="인근역 포함이란?"
+          icon={<Icon name="info" size={18} />}
+          onClose={() => setNearbyInfoOpen(false)}
+        >
+          <p>코레일 앱의 "인접역" 옵션처럼 가까운 역에서 출발·도착하는 열차도 함께 찾습니다.</p>
+          <ul>
+            <li>예: 용산 → 대전을 고르면 서울 → 대전, 용산 → 서대전 열차도 예약할 수 있습니다.</li>
+            <li>어느 역이 인근역인지는 코레일이 정합니다.</li>
+            <li>예약에 성공하면 결과의 실제 출발·도착역을 꼭 확인하세요.</li>
+          </ul>
+          <button className="kb-btn kb-btn--primary kb-btn--block" onClick={() => setNearbyInfoOpen(false)}>
+            확인
+          </button>
+        </Dialog>
       )}
 
       {waitInfoOpen && (
@@ -740,7 +790,7 @@ function TimePicker({
   preset: string
   presets: Preset[]
   /** 열차 목록 조회 조건 (역·날짜를 아직 안 골랐으면 null) */
-  route: { date: string; src: string; dst: string; train: TrainType } | null
+  route: { date: string; src: string; dst: string; train: TrainType; nearby: boolean } | null
   onChange: (start: number, end: number, preset?: string) => void
   onDone: () => void
 }) {
@@ -837,7 +887,7 @@ function TrainList({
   start,
   end,
 }: {
-  route: { date: string; src: string; dst: string; train: TrainType } | null
+  route: { date: string; src: string; dst: string; train: TrainType; nearby: boolean } | null
   start: number
   end: number
 }) {
@@ -848,6 +898,7 @@ function TrainList({
     start: minuteToHhmm(start),
     end: minuteToHhmm(end),
     train_type: route.train,
+    nearby: route.nearby ? 'true' : 'false',
   }
   const debounced = useDebounced(query, 400)
   const trains = useQuery({
@@ -900,7 +951,10 @@ function TrainList({
       ) : (
         <ul className={`kb-trains__list${updating ? ' is-updating' : ''}`}>
           {list.map((t) => (
-            <li key={`${t.train_no}-${t.dep_time}`} className="kb-train">
+            <li
+              key={`${t.train_no}-${t.dep_time}-${t.dep_station}-${t.arr_station}`}
+              className="kb-train"
+            >
               <span className="kb-train__time kb-num">
                 {minuteLabel(hhmmToMinute(t.dep_time))}
                 <i aria-hidden="true">→</i>
@@ -909,6 +963,14 @@ function TrainList({
               <span className="kb-train__name">
                 {t.train_type} {t.train_no}
                 {t.duration_minutes !== null && <small>{durationLabel(t.duration_minutes)}</small>}
+                {route.nearby &&
+                  t.dep_station &&
+                  t.arr_station &&
+                  (t.dep_station !== route.src || t.arr_station !== route.dst) && (
+                    <small className="kb-train__stations">
+                      {t.dep_station}→{t.arr_station}
+                    </small>
+                  )}
               </span>
               <span className="kb-train__seats">
                 <SeatChip label="일반" available={t.general_seat} />
