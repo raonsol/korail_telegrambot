@@ -314,12 +314,23 @@ export function NewReservationPage() {
                   open={sheet === 'src'}
                   onClick={() => openSheet('src')}
                 />
-                <div
-                  className="kb-route kb-route--mini"
-                  data-status={draft.src && draft.dst ? (ready ? 'running' : 'success') : 'queued'}
-                  aria-hidden="true"
-                >
-                  <div className="kb-route__track" />
+                <div className="kb-ticket-form__rail">
+                  <div
+                    className="kb-route kb-route--mini"
+                    data-status={draft.src && draft.dst ? (ready ? 'running' : 'success') : 'queued'}
+                    aria-hidden="true"
+                  >
+                    <div className="kb-route__track" />
+                  </div>
+                  <button
+                    type="button"
+                    className="kb-icon-btn kb-icon-btn--outline kb-swap-btn"
+                    aria-label="출발역과 도착역 바꾸기"
+                    disabled={!draft.src && !draft.dst}
+                    onClick={() => update({ src: draft.dst, dst: draft.src })}
+                  >
+                    <Icon name="swap" size={16} />
+                  </button>
                 </div>
                 <StopButton
                   label="도착"

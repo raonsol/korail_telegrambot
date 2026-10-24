@@ -316,6 +316,37 @@ a.kb-icon-btn {
 .kb-route--mini .kb-route__track {
   margin: 0 6px;
 }
+/* 노선 바로 아래 출발/도착 바꾸기 (노선은 세로 가운데 그대로) */
+.kb-ticket-form__rail {
+  position: relative;
+}
+.kb-swap-btn {
+  position: absolute;
+  top: calc(50% + 10px);
+  left: 50%;
+  width: 32px;
+  height: 32px;
+  transform: translateX(-50%);
+  transition: transform var(--dur) var(--ease-out), background var(--dur-fast);
+}
+.kb-swap-btn svg {
+  transform: rotate(90deg);
+}
+.kb-swap-btn:hover {
+  background: var(--brand-soft);
+}
+.kb-swap-btn:active {
+  transform: translateX(-50%) scale(0.92);
+}
+.kb-swap-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.kb-swap-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: var(--surface);
+}
 .kb-rows {
   display: grid;
 }
