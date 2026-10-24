@@ -44,7 +44,7 @@ export function SeatPicker({
         ))}
       </div>
       {both && (
-        <div className="kb-field" style={{ gap: 6 }}>
+        <div className="kb-field kb-field--tight">
           <span className="kb-hint">둘 다 있으면</span>
           <Segmented
             name="우선 예약할 좌석"

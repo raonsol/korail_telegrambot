@@ -73,7 +73,7 @@ export function SettingsPage() {
         </div>
       </section>
 
-      <section className="kb-section" style={{ marginTop: 28 }}>
+      <section className="kb-section kb-section--near">
         <div className="kb-section-head">
           <h2>알림</h2>
         </div>
@@ -121,14 +121,10 @@ export function SettingsPage() {
             </div>
           )}
         </div>
-        {(pushError || telegram.error) && (
-          <div style={{ marginTop: 12 }}>
-            <ErrorBox error={pushError ?? telegram.error} />
-          </div>
-        )}
+        <ErrorBox error={pushError ?? telegram.error} />
       </section>
 
-      <section className="kb-section" style={{ marginTop: 28 }}>
+      <section className="kb-section kb-section--near">
         <div className="kb-section-head">
           <h2>화면</h2>
         </div>
@@ -136,7 +132,7 @@ export function SettingsPage() {
       </section>
 
       {!isStandalone() && (
-        <section className="kb-section" style={{ marginTop: 28 }}>
+        <section className="kb-section kb-section--near">
           <div className="kb-section-head">
             <h2>앱 설치</h2>
           </div>
@@ -169,7 +165,7 @@ export function SettingsPage() {
       >
         로그아웃
       </button>
-      <p className="kb-fineprint" style={{ textAlign: 'center', margin: '8px 0 0' }}>
+      <p className="kb-fineprint kb-fineprint--center">
         로그아웃하면 서버에 보관된 코레일 비밀번호가 삭제됩니다.
       </p>
     </Layout>

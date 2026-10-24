@@ -28,7 +28,7 @@ export function HomePage() {
         안녕하세요, <strong>{greeting}</strong>님
       </p>
 
-      <section className="kb-section" style={{ marginTop: 22 }}>
+      <section className="kb-section kb-section--first">
         <div className="kb-section-head">
           <h2>진행 중인 예약</h2>
           {active.data && active.data.length > 0 && (
@@ -55,7 +55,7 @@ export function HomePage() {
         )}
       </section>
 
-      <section className="kb-section" style={{ marginTop: 28 }}>
+      <section className="kb-section kb-section--near">
         <div className="kb-section-head">
           <h2>최근 30일 이력</h2>
         </div>

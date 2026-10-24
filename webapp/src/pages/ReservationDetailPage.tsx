@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Api, type Reservation } from '../api'
 import { useAuth } from '../auth'
 import { ErrorBox, Spinner } from '../components/Feedback'
@@ -24,7 +24,9 @@ import { getPushState, subscribePush, type PushState } from '../push'
 export function ReservationDetailPage() {
   const { id = '' } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
+  const justCreated = Boolean((location.state as { created?: boolean } | null)?.created)
 
   const query = useQuery({
     queryKey: ['reservation', id],
@@ -52,7 +54,7 @@ export function ReservationDetailPage() {
         <div className="kb-stack">
           <DetailTicket reservation={r} info={r.status === 'success' ? parseResultText(r.result_text) : {}} />
 
-          {r.is_active && <PushPrompt />}
+          {justCreated && r.is_active && <PushPrompt />}
 
           {r.status === 'success' && r.waitlisted && (
             <section className="kb-card kb-card--success kb-result-card">
@@ -169,7 +171,7 @@ function DetailTicket({ reservation: r, info }: { reservation: Reservation; info
       }
     >
       <div className="kb-ticket__head">
-        <span className="kb-caption" style={{ color: 'var(--text-2)' }}>
+        <span className="kb-caption kb-caption--strong">
           {formatDate(r.dep_date)} · {info.trainNo ?? r.train_type_label}
         </span>
         <StatusBadge status={r.status} waitlisted={r.waitlisted} />
@@ -190,7 +192,7 @@ function DetailTicket({ reservation: r, info }: { reservation: Reservation; info
   )
 }
 
-/** 진행 중인 예약에서 알림 권한 요청 (맥락 없이 앱 진입 시 요청하지 않음) */
+/** 예약 직후 알림 권한 요청 (맥락 없이 앱 진입 시 요청하지 않음) */
 function PushPrompt() {
   const { me } = useAuth()
   const [state, setState] = useState<PushState | null>(null)

@@ -6,6 +6,7 @@ import { ErrorBox } from '../components/Feedback'
 import { Icon } from '../components/Icon'
 import { Layout } from '../components/Layout'
 import { SeatPicker } from '../components/SeatPicker'
+import { TrainTag } from '../components/StatusBadge'
 import { Segmented } from '../components/Segmented'
 import { Dialog, Sheet } from '../components/Sheet'
 import { Switch } from '../components/Switch'
@@ -59,6 +60,7 @@ interface Preset {
   label: string
   start: number
   end: number
+  disabled?: boolean
 }
 
 interface Draft {
@@ -158,16 +160,22 @@ export function NewReservationPage() {
   // 코레일 예약대기는 일반실 기준이라 특실만 예약에는 쓸 수 없음
   const waitlistAvailable = seatType !== 'special_only'
 
+  // '지금부터'는 오늘 출발일 때만, 오늘 이미 지난 시간대는 고를 수 없음
+  const isToday = draft.date === today
+  const nowPreset: Preset = { key: 'now', label: '지금부터', start: nowHour, end: 24 }
   const presets: Preset[] = [
-    { key: 'now', label: '지금부터', start: nowHour, end: 24 },
+    ...(isToday ? [nowPreset] : []),
     { key: 'am', label: '오전', start: 6, end: 12 },
     { key: 'pm', label: '오후', start: 12, end: 18 },
     { key: 'eve', label: '저녁', start: 18, end: 24 },
-  ]
+  ].map((p) => ({ ...p, disabled: isToday && p.end <= nowHour }))
 
   const openSheet = (key: SheetKey) => {
-    // 시각 시트를 처음 열면 오전(06~12)을 기본으로
-    if (key === 'time' && !hasTime) update({ start: 6, end: 12, preset: 'am' })
+    // 시각 시트를 처음 열면 오늘은 지금부터, 다른 날은 오전(06~12)을 기본으로
+    if (key === 'time' && !hasTime) {
+      const p = isToday ? nowPreset : presets.find((x) => x.key === 'am')!
+      update({ start: p.start, end: p.end, preset: p.key })
+    }
     setSheet(key)
   }
   const closeSheet = () => setSheet(null)
@@ -178,7 +186,7 @@ export function NewReservationPage() {
       rememberStations(reservation.src_station, reservation.dst_station)
       queryClient.setQueryData(['reservation', reservation.id], reservation)
       queryClient.invalidateQueries({ queryKey: ['reservations'] })
-      navigate(`/r/${reservation.id}`, { replace: true })
+      navigate(`/r/${reservation.id}`, { replace: true, state: { created: true } })
     },
   })
 
@@ -272,7 +280,7 @@ export function NewReservationPage() {
         </>
       }
     >
-      <div className="kb-stack" style={{ gap: 16 }}>
+      <div className="kb-stack kb-stack--loose">
         <p className="kb-guide">
           {ready
             ? '조건이 모두 채워졌습니다. 승차권을 확인하고 예약을 시작하세요.'
@@ -289,9 +297,12 @@ export function NewReservationPage() {
                   aria-label={`열차 종류: ${draft.train === 'KTX' ? 'KTX' : '모든 열차'} (바꾸기)`}
                   onClick={() => openSheet('train')}
                 >
-                  <span className={`kb-tag${draft.train === 'KTX' ? ' kb-tag--brand' : ''}`}>
-                    {draft.train === 'KTX' ? 'KTX' : '모든 열차'}
-                  </span>
+                  <TrainTag
+                    reservation={{
+                      train_type: draft.train,
+                      train_type_label: draft.train === 'KTX' ? 'KTX' : '모든 열차',
+                    }}
+                  />
                 </button>
                 <span className="kb-caption">코레일봇 예약 조건</span>
               </div>
@@ -319,7 +330,7 @@ export function NewReservationPage() {
                 />
               </div>
 
-              <div style={{ display: 'grid' }}>
+              <div className="kb-rows">
                 {rows.map((row) => (
                   <button
                     key={row.field}
@@ -389,7 +400,9 @@ export function NewReservationPage() {
               min={today}
               max={maxDate}
               onSelect={(date) => {
-                update({ date })
+                // 오늘로 바꿨는데 고른 시간대가 이미 지났으면 지금부터로
+                const expired = date === today && draft.end !== null && draft.end <= nowHour
+                update(expired ? { date, start: nowHour, end: 24, preset: 'now' } : { date })
                 closeSheet()
               }}
             />
@@ -501,6 +514,7 @@ function StationPicker({
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(1)
   const [results, setResults] = useState<Station[]>([])
+  const [suggestions] = useState(() => [...new Set([...recentStations(), ...MAJOR_STATIONS])].slice(0, 12))
 
   // 입력 디바운스
   useEffect(() => {
@@ -527,7 +541,6 @@ function StationPicker({
     setResults((prev) => (page === 1 ? search.data.stations : [...prev, ...search.data.stations]))
   }, [search.data, page])
 
-  const suggestions = [...new Set([...recentStations(), ...MAJOR_STATIONS])].slice(0, 12)
   const names = query ? results.map((s) => s.name) : suggestions
   const hasMore = query && search.data ? page * search.data.page_size < search.data.total : false
 
@@ -610,7 +623,7 @@ function CalendarPicker({
   const canNext = month < max.slice(0, 7)
 
   return (
-    <div className="kb-sheet-body" style={{ gap: 10 }}>
+    <div className="kb-sheet-body kb-sheet-body--calendar">
       <div className="kb-calendar__head">
         <div className="kb-calendar__nav">
           <button
@@ -706,6 +719,7 @@ function TimePicker({
             type="button"
             role="radio"
             aria-checked={preset === p.key}
+            disabled={p.disabled}
             className={preset === p.key ? 'is-selected' : ''}
             onClick={() => onChange(p.start, p.end, p.key)}
           >

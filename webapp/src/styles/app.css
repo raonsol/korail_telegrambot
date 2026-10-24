@@ -89,6 +89,28 @@ a.kb-icon-btn {
 .kb-stack > .kb-error {
   margin: 0;
 }
+.kb-stack--loose {
+  gap: 16px;
+}
+.kb-section--first {
+  margin-top: 22px;
+}
+.kb-section--near {
+  margin-top: 28px;
+}
+.kb-section .kb-card + .kb-error {
+  margin-top: 12px;
+}
+.kb-field--tight {
+  gap: 6px;
+}
+.kb-caption--strong {
+  color: var(--text-2);
+}
+.kb-fineprint--center {
+  margin: 8px 0 0;
+  text-align: center;
+}
 
 /* 화면 하단 고정 버튼 영역 (새 예약) */
 .kb-actionbar {
@@ -294,6 +316,9 @@ a.kb-icon-btn {
 .kb-route--mini .kb-route__track {
   margin: 0 6px;
 }
+.kb-rows {
+  display: grid;
+}
 .kb-rowbtn > b.kb-num {
   font-size: 15px;
 }
@@ -364,6 +389,9 @@ a.kb-icon-btn {
 .kb-sheet-body--time {
   gap: 16px;
 }
+.kb-sheet-body--calendar {
+  gap: 10px;
+}
 .kb-calendar__head {
   display: flex;
   align-items: center;
@@ -394,6 +422,10 @@ a.kb-icon-btn {
 }
 .kb-calendar__day.is-selected {
   color: var(--on-brand);
+}
+.kb-filter > button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 .kb-stepper__box > button:disabled {
   opacity: 0.4;
@@ -488,6 +520,9 @@ a.kb-icon-btn {
 .kb-admin__head .kb-tabs {
   min-width: 240px;
   margin-left: 20px;
+}
+.kb-admin__spacer {
+  flex: 1;
 }
 .kb-admin__main {
   display: grid;
@@ -595,6 +630,9 @@ a.kb-icon-btn {
   text-align: right;
   white-space: nowrap;
 }
+.kb-grid-row .is-right {
+  text-align: right;
+}
 .kb-grid-row .is-mono {
   font-family: var(--font-mono);
   font-size: 12.5px;
@@ -658,7 +696,10 @@ a.kb-icon-btn {
     flex-basis: 100%;
     margin-left: 0;
   }
-  .kb-admin__main {
+  .kb-admin__spacer {
+  flex: 1;
+}
+.kb-admin__main {
     padding: 20px 16px 40px;
   }
 }

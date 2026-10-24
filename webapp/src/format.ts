@@ -64,13 +64,6 @@ export function kstNow(offsetDays = 0): { date: string; time: string } {
   }
 }
 
-/** HH:MM을 다음 10분 단위로 올림 (최대 23:50) */
-export function roundUpTime(time: string): string {
-  const [h, m] = time.split(':').map(Number)
-  const total = Math.min(Math.ceil((h * 60 + m + 1) / 10) * 10, 23 * 60 + 50)
-  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
-}
-
 export function compactToIso(yyyymmdd: string): string {
   return `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`
 }

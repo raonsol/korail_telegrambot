@@ -5,7 +5,7 @@ import { Api, type AdminUser, type Reservation } from '../api'
 import { ErrorBox, Spinner } from '../components/Feedback'
 import { Icon } from '../components/Icon'
 import { Logo } from '../components/Layout'
-import { StatusBadge } from '../components/StatusBadge'
+import { StatusBadge, TrainTag } from '../components/StatusBadge'
 import { RouteLine } from '../components/Ticket'
 import { useOnline } from '../hooks'
 import {
@@ -49,7 +49,9 @@ function tableStyle(cols: string, minWidth: number) {
 
 /** 01012345678 → 010-1234-5678 (전화번호가 아닌 계정은 그대로) */
 function displayPhone(id: string): string {
-  return /^\d{10,11}$/.test(id) ? formatPhoneInput(id) : id
+  if (/^\d{11}$/.test(id)) return formatPhoneInput(id)
+  if (/^\d{10}$/.test(id)) return `${id.slice(0, 3)}-${id.slice(3, 6)}-${id.slice(6)}`
+  return id
 }
 
 /** 검색어와 일치하는 부분 강조 */
@@ -80,7 +82,14 @@ export function AdminPage() {
   const online = useOnline()
   const reservations = useQuery({
     queryKey: RESERVATIONS_KEY,
-    queryFn: () => Api.reservations('all', 'all', 500),
+    // 진행 중은 따로 받아 이력이 많아도 빠지지 않게 함 (서버 limit 최대 500)
+    queryFn: async () => {
+      const [active, history] = await Promise.all([
+        Api.reservations('active', 'all', 500),
+        Api.reservations('history', 'all', 500),
+      ])
+      return [...active, ...history]
+    },
     // 시도 횟수 갱신 (상태 변경은 SSE로 바로 반영)
     refetchInterval: 60_000,
   })
@@ -111,7 +120,7 @@ export function AdminPage() {
             사용자
           </button>
         </div>
-        <span style={{ flex: 1 }} />
+        <span className="kb-admin__spacer" />
         {reservations.dataUpdatedAt > 0 && (
           <span className="kb-caption">
             관리자 · {kstClock.format(new Date(reservations.dataUpdatedAt))} 기준
@@ -191,8 +200,9 @@ function ReservationsTab({ query, users }: { query: QueryState<Reservation[]>; u
   const filter = FILTERS.find((f) => f.value === status)!
   const list = searched.filter((row) => filter.match(row.r)).sort((a, b) => SORTS[sort](a.r, b.r))
   const pickable = list.filter((row) => row.r.is_active).map((row) => row.r.id)
-  const activeIds = new Set(rows.filter((row) => row.r.is_active).map((row) => row.r.id))
-  const pickedIds = [...picked].filter((id) => activeIds.has(id))
+  const hasActive = rows.some((row) => row.r.is_active)
+  // 검색·필터로 가려진 행은 선택돼 있어도 취소하지 않음 (헤더 체크박스와 같은 기준)
+  const pickedIds = pickable.filter((id) => picked.has(id))
   const allPicked = pickable.length > 0 && pickable.every((id) => picked.has(id))
   const busy = cancel.isPending || cancelAll.isPending
 
@@ -224,7 +234,7 @@ function ReservationsTab({ query, users }: { query: QueryState<Reservation[]>; u
         )}
         <button
           className="kb-btn kb-btn--sm kb-btn--danger-soft"
-          disabled={busy || activeIds.size === 0}
+          disabled={busy || !hasActive}
           onClick={() => {
             if (window.confirm('진행 중인 모든 예약을 취소할까요?')) cancelAll.mutate()
           }}
@@ -301,7 +311,7 @@ function ReservationsTab({ query, users }: { query: QueryState<Reservation[]>; u
               <div role="columnheader">시각 범위</div>
               <div role="columnheader">열차 · 좌석</div>
               <div role="columnheader">사용자</div>
-              <div role="columnheader" style={{ textAlign: 'right' }}>
+              <div role="columnheader" className="is-right">
                 시도
               </div>
               <div role="columnheader">시작</div>
@@ -342,9 +352,7 @@ function ReservationsTab({ query, users }: { query: QueryState<Reservation[]>; u
                 </div>
                 <div role="cell">
                   <div className="kb-cell-train">
-                    <span className={`kb-tag${r.train_type === 'KTX' ? ' kb-tag--brand' : ''}`}>
-                      {highlight(train, term)}
-                    </span>
+                    <TrainTag reservation={r} label={highlight(train, term)} />
                     <span className="kb-muted">{SEAT_SHORT[r.seat_type]}</span>
                   </div>
                 </div>
@@ -498,10 +506,10 @@ function UsersTab({ query, reservations }: { query: QueryState<AdminUser[]>; res
               <div role="columnheader">이름</div>
               <div role="columnheader">상태</div>
               <div role="columnheader">텔레그램</div>
-              <div role="columnheader" style={{ textAlign: 'right' }}>
+              <div role="columnheader" className="is-right">
                 진행 중
               </div>
-              <div role="columnheader" style={{ textAlign: 'right' }}>
+              <div role="columnheader" className="is-right">
                 30일 예약
               </div>
               <div role="columnheader">최근 로그인</div>
