@@ -30,6 +30,7 @@ def app(services, tmp_path):
     (dist / "assets").mkdir(parents=True)
     (dist / "index.html").write_text("<html>app</html>")
     (dist / "sw.js").write_text("// sw")
+    (dist / "apple-touch-icon-180x180.png").write_bytes(b"png")
     (dist / "assets" / "index-abc.js").write_text("console.log(1)")
     return create_app(
         services.settings, services, run_housekeeping=False, dist_dir=str(dist)
@@ -470,6 +471,15 @@ class TestStaticWebapp:
         assert sw.headers["cache-control"] == "no-cache"
         missing = await client.get("/app/assets/missing.js")
         assert missing.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_root_icon_fallbacks(self, client):
+        icon = await client.get("/apple-touch-icon.png")
+        assert icon.status_code == 200
+        assert icon.content == b"png"
+        assert (await client.get("/apple-touch-icon-precomposed.png")).content == b"png"
+        # 빌드에 없는 파일은 404
+        assert (await client.get("/favicon.ico")).status_code == 404
 
     @pytest.mark.asyncio
     async def test_no_path_traversal(self, client):

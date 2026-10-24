@@ -20,6 +20,12 @@ DEFAULT_DIST_CANDIDATES = (
 # 파일명에 해시가 붙은 빌드 산출물
 IMMUTABLE_PREFIX = "assets/"
 NO_CACHE_FILES = {"sw.js", "index.html", "manifest.webmanifest", "registerSW.js"}
+# iOS 등은 <link>와 별개로 사이트 루트의 기본 경로에서도 아이콘을 찾음
+ROOT_ICONS = {
+    "apple-touch-icon.png": "apple-touch-icon-180x180.png",
+    "apple-touch-icon-precomposed.png": "apple-touch-icon-180x180.png",
+    "favicon.ico": "favicon.ico",
+}
 
 
 def resolve_dist_dir(configured: str = "") -> Optional[Path]:
@@ -46,6 +52,22 @@ def mount_webapp(app: FastAPI, dist_dir: Optional[Path]) -> None:
         return
 
     index = dist_dir / "index.html"
+
+    def root_icon(file_name: str):
+        async def serve():
+            target = dist_dir / file_name
+            if not target.is_file():
+                return Response(status_code=404)
+            return FileResponse(
+                target, headers={"Cache-Control": "public, max-age=3600"}
+            )
+
+        return serve
+
+    for root_name, file_name in ROOT_ICONS.items():
+        app.add_api_route(
+            f"/{root_name}", root_icon(file_name), include_in_schema=False
+        )
 
     @app.get("/app/{path:path}", include_in_schema=False)
     async def webapp(path: str):
