@@ -368,6 +368,11 @@ h2 {
   text-align: center;
 }
 
+/* 상단 카드 바로 다음 요소(결과 카드, 요약 카드, 오류 상자 등)와 띄움 */
+.hero + * {
+  margin-top: 12px;
+}
+
 .hero .badge {
   background: rgba(255, 255, 255, 0.2);
   color: #fff;
