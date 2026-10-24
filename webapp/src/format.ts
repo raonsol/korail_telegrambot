@@ -83,6 +83,11 @@ export function formatPhoneInput(value: string): string {
   return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`
 }
 
+/** 화면 색을 정하는 상태 (성공했지만 코레일에서 취소한 예약은 취소 색) */
+export function displayStatus(r: Reservation): ReservationStatus {
+  return r.status === 'success' && r.korail_cancelled_at ? 'cancelled' : r.status
+}
+
 export const KORAIL_PAYMENT_URL =
   'https://www.korail.com/ticket/reservation/list'
 

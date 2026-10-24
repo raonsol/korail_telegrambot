@@ -7,7 +7,13 @@ import { ErrorBox, Spinner } from '../components/Feedback'
 import { Icon } from '../components/Icon'
 import { Layout } from '../components/Layout'
 import { StatusBadge } from '../components/StatusBadge'
-import { KORAIL_PAYMENT_URL, formatDate, formatDateTime, timeRange } from '../format'
+import {
+  KORAIL_PAYMENT_URL,
+  displayStatus,
+  formatDate,
+  formatDateTime,
+  timeRange,
+} from '../format'
 import { getPushState, subscribePush, type PushState } from '../push'
 
 export function ReservationDetailPage() {
@@ -49,7 +55,7 @@ export function ReservationDetailPage() {
         <ErrorBox error={query.error ?? '예약을 찾을 수 없습니다.'} />
       ) : (
         <>
-          <section className={`hero status-${r.status}`}>
+          <section className={`hero status-${displayStatus(r)}`}>
             <StatusBadge
               status={r.status}
               waitlisted={r.waitlisted}

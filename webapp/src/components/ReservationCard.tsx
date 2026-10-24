@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import type { Reservation } from '../api'
-import { formatDate, relativeTime, timeRange } from '../format'
+import { displayStatus, formatDate, relativeTime, timeRange } from '../format'
 import { StatusBadge } from './StatusBadge'
 
 export function ReservationCard({
@@ -11,7 +11,7 @@ export function ReservationCard({
   showOwner?: boolean
 }) {
   return (
-    <Link to={`/r/${r.id}`} className={`card reservation-card status-${r.status}`}>
+    <Link to={`/r/${r.id}`} className={`card reservation-card status-${displayStatus(r)}`}>
       <div className="card-row">
         <span className="route">
           {r.src_station}
