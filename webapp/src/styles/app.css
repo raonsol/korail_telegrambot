@@ -266,7 +266,8 @@ a.kb-icon-btn {
   display: grid;
   /* 역 이름은 글자만큼, 노선은 남는 폭을 모두 (긴 역 이름이면 최소 96px까지 줄어듦) */
   grid-template-columns: minmax(0, max-content) minmax(96px, 1fr) minmax(0, max-content);
-  align-items: center;
+  /* 아래 정렬 + 노선 높이를 역 이름 줄과 같게 → 노선이 역 이름 세로 가운데에 옴 */
+  align-items: end;
   gap: 8px;
   margin: 6px 0 14px;
 }
@@ -293,6 +294,7 @@ a.kb-icon-btn {
 .kb-stop-btn b {
   display: block;
   overflow: hidden;
+  line-height: 32px;
   color: var(--text);
   font-size: var(--fs-title-1);
   letter-spacing: -0.03em;
@@ -321,7 +323,9 @@ a.kb-icon-btn {
   position: relative;
   display: grid;
   align-items: center;
-  min-height: 36px;
+  /* .kb-stop-btn b 의 줄 높이(32px)와 버튼 아래 여백(10px)에 맞춤 */
+  height: 32px;
+  margin-bottom: 10px;
 }
 .kb-swap-btn {
   position: absolute;
