@@ -8,6 +8,8 @@ from pykorail import (
     AccessRestrictedError,
     HttpStatusError,
     KorailError,
+    NeedToLoginError,
+    PasswordChangeRequiredError,
     ReserveOption,
     TrainType,
     SoldOutError,
@@ -41,6 +43,11 @@ BLOCKED_LOGIN_MESSAGE = (
     "코레일 서버가 요청을 일시적으로 차단했습니다. 잠시 후 다시 시도해주세요."
 )
 
+PASSWORD_CHANGE_MESSAGE = (
+    "코레일에서 비밀번호 변경 안내를 처리해야 로그인할 수 있습니다. "
+    "코레일톡 앱이나 홈페이지에서 안내를 처리한 뒤 다시 시도해주세요."
+)
+
 
 def create_korail_client(proxy_url="", *, device=None):
     """pykorail 클라이언트 생성
@@ -59,8 +66,23 @@ def create_korail_client(proxy_url="", *, device=None):
     if proxy_url:
         # pykorail 은 프록시 옵션을 제공하지 않으므로 내부 HTTP 세션(curl_cffi)에 직접 지정.
         # pykorail 의 모든 코레일 요청은 이 세션을 거침 (client._api.get/post)
-        client._api._session.proxies = {"http": proxy_url, "https": proxy_url}
+        _http_session(client).proxies = {"http": proxy_url, "https": proxy_url}
     return client
+
+
+def _http_session(client):
+    """pykorail 이 코레일 요청에 쓰는 curl_cffi 세션
+
+    0.4.0 부터 ``client._api._session`` 은 curl_cffi 세션을 감싼 IdempotentSession 이라
+    거기에 proxies 를 넣으면 아무 효과 없이 직접 요청으로 나감. 구조가 또 바뀌면 조용히
+    직접 요청으로 나가지 않도록 curl_cffi 세션이 아니면 예외를 발생시킨다.
+    """
+    session = client._api._session._session
+    if type(session).__module__.split(".")[0] != "curl_cffi":
+        raise RuntimeError(
+            f"pykorail 내부 HTTP 세션이 curl_cffi Session 이 아님: {type(session)!r}"
+        )
+    return session
 
 
 def _device_kwargs(device):
@@ -109,6 +131,8 @@ class ReserveHandler:
         self.loginSuc = False
         self.loginError = ""  # 사용자에게 보여줄 마지막 로그인 실패 사유
         self.loginBlocked = False  # 마지막 로그인이 코레일 차단 응답으로 실패했는지
+        # 마지막 로그인이 비밀번호 변경 안내로 막혔는지 (비밀번호 오류가 아님)
+        self.loginPasswordChange = False
         self.txtGoHour = "000000"
         self.specialVal = ""
 
@@ -129,6 +153,7 @@ class ReserveHandler:
     def login(self, username, password):
         client = None
         self.loginBlocked = False
+        self.loginPasswordChange = False
         try:
             client = create_korail_client(self.proxy_url, device=self.device)
             # pykorail 은 로그인 실패 시 LoginFailedError 를 발생시킴
@@ -146,6 +171,7 @@ class ReserveHandler:
             if client is not None:
                 client.close()
             self.loginSuc = False
+            self.loginPasswordChange = isinstance(e, PasswordChangeRequiredError)
             self.loginError = self._login_error_message(e)
             return False
 
@@ -164,6 +190,10 @@ class ReserveHandler:
 
         str(KorailError) 는 "메시지 (코드)" 형식이라 코드가 없으면 "(None)" 이 붙으므로 msg 만 사용
         """
+        if isinstance(error, PasswordChangeRequiredError):
+            # 아이디·비밀번호는 맞지만 6개월 넘게 같은 비밀번호를 써서 변경 안내에 걸림
+            # (같은 비밀번호로 다시 시도해도 결과가 같음)
+            return PASSWORD_CHANGE_MESSAGE
         if isinstance(error, HttpStatusError):
             # 자격증명을 보기 전에 서버가 요청을 거절함 (502 등) - 비밀번호 문제가 아님
             reason = error.msg or f"HTTP {error.status_code}"
@@ -215,7 +245,8 @@ class ReserveHandler:
             dict: {'success': bool, 'result': reservation_object_or_none, 'error': str_or_none}
                 재시도가 무의미한 오류(역 이름 오류, 지난 날짜)이면 'fatal': True,
                 코레일 서버 차단 응답이면 'blocked': True,
-                예약대기를 신청했으면 'waiting': True 가 추가됨
+                예약대기를 신청했으면 'waiting': True,
+                코레일 세션이 끊겼으면(P058) 'needs_login': True 가 추가됨
         """
         self._update_reserve_info(
             depDate, srcLocate, dstLocate, depTime, trainType, special, maxDepTime
@@ -257,6 +288,14 @@ class ReserveHandler:
             return {"success": False, "result": None, "error": str(e), "blocked": True}
         except FATAL_ERRORS as e:
             return {"success": False, "result": None, "error": str(e), "fatal": True}
+        except NeedToLoginError as e:
+            # 서버 메시지("로그아웃되었습니다" 등)에 로그인이라는 말이 없을 수 있어 타입으로 구분
+            return {
+                "success": False,
+                "result": None,
+                "error": str(e),
+                "needs_login": True,
+            }
         except Exception as e:
             error_str = str(e)
             # Check for duplicate reservation at top level too

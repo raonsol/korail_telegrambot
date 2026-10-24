@@ -436,7 +436,7 @@ def _run_attempts(
             consecutive_errors += 1
             if attempt % 10 == 0:
                 logger.warning(f"Attempt {attempt} failed: {error}")
-            needs_login = any(
+            needs_login = result.get("needs_login") is True or any(
                 word in error.lower() for word in ("login", "session", "로그인")
             )
             if needs_login or consecutive_errors >= relogin_after_errors:

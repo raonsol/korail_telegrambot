@@ -25,7 +25,7 @@ from .time_keyboard import (
 from .station_keyboard import search_stations, create_station_keyboard
 from config import settings
 from core.auth import default_korail_login
-from core.errors import KorailUnavailable, ServiceError
+from core.errors import KorailPasswordChangeRequired, KorailUnavailable, ServiceError
 from core.notifier import ReservationEvent
 from core.schemas import (
     ADMIN_USER_ID,
@@ -429,7 +429,7 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
                 # 그 계정의 고정 기기 신원 (예약 워커와 같은 Android ID)
                 device=self.users.korail_device(username),
             )
-        except KorailUnavailable as e:
+        except (KorailUnavailable, KorailPasswordChangeRequired) as e:
             return False, e.message
 
     async def _input_id(self, chat_id, data):

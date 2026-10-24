@@ -11,6 +11,8 @@ from pykorail import (
     SoldOutError,
     NoResultsError,
     LoginFailedError,
+    NeedToLoginError,
+    PasswordChangeRequiredError,
     StationNotFoundError,
     PastDepartureError,
     HttpStatusError,
@@ -101,6 +103,31 @@ class TestReserveHandler:
             assert reserve_handler.login("me@example.com", "pw") is False
 
         assert reserve_handler.loginError == "로그인 정보를 다시 확인해 주세요."
+
+    def test_login_failure_for_password_change_notice(self, reserve_handler):
+        """A password change notice is not a wrong password and is flagged separately"""
+        from telegramBot.korail_client import PASSWORD_CHANGE_MESSAGE
+
+        mock_client = Mock()
+        mock_client.login = Mock(
+            side_effect=PasswordChangeRequiredError(
+                "비밀번호를 변경해주세요", "WRC000420"
+            )
+        )
+
+        with patch("telegramBot.korail_client.Korail", return_value=mock_client):
+            assert reserve_handler.login("010-1234-5678", "pw") is False
+
+        assert reserve_handler.loginPasswordChange is True
+        assert reserve_handler.loginBlocked is False
+        assert reserve_handler.loginError == PASSWORD_CHANGE_MESSAGE
+        mock_client.close.assert_called_once()
+
+        # 다음 로그인이 다른 이유로 실패하면 플래그가 풀림
+        mock_client.login = Mock(side_effect=LoginFailedError("x", "WRR000101"))
+        with patch("telegramBot.korail_client.Korail", return_value=mock_client):
+            assert reserve_handler.login("010-1234-5678", "pw") is False
+        assert reserve_handler.loginPasswordChange is False
 
     def test_login_failure_reason_for_http_rejection(self, reserve_handler):
         """A non-block HTTP rejection (e.g. 502) is not shown as a password/network error"""
@@ -467,11 +494,17 @@ class TestKorailBlockLogging:
     """Korail server block responses (code -2000) are written to the server log"""
 
     def test_proxy_applies_only_to_korail_session(self):
+        """The proxy reaches the curl_cffi session pykorail actually sends with
+        (pykorail 0.4.0 wraps it in IdempotentSession). Re-check this when upgrading pykorail.
+        """
+        from curl_cffi import Session
         from telegramBot.korail_client import create_korail_client
 
         client = create_korail_client("socks5h://user:pw@100.64.0.2:1080")
         try:
-            assert client._api._session.proxies == {
+            sent_with = client._api._session._session
+            assert isinstance(sent_with, Session)
+            assert sent_with.proxies == {
                 "http": "socks5h://user:pw@100.64.0.2:1080",
                 "https": "socks5h://user:pw@100.64.0.2:1080",
             }
@@ -480,9 +513,19 @@ class TestKorailBlockLogging:
 
         direct = create_korail_client()
         try:
-            assert not direct._api._session.proxies
+            assert not direct._api._session._session.proxies
         finally:
             direct.close()
+
+    def test_proxy_fails_loudly_if_pykorail_session_changes(self):
+        """If pykorail's session layout changes, refuse instead of silently going direct"""
+        from telegramBot.korail_client import create_korail_client
+
+        client = Mock()
+        client._api._session._session = object()
+        with patch("telegramBot.korail_client.Korail", return_value=client):
+            with pytest.raises(RuntimeError):
+                create_korail_client("socks5h://h:1080")
 
     def test_handler_uses_its_egress(self):
         from telegramBot.korail_client import ReserveHandler
@@ -547,6 +590,20 @@ class TestKorailBlockLogging:
         assert result["blocked"] is True
         assert f"단계={stage}" in caplog.text
         assert "출구=direct" in caplog.text
+
+    def test_logged_out_attempt_needs_login(self):
+        """P058 is flagged by type: its server text may not mention login"""
+        from telegramBot.korail_client import ReserveHandler
+
+        handler = ReserveHandler()
+        handler.korail_client = Mock()
+        handler.korail_client.trains.search.side_effect = NeedToLoginError(
+            "로그아웃되었습니다", "P058"
+        )
+        result = handler.reserve_single_attempt("20990101", "서울", "부산", "090000")
+        assert result["success"] is False
+        assert result["needs_login"] is True
+        assert "P058" in result["error"]
 
     def test_other_http_rejection_is_not_a_block(self, caplog):
         """A non-block HTTP error (e.g. 502) is retried as a normal failure, not logged as a block"""

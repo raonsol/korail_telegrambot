@@ -114,6 +114,46 @@ class TestKorailBlock:
         services.auth.korail_login = korail_login
         await services.auth.login("01012345678", "correct")
 
+    @pytest.mark.asyncio
+    async def test_password_change_notice_is_not_counted_as_failure(
+        self, services, korail_login
+    ):
+        from core.errors import KorailPasswordChangeRequired
+
+        def change_required(korail_id, password, device=None):
+            raise KorailPasswordChangeRequired("비밀번호 변경 안내를 처리해주세요.")
+
+        services.auth.korail_login = change_required
+        for _ in range(5):
+            with pytest.raises(KorailPasswordChangeRequired) as exc:
+                await services.auth.login("01012345678", "correct")
+            assert exc.value.status_code == 403
+
+        services.auth.korail_login = korail_login
+        await services.auth.login("01012345678", "correct")
+
+    def test_login_raises_password_change_required(self):
+        from core.auth import default_korail_login
+        from core.errors import KorailPasswordChangeRequired
+
+        class Handler:
+            loginError = "비밀번호 변경 안내"
+            loginBlocked = False
+            loginPasswordChange = True
+
+            def __init__(self, *_, **__):
+                pass
+
+            def login(self, *_):
+                return False
+
+            def close(self):
+                pass
+
+        with pytest.raises(KorailPasswordChangeRequired) as exc:
+            default_korail_login("010-1234-5678", "pw", handler_cls=Handler)
+        assert exc.value.message == "비밀번호 변경 안내"
+
     def test_login_uses_account_egress_and_records_block(self):
         from core.auth import default_korail_login
         from core.egress import Egress, EgressPool

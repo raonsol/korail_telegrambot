@@ -19,7 +19,14 @@ from sqlalchemy import delete
 from .crypto import CredentialVault, new_token, sha256_hex
 from .db import Database, utcnow
 from .egress import EgressPool
-from .errors import AuthFailed, KorailUnavailable, NotAllowed, RateLimited, ServiceError
+from .errors import (
+    AuthFailed,
+    KorailPasswordChangeRequired,
+    KorailUnavailable,
+    NotAllowed,
+    RateLimited,
+    ServiceError,
+)
 from .models import User, WebSession
 from .schemas import (
     ADMIN_USER_ID,
@@ -57,6 +64,7 @@ def default_korail_login(
 
     Raises:
         KorailUnavailable: 출구가 코레일 차단으로 쉬는 중이거나 이번 요청이 차단됨
+        KorailPasswordChangeRequired: 코레일 비밀번호 변경 안내에 걸림 (비밀번호는 맞음)
     """
     from telegramBot.korail_client import BLOCKED_LOGIN_MESSAGE, ReserveHandler
 
@@ -80,6 +88,8 @@ def default_korail_login(
         if gate is not None:
             gate.report_block()
         raise KorailUnavailable(handler.loginError)
+    if getattr(handler, "loginPasswordChange", False) is True:
+        raise KorailPasswordChangeRequired(handler.loginError)
     return ok, handler.loginError
 
 

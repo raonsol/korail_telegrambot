@@ -106,6 +106,21 @@ class TestRunReservation:
         assert result["status"] == "success"
         assert handler.login.call_count == 2
 
+    def test_relogin_on_needs_login_flag(self):
+        """P058 (NeedToLoginError) relogs in even when the server text has no login word"""
+        logged_out = {
+            "success": False,
+            "result": None,
+            "error": "로그아웃되었습니다 (P058)",
+            "needs_login": True,
+        }
+        handler = _handler(
+            [logged_out, {"success": True, "result": "KTX", "error": None}]
+        )
+        result, _, _ = _run(handler)
+        assert result["status"] == "success"
+        assert handler.login.call_count == 2
+
     def test_relogin_after_consecutive_errors(self):
         weird = {"success": False, "result": None, "error": "HTTP 500"}
         handler = _handler([weird] * 3 + [MISS])
