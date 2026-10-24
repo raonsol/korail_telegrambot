@@ -121,6 +121,58 @@ class TestRunReservation:
         assert result["status"] == "success"
         assert handler.login.call_count == 2
 
+    def test_next_search_page_waits_for_egress(self):
+        """Each extra search page takes an egress slot like an attempt"""
+        gate = Mock(**{"blocked_for.return_value": 0, "reserve_slot.return_value": 0})
+
+        def attempt(**kwargs):
+            assert kwargs["beforePage"]() is True
+            return {"success": True, "result": "KTX", "error": None}
+
+        handler = _handler([])
+        handler.reserve_single_attempt = Mock(side_effect=attempt)
+        result, _, _ = _run(handler, gate=gate)
+
+        assert result["status"] == "success"
+        # 로그인 + 첫 쪽 + 다음 쪽
+        assert gate.reserve_slot.call_count == 3
+
+    def test_cancel_while_waiting_for_next_search_page(self):
+        cancelled = {"now": False}
+        gate = Mock(**{"blocked_for.return_value": 0, "reserve_slot.return_value": 0})
+
+        def attempt(**kwargs):
+            cancelled["now"] = True
+            gate.reserve_slot.return_value = 1.0  # 다음 쪽은 출구 순서를 기다려야 함
+            assert kwargs["beforePage"]() is False
+            return {"success": False, "result": None, "error": None, "stopped": True}
+
+        handler = _handler([])
+        handler.reserve_single_attempt = Mock(side_effect=attempt)
+        result, _, statuses = _run(
+            handler, gate=gate, should_stop=lambda: cancelled["now"]
+        )
+
+        assert result == {"status": "stopped", "attempts": 0}
+        assert handler.reserve_single_attempt.call_count == 1
+        assert statuses == ["running"]
+
+    def test_progress_is_also_sent_by_time(self):
+        """Slow attempts (many search pages waiting for the egress) still keep the
+        reservation alive for the 30-min idle rule"""
+        import itertools
+
+        ticks = itertools.count(0, 200)
+        handler = _handler([MISS] * 3)
+        result, _, statuses = _run(
+            handler,
+            max_attempts=3,
+            progress_every=100,
+            clock=lambda: next(ticks),
+        )
+        assert result["status"] == "failed"
+        assert statuses == ["running", "progress", "failed"]
+
     def test_relogin_after_consecutive_errors(self):
         weird = {"success": False, "result": None, "error": "HTTP 500"}
         handler = _handler([weird] * 3 + [MISS])
@@ -236,8 +288,9 @@ class TestRunReservation:
 
     def test_without_max_duration_runs_until_max_attempts(self):
         handler = _handler([MISS] * 3)
-        clock = Mock(side_effect=AssertionError("clock must not be used"))
-        result, _, statuses = _run(handler, max_attempts=3, clock=clock)
+        # 시계가 아무리 흘러도 최대 실행 시간이 없으면 끝나지 않음 (진행 보고에만 쓰임)
+        ticks = iter(range(0, 10**9, 10**6))
+        result, _, statuses = _run(handler, max_attempts=3, clock=lambda: next(ticks))
         assert result == {"status": "failed", "attempts": 3}
         assert statuses[-1] == "failed"
 

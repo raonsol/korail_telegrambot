@@ -47,7 +47,8 @@ SUCCESS_REPORT_MAX_BACKOFF_SECONDS = 30
 
 # 출구(차단 대기·요청 순서)를 기다리는 동안 취소·최대 실행 시간을 확인하는 간격
 WAIT_STEP_SECONDS = 5.0
-# 차단 대기 중에도 이 간격으로 진행 보고 (웹 서버의 30분 무응답 정리에 걸리지 않도록)
+# 차단 대기 중이나 시도가 오래 걸릴 때도(조회 페이지마다 출구 순서를 기다림) 이 간격으로
+# 진행 보고 (웹 서버의 30분 무응답 정리에 걸리지 않도록)
 WAIT_KEEPALIVE_SECONDS = 300.0
 
 # 웹 서버가 이 예약을 받아들이지 않는 응답 (예약 없음 / 토큰 불일치)
@@ -374,6 +375,7 @@ def _run_attempts(
         return {"status": "rejected", "attempts": 0}
 
     consecutive_errors = 0
+    last_progress = clock()
     for attempt in range(1, max_attempts + 1):
         if should_stop():
             return {"status": "stopped", "attempts": attempt - 1}
@@ -383,6 +385,16 @@ def _run_attempts(
         stop = wait_for_egress(attempt - 1)
         if stop:
             return stop
+
+        paging_stop = {}
+
+        def before_page() -> bool:
+            # 다음 쪽 조회도 출구별 요청 간격을 지키고, 기다리는 동안 취소·만료를 확인
+            stop = wait_for_egress(attempt - 1)
+            if stop:
+                paging_stop["result"] = stop
+                return False
+            return True
 
         try:
             result = handler.reserve_single_attempt(
@@ -394,9 +406,12 @@ def _run_attempts(
                 special=seat_type,
                 maxDepTime=spec["max_dep_time"],
                 allowWaitlist=spec.get("allow_waitlist") is True,
+                beforePage=before_page,
             )
         except Exception as e:  # reserve_single_attempt는 보통 예외를 삼키지만 방어
             result = {"success": False, "result": None, "error": str(e)}
+        if paging_stop:
+            return paging_stop["result"]
 
         if result["success"]:
             waiting = result.get("waiting") is True
@@ -459,7 +474,11 @@ def _run_attempts(
         else:
             consecutive_errors = 0
 
-        if attempt % progress_every == 0:
+        if (
+            attempt % progress_every == 0
+            or clock() - last_progress >= WAIT_KEEPALIVE_SECONDS
+        ):
+            last_progress = clock()
             reporter.send("progress", attempts=attempt)
             if _rejected(reporter):
                 # 취소·만료됐거나 웹 서버가 모르는 예약 (예: DB 초기화 후 남은 워커)

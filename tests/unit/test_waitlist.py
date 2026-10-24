@@ -49,12 +49,13 @@ def _waiting_reservation():
 
 class TestReserveHandlerWaitlist:
     @pytest.mark.parametrize("waitlist", [True, False])
-    def test_search_includes_waitlist_trains_only_when_enabled(self, waitlist):
+    def test_search_includes_sold_out_trains(self, waitlist):
+        """Sold-out trains are always returned (waitlist candidates, next-page cursor)"""
         handler = _handler([], create=[])
         _attempt(handler, waitlist=waitlist)
 
         kwargs = handler.korail_client.trains.search.call_args.kwargs
-        assert kwargs["include_waiting_list"] is waitlist
+        assert kwargs["include_no_seats"] is True
 
     def test_disabled_waitlist_keeps_searching(self):
         handler = _handler([_train("090000", waitlist=True)], create=[])

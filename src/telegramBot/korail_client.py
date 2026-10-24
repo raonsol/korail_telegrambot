@@ -43,6 +43,9 @@ BLOCKED_LOGIN_MESSAGE = (
     "코레일 서버가 요청을 일시적으로 차단했습니다. 잠시 후 다시 시도해주세요."
 )
 
+# 한 번의 시도에서 이어 받을 조회 결과 쪽 수 상한 (코레일은 한 번에 보통 10편만 줌)
+MAX_SEARCH_PAGES = 10
+
 PASSWORD_CHANGE_MESSAGE = (
     "코레일에서 비밀번호 변경 안내를 처리해야 로그인할 수 있습니다. "
     "코레일톡 앱이나 홈페이지에서 안내를 처리한 뒤 다시 시도해주세요."
@@ -96,6 +99,21 @@ def _device_kwargs(device):
     return {"device_profile": profile}
 
 
+def _train_key(train):
+    """조회 쪽 사이에서 같은 열차를 알아보는 키"""
+    return (train.train_no, train.dep_date, train.dep_time)
+
+
+def _departure(train):
+    """열차의 출발 일시 (KST). 읽을 수 없으면 None (다음 쪽을 받지 않음)"""
+    try:
+        return datetime.strptime(
+            train.dep_date + train.dep_time, "%Y%m%d%H%M%S"
+        ).replace(tzinfo=KST)
+    except (TypeError, ValueError):
+        return None
+
+
 def _log_block(error, egress_id, stage):
     """코레일 서버 차단 응답을 서버 로그에 남김 (출구별 차단 빈도·원인 추적용)"""
     logger.error(
@@ -106,6 +124,10 @@ def _log_block(error, egress_id, stage):
         egress_id or "direct",
         error.msg,
     )
+
+
+class _PagingStopped(Exception):
+    """다음 쪽을 받기 전에 멈춰야 함 (취소, 최대 실행 시간 등 - before_page 가 False)"""
 
 
 class ReserveHandler:
@@ -225,6 +247,7 @@ class ReserveHandler:
         special=ReserveOption.GENERAL_FIRST,
         maxDepTime="2400",
         allowWaitlist=False,
+        beforePage=None,
     ):
         """Single reservation attempt (재시도 루프는 core.runner.run_reservation 담당)
 
@@ -237,52 +260,63 @@ class ReserveHandler:
             special (ReserveOption, optional): 예약 옵션. 기본값은 ReserveOption.GENERAL_FIRST.
             maxDepTime (str, optional): 최대 출발 시간, 형식은 'HHMM'. 기본값은 "2400".
             allowWaitlist (bool, optional): 모두 매진일 때 예약대기 신청 여부. 기본값은 False.
+            beforePage (callable, optional): 둘째 쪽부터 조회 요청 전에 호출. False 를
+                반환하면 이번 시도를 멈춤 (호출 측이 출구별 요청 간격·취소를 확인하는 자리)
 
-        좌석이 있는 열차를 먼저 예약하고, allowWaitlist 이고 범위 안의 열차가 모두 매진이면
-        예약대기가 열린 가장 이른 열차에 (일반실) 예약대기를 신청한다 (특실만 예약 옵션 제외).
+        조회 결과는 한 쪽(보통 10편)씩 받으므로, 범위 안의 열차를 다 볼 때까지 다음 쪽을
+        이어 받는다 (최대 MAX_SEARCH_PAGES 쪽). 쪽마다 좌석이 있는 열차를 먼저 예약하고,
+        allowWaitlist 이고 범위 안의 열차가 모두 매진이면 예약대기가 열린 가장 이른 열차에
+        (일반실) 예약대기를 신청한다 (특실만 예약 옵션 제외).
 
         Returns:
             dict: {'success': bool, 'result': reservation_object_or_none, 'error': str_or_none}
                 재시도가 무의미한 오류(역 이름 오류, 지난 날짜)이면 'fatal': True,
                 코레일 서버 차단 응답이면 'blocked': True,
                 예약대기를 신청했으면 'waiting': True,
-                코레일 세션이 끊겼으면(P058) 'needs_login': True 가 추가됨
+                코레일 세션이 끊겼으면(P058) 'needs_login': True,
+                beforePage 가 멈추라고 하면 'stopped': True 가 추가됨
         """
         self._update_reserve_info(
             depDate, srcLocate, dstLocate, depTime, trainType, special, maxDepTime
         )
         waitlist = allowWaitlist and special in WAITLIST_OPTIONS
-        self.reserveInfo["waitlist"] = waitlist
 
         stage = "조회"
         try:
-            # Search for available trains
-            trains = self._search_trains()
-            if not trains:
+            found = False
+            waitlist_trains = []
+            for trains in self._search_pages(beforePage):
+                found = True
+                stage = "예약"
+                # 좌석이 있는 열차부터 (출발 시각 순)
+                for train in (t for t in trains if t.has_seat()):
+                    print(f"열차 발견 : {train} <- 에 대한 예약을 시작합니다.")
+                    result = self._attempt(train, self._try_reserve)
+                    if result:
+                        return result
+                if waitlist:
+                    waitlist_trains.extend(t for t in trains if self._waitlist_open(t))
+                stage = "조회"
+
+            if not found:
                 return {
                     "success": False,
                     "result": None,
                     "error": "No trains available",
                 }
 
+            # 범위 안의 열차가 모두 매진이면 예약대기가 열린 열차에 대기 신청
             stage = "예약"
-            # 좌석이 있는 열차부터 (출발 시각 순)
-            for train in (t for t in trains if t.has_seat()):
-                print(f"열차 발견 : {train} <- 에 대한 예약을 시작합니다.")
-                result = self._attempt(train, self._try_reserve)
+            for train in waitlist_trains:
+                print(f"예약대기 가능 : {train} <- 에 예약대기를 신청합니다.")
+                result = self._attempt(train, self._try_waitlist, waiting=True)
                 if result:
                     return result
 
-            # 모두 매진이면 예약대기가 열린 열차에 대기 신청
-            if waitlist:
-                for train in (t for t in trains if self._waitlist_open(t)):
-                    print(f"예약대기 가능 : {train} <- 에 예약대기를 신청합니다.")
-                    result = self._attempt(train, self._try_waitlist, waiting=True)
-                    if result:
-                        return result
-
             return {"success": False, "result": None, "error": "All trains sold out"}
 
+        except _PagingStopped:
+            return {"success": False, "result": None, "error": None, "stopped": True}
         except AccessRestrictedError as e:
             _log_block(e, self.egress_id, stage)
             return {"success": False, "result": None, "error": str(e), "blocked": True}
@@ -360,21 +394,53 @@ class ReserveHandler:
             }
         )
 
-    def _search_trains(self):
-        try:
-            trains = self.korail_client.trains.search(
-                self.reserveInfo["srcLocate"],
-                self.reserveInfo["dstLocate"],
-                depart_after=self._depart_after(),
-                train_type=self.reserveInfo["trainType"],
-                # 예약대기를 쓰면 매진이어도 대기가 열린 열차를 결과에 포함
-                include_waiting_list=self.reserveInfo.get("waitlist", False),
-            )
-        except NoResultsError:
-            return []
-        # 최대 출발 시간(HHMM) 이전에 출발하는 열차만 남김
+    def _search_pages(self, before_page=None):
+        """조회 범위 안의 열차를 출발 시각 순으로 한 쪽씩 돌려줌
+
+        코레일은 조회 한 번에 한 쪽(보통 10편)만 주므로, 쪽의 마지막 열차 출발 시각부터
+        다시 조회해 이어 받는다 (앱의 다음 쪽 조회와 같은 방식이라 경계의 열차가 다시
+        나오므로 열차 단위로 거름). 최대 출발 시간(HHMM)을 넘는 열차가 나오거나 새 열차가
+        없거나 MAX_SEARCH_PAGES 쪽을 받으면 멈춘다.
+
+        다음 쪽 기준 시각을 알려면 쪽 전체가 필요하므로 매진 열차도 받는다
+        (include_no_seats - 좌석·예약대기 여부는 호출 측이 고름).
+
+        Raises:
+            _PagingStopped: before_page 가 다음 쪽을 받지 말라고 함
+        """
         maxDepTime = int(self.reserveInfo["maxDepTime"])
-        return [train for train in trains if int(train.dep_time[:4]) < maxDepTime]
+        cursor = self._depart_after()
+        seen = set()
+        for page_no in range(MAX_SEARCH_PAGES):
+            if page_no:
+                if before_page is not None and not before_page():
+                    raise _PagingStopped()
+                # 다음 쪽 차례를 기다리는 동안 그 시각이 지났으면 pykorail 이 PastDepartureError
+                # (재시도 없이 실패)로 거부하므로 현재 시각보다 이르지 않게 함
+                cursor = max(cursor, datetime.now(KST))
+            try:
+                page = self.korail_client.trains.search(
+                    self.reserveInfo["srcLocate"],
+                    self.reserveInfo["dstLocate"],
+                    depart_after=cursor,
+                    train_type=self.reserveInfo["trainType"],
+                    include_no_seats=True,
+                )
+            except NoResultsError:
+                return
+            fresh = [train for train in page if _train_key(train) not in seen]
+            if not fresh:
+                return
+            seen.update(_train_key(train) for train in fresh)
+            in_range = [
+                train for train in fresh if int(train.dep_time[:4]) < maxDepTime
+            ]
+            if in_range:
+                yield in_range
+            following = _departure(page[-1])
+            if len(in_range) < len(fresh) or following is None or following <= cursor:
+                return
+            cursor = following
 
     def _depart_after(self):
         """열차 검색 기준 시각 (KST)
