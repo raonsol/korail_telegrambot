@@ -281,6 +281,41 @@ class TestAdminApi:
         assert services.users.get("01055556666") is None
 
     @pytest.mark.asyncio
+    async def test_admin_edits_user(self, client, services):
+        await _admin_login(client)
+        services.users.link_telegram("01012345678", 777)
+
+        edited = await client.patch(
+            "/api/admin/users/01012345678",
+            json={"name": "  김영희 ", "telegram_notify": False},
+        )
+        assert edited.status_code == 200
+        body = edited.json()
+        assert body["name"] == "김영희"
+        assert body["telegram_notify"] is False
+        assert body["telegram_linked"] is True
+        assert body["is_active"] is True  # 보내지 않은 항목은 그대로
+
+        unlinked = await client.patch(
+            "/api/admin/users/01012345678", json={"telegram_linked": False}
+        )
+        assert unlinked.json()["telegram_linked"] is False
+        assert unlinked.json()["name"] == "김영희"
+        assert services.users.telegram_target("01012345678") is None
+
+        cleared = await client.patch("/api/admin/users/01012345678", json={"name": ""})
+        assert cleared.json()["name"] is None
+
+        # 연결은 봇 로그인으로만 생김
+        link = await client.patch(
+            "/api/admin/users/01012345678", json={"telegram_linked": True}
+        )
+        assert link.status_code == 422
+        assert (
+            await client.patch("/api/admin/users/01099999999", json={"name": "x"})
+        ).status_code == 404
+
+    @pytest.mark.asyncio
     async def test_deactivation_revokes_sessions(self, app):
         transport = httpx.ASGITransport(app=app)
         async with (

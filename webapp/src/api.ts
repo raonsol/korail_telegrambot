@@ -86,6 +86,14 @@ export interface AdminUser {
   last_login_at: string | null
 }
 
+/** 보낸 항목만 바뀜. telegram_linked는 false(연결 해제)만 가능 */
+export interface AdminUserPatch {
+  name?: string
+  is_active?: boolean
+  telegram_notify?: boolean
+  telegram_linked?: false
+}
+
 export class ApiError extends Error {
   status: number
   code: string
@@ -172,7 +180,7 @@ export const Api = {
   users: () => api<AdminUser[]>('/api/admin/users'),
   createUser: (phone: string, name: string) =>
     api<AdminUser>('/api/admin/users', { method: 'POST', body: { phone, name: name || null } }),
-  updateUser: (id: string, patch: { name?: string; is_active?: boolean }) =>
+  updateUser: (id: string, patch: AdminUserPatch) =>
     api<AdminUser>(`/api/admin/users/${id}`, { method: 'PATCH', body: patch }),
   deleteUser: (id: string) => api<void>(`/api/admin/users/${id}`, { method: 'DELETE' }),
 }

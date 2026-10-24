@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { Api, type AdminUser, type Reservation } from '../api'
+import { Api, type AdminUser, type AdminUserPatch, type Reservation } from '../api'
 import { ErrorBox, Spinner } from '../components/Feedback'
 import { Icon } from '../components/Icon'
 import { Logo } from '../components/Layout'
+import { Dialog } from '../components/Sheet'
 import { StatusBadge, TrainTag } from '../components/StatusBadge'
+import { Switch } from '../components/Switch'
 import { RouteLine } from '../components/Ticket'
 import { useOnline } from '../hooks'
 import {
@@ -41,7 +43,7 @@ const SORTS: Record<Sort, (a: Reservation, b: Reservation) => number> = {
 
 const RESERVATION_COLS =
   '36px 124px minmax(180px,1.4fr) 116px 128px minmax(150px,1fr) minmax(190px,1.1fr) 84px 148px 76px'
-const USER_COLS = '150px minmax(90px,1fr) 90px 100px 80px 90px 150px 150px'
+const USER_COLS = '150px minmax(90px,1fr) 90px 100px 80px 90px 150px 190px'
 
 function tableStyle(cols: string, minWidth: number) {
   return { '--cols': cols, '--table-min': `${minWidth}px` } as CSSProperties
@@ -415,6 +417,7 @@ function UsersTab({ query, reservations }: { query: QueryState<AdminUser[]>; res
   const [phone, setPhone] = useState('')
   const [name, setName] = useState('')
   const [uq, setUq] = useState('')
+  const [editing, setEditing] = useState<AdminUser | null>(null)
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: USERS_KEY })
   const create = useMutation({
@@ -554,6 +557,14 @@ function UsersTab({ query, reservations }: { query: QueryState<AdminUser[]>; res
                         {user.is_active ? '비활성화' : '활성화'}
                       </button>
                       <button
+                        className="kb-icon-btn"
+                        aria-label={`${user.phone} 정보 수정`}
+                        title="정보 수정"
+                        onClick={() => setEditing(user)}
+                      >
+                        <Icon name="edit" size={18} />
+                      </button>
+                      <button
                         className="kb-icon-btn kb-icon-btn--danger"
                         aria-label={`${user.phone} 삭제`}
                         disabled={remove.isPending}
@@ -577,6 +588,139 @@ function UsersTab({ query, reservations }: { query: QueryState<AdminUser[]>; res
           </div>
         </div>
       )}
+
+      {editing && (
+        <UserEditDialog
+          // 목록이 갱신되면(SSE·다른 탭) 최신 값을 기준으로 바뀐 항목을 계산
+          user={query.data?.find((u) => u.id === editing.id) ?? editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null)
+            refresh()
+          }}
+        />
+      )}
     </>
+  )
+}
+
+/** 사용자 정보 수정 — 바뀐 항목만 보냄 */
+function UserEditDialog({
+  user,
+  onClose,
+  onSaved,
+}: {
+  user: AdminUser
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [name, setName] = useState(user.name ?? '')
+  const [active, setActive] = useState(user.is_active)
+  const [notify, setNotify] = useState(user.telegram_notify)
+  const [unlink, setUnlink] = useState(false)
+
+  const patch: AdminUserPatch = {}
+  if (name.trim() !== (user.name ?? '')) patch.name = name.trim()
+  if (active !== user.is_active) patch.is_active = active
+  if (user.telegram_linked && !unlink && notify !== user.telegram_notify) patch.telegram_notify = notify
+  if (user.telegram_linked && unlink) patch.telegram_linked = false
+  const changed = Object.keys(patch).length > 0
+
+  const save = useMutation({
+    mutationFn: () => Api.updateUser(user.id, patch),
+    onSuccess: onSaved,
+  })
+
+  const onSubmit = (e: FormEvent) => {
+    e.preventDefault()
+    if (changed) save.mutate()
+  }
+
+  return (
+    <Dialog title="사용자 정보 수정" icon={<Icon name="user" size={18} />} onClose={onClose}>
+      <form className="kb-user-edit" onSubmit={onSubmit}>
+        <div className="kb-field">
+          <span className="kb-label">전화번호 (코레일 ID)</span>
+          <span className="kb-user-edit__phone kb-num">{user.phone}</span>
+          <small className="kb-hint">
+            코레일 로그인 ID라 바꿀 수 없습니다. 잘못 등록했다면 삭제 후 다시 추가하세요.
+          </small>
+        </div>
+
+        <div className="kb-field">
+          <label className="kb-label" htmlFor="edit-user-name">
+            이름
+          </label>
+          <input
+            id="edit-user-name"
+            className="kb-input"
+            placeholder="이름 (선택)"
+            value={name}
+            maxLength={50}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+
+        <div className="kb-user-edit__settings">
+          <div className="kb-setting">
+            <div>
+              <strong>사용 허용</strong>
+              <p className="kb-hint">
+                {active
+                  ? '로그인하고 예약할 수 있습니다.'
+                  : '로그인과 새 예약이 막히고, 로그인 중인 기기는 로그아웃됩니다.'}
+              </p>
+            </div>
+            <Switch checked={active} onChange={() => setActive(!active)} label="사용 허용" />
+          </div>
+          <div className="kb-setting">
+            <div>
+              <strong>텔레그램 알림</strong>
+              <p className="kb-hint">
+                {!user.telegram_linked
+                  ? '텔레그램 봇에서 로그인하면 연결됩니다.'
+                  : unlink
+                    ? '저장하면 텔레그램 연결이 해제됩니다.'
+                    : '웹에서 시작한 예약 결과도 텔레그램으로 보냅니다.'}
+              </p>
+            </div>
+            <Switch
+              checked={user.telegram_linked && !unlink && notify}
+              disabled={!user.telegram_linked || unlink}
+              onChange={() => setNotify(!notify)}
+              label="텔레그램 알림"
+            />
+          </div>
+          {user.telegram_linked && (
+            <div className="kb-setting">
+              <div>
+                <strong>텔레그램 연결</strong>
+                <p className="kb-hint">
+                  {unlink ? '연결 해제 예정' : '다른 사람의 텔레그램이 연결됐다면 해제하세요.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                className={`kb-btn kb-btn--sm${unlink ? '' : ' kb-btn--danger-soft'}`}
+                onClick={() => setUnlink(!unlink)}
+              >
+                {unlink ? '되돌리기' : '연결 해제'}
+              </button>
+            </div>
+          )}
+        </div>
+
+        <ErrorBox error={save.error} />
+
+        <div className="kb-user-edit__actions">
+          <button type="button" className="kb-btn kb-btn--ghost" onClick={onClose}>
+            취소
+          </button>
+          <button className="kb-btn kb-btn--primary" disabled={!changed || save.isPending}>
+            {save.isPending ? '저장하는 중…' : '저장'}
+          </button>
+        </div>
+      </form>
+    </Dialog>
   )
 }

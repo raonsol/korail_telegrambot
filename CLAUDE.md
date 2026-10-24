@@ -103,7 +103,7 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 - **src/version.py**: Internal version (`VERSION = "vX.Y"`) - single source for the bot start message and the Docker image tag (`Makefile` reads it)
 
 #### Web API (`src/web/`)
-- `routes_auth.py` (`/api/auth/*`), `routes_reservations.py`, `routes_stations.py` (cached 공공데이터 search), `routes_events.py` (SSE), `routes_push.py`, `routes_admin.py` (user management), `routes_internal.py` (`/internal/events`), `static.py` (`/app/*` SPA fallback + cache headers)
+- `routes_auth.py` (`/api/auth/*`), `routes_reservations.py`, `routes_stations.py` (cached 공공데이터 search), `routes_events.py` (SSE), `routes_push.py`, `routes_admin.py` (user management; `PATCH /api/admin/users/{id}` changes only the sent fields: `name`, `is_active` (false revokes sessions), `telegram_notify`, `telegram_linked: false` (unlink; linking happens only via bot login). The phone/user id is the Korail login id and is not editable), `routes_internal.py` (`/internal/events`), `static.py` (`/app/*` SPA fallback + cache headers)
 - `deps.py`: `korail_session` cookie (HttpOnly, SameSite=Lax), `X-CSRF-Token` required on non-GET; `client_ip()` (login throttling) uses the peer address only - never read `X-Forwarded-For` directly. uvicorn (`fastapi run/dev`, proxy headers on by default) rewrites it only for `FORWARDED_ALLOW_IPS` (default 127.0.0.1; compose sets `172.16.0.0/12` for the Docker gateway)
 - Errors are returned as `{"code": ..., "message": ...}` (`core/errors.py` → HTTP status)
 
@@ -123,7 +123,7 @@ Both modes share the same retry loop (`core/runner.py::run_reservation`) and rep
 #### Web App (`webapp/`)
 - Vite + React + TypeScript, TanStack Query, react-router (basename `/app`)
 - `src/sw.ts`: Workbox precache (offline shell), push + notificationclick handlers (`injectManifest`)
-- Screens: login (user/admin), home (active + 30-day history), new reservation, detail, settings (push/Telegram notify/theme/install), admin (desktop tables: all reservations with search/filter/sort/bulk cancel, users)
+- Screens: login (user/admin), home (active + 30-day history), new reservation, detail, settings (push/Telegram notify/theme/install), admin (desktop tables: all reservations with search/filter/sort/bulk cancel, users with add / edit dialog / delete)
 - Design system "코레일봇" (rail blue, route line `.kb-route` + ticket `.kb-ticket` motifs): `src/styles/` holds the design handoff CSS verbatim (`colors/typography/spacing/base/components/motifs.css`, all `kb-*` classes + `--*` tokens); app-specific layout goes in `src/styles/app.css` only. Fonts (Pretendard, Martian Mono) are loaded from CDNs in `index.html`
 - Theme: `<html data-theme="light|dark">`, set before render by an inline script in `index.html` and by `src/theme.ts` (system / light / dark, localStorage `theme`)
 - New reservation = an empty ticket that is the form: tapping a field opens a bottom sheet (station grid + search, month calendar, hour-range presets/steppers, train type, seat), no separate confirm step. Times are whole hours (end 24 → `2359`); for today a past start is sent as now + 1 min
