@@ -455,6 +455,55 @@ class TestReserveHandler:
         assert result["fatal"] is True
         assert result["error"] == str(error)
 
+    def test_reserve_single_attempt_app_outdated_is_fatal(
+        self, reserve_handler, mock_korail_client
+    ):
+        """코레일 앱 버전·보안 정책 변경(-8204)은 재시도해도 같으므로 바로 중단"""
+        from pykorail import KorailError
+
+        from telegramBot.korail_client import APP_OUTDATED_MESSAGE
+
+        mock_korail_client.trains.search = Mock(
+            side_effect=KorailError("최신 버전으로 업데이트해 주세요.", "-8204")
+        )
+        reserve_handler.korail_client = mock_korail_client
+
+        result = reserve_handler.reserve_single_attempt(
+            depDate="20250115", srcLocate="서울", dstLocate="부산"
+        )
+
+        assert result["fatal"] is True
+        assert result["error"] == APP_OUTDATED_MESSAGE
+
+    def test_other_korail_error_is_not_fatal(self, reserve_handler, mock_korail_client):
+        from pykorail import KorailError
+
+        mock_korail_client.trains.search = Mock(
+            side_effect=KorailError("일시적인 오류입니다.", "-9999")
+        )
+        reserve_handler.korail_client = mock_korail_client
+
+        result = reserve_handler.reserve_single_attempt(
+            depDate="20250115", srcLocate="서울", dstLocate="부산"
+        )
+
+        assert "fatal" not in result
+        assert result["error"] == "일시적인 오류입니다. (-9999)"
+
+    def test_login_app_outdated_reason(self, reserve_handler):
+        from pykorail import KorailError
+
+        from telegramBot.korail_client import APP_OUTDATED_MESSAGE
+
+        mock_client = Mock()
+        mock_client.login = Mock(
+            side_effect=KorailError("최신 버전으로 업데이트해 주세요.", "-8204")
+        )
+        with patch("telegramBot.korail_client.Korail", return_value=mock_client):
+            assert reserve_handler.login("010-1234-5678", "pw") is False
+        assert reserve_handler.loginError == APP_OUTDATED_MESSAGE
+        assert reserve_handler.loginBlocked is False
+
 
 BLOCK_MESSAGE = "매크로 등 미허가 도구 사용 시 이용이 제한될 수 있습니다."
 

@@ -15,7 +15,12 @@ from celery.signals import worker_shutting_down
 from config import celery_settings, web_settings
 from core.crypto import CredentialVault
 from core.egress import MemoryGate, NullGate, RedisGate
-from core.runner import MAX_DURATION_MESSAGE, build_reporter, run_reservation
+from core.runner import (
+    MAX_DURATION_MESSAGE,
+    build_reporter,
+    run_reservation,
+    runner_options,
+)
 from core.task_state import (
     HEARTBEAT_INTERVAL_SECONDS,
     HEARTBEAT_TTL_SECONDS,
@@ -303,6 +308,7 @@ def _run_task(spec: dict, reporter, redis_client, key: str) -> dict:
             should_stop=should_stop,
             on_success=mark_completed,
             gate=_build_gate(spec, redis_client),
+            **runner_options(spec),
         )
     except SoftTimeLimitExceeded:
         if is_completed():

@@ -118,8 +118,24 @@ export const SEAT_SHORT: Record<SeatType, string> = {
 }
 
 /** 정각 단위 시각 (24는 그날 마지막 열차까지 → 23:59) */
-export function hourLabel(hour: number): string {
-  return hour >= 24 ? '23:59' : `${String(hour).padStart(2, '0')}:00`
+/** 하루의 마지막 (출발 시각 범위의 끝 24:00 = 23:59) */
+export const DAY_END = 24 * 60
+
+/** 0시부터 지난 분 → HH:MM (DAY_END는 23:59) */
+export function minuteLabel(minutes: number): string {
+  if (minutes >= DAY_END) return '23:59'
+  return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`
+}
+
+/** 0시부터 지난 분 → HHMM (API 형식, DAY_END는 2359) */
+export function minuteToHhmm(minutes: number): string {
+  return minuteLabel(minutes).replace(':', '')
+}
+
+/** HHMM 또는 HH:MM → 0시부터 지난 분 */
+export function hhmmToMinute(hhmm: string): number {
+  const digits = hhmm.replace(':', '')
+  return Number(digits.slice(0, 2)) * 60 + Number(digits.slice(2, 4))
 }
 
 /** 14:52 → 오후 2:52 */

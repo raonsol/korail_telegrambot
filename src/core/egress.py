@@ -368,6 +368,15 @@ class EgressPool:
             gate_factory=gate_factory,
         )
 
+    def set_rpm(self, rpm: int) -> None:
+        """분당 검색 횟수 변경 (관리자 설정). 이 서버의 출구 게이트에 바로 반영되고,
+        워커는 새로 시작하는 예약부터 spec["egress_rpm"]으로 받음"""
+        with self._lock:
+            self.rpm = rpm
+            for gate in self._gates.values():
+                if hasattr(gate, "rpm"):
+                    gate.rpm = rpm
+
     @property
     def ids(self) -> list[str]:
         return [e.id for e in self.egresses]

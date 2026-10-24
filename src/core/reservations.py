@@ -83,6 +83,8 @@ class ReservationService:
         self.max_duration = max_duration
         # 코레일 요청 출구 (계정마다 고정). 없으면 이 서버의 직접 연결 하나
         self.egresses = egresses or EgressPool(parse_egresses(""))
+        # 워커 반복 설정 (관리자 설정, core/runner.py runner_options). 비어 있으면 워커 기본값
+        self.runner_options: dict = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._admission_lock = threading.Lock()
 
@@ -279,6 +281,8 @@ class ReservationService:
         spec.update(self._egress_spec(egress))
         if self.max_duration:
             spec["max_duration"] = self.max_duration
+        if self.runner_options:
+            spec["runner"] = dict(self.runner_options)
         try:
             if self.device_for:
                 spec["korail_device"] = self.device_for(korail_id)

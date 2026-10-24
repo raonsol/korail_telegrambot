@@ -38,6 +38,33 @@ export interface Reservation {
   is_active: boolean
 }
 
+export interface Train {
+  train_no: string // "015"
+  train_type: string // "KTX", "KTX-산천" ...
+  dep_time: string // HHMM
+  arr_time: string // HHMM
+  duration_minutes: number | null
+  general_seat: boolean
+  special_seat: boolean
+  /** 매진이지만 (일반실) 예약대기를 받음 */
+  waitlist: boolean
+}
+
+export interface TrainSearch {
+  trains: Train[]
+  /** 시간대 끝까지 조회하지 못함 (뒤쪽 열차가 더 있을 수 있음) */
+  truncated: boolean
+}
+
+export interface TrainQuery {
+  date: string // YYYY-MM-DD
+  src: string
+  dst: string
+  start: string // HHMM, 이 시각 이후 출발
+  end: string // HHMM, 이 시각 전 출발
+  train_type: TrainType
+}
+
 export interface ReservationInput {
   dep_date: string // YYYY-MM-DD
   src_station: string
@@ -84,6 +111,32 @@ export interface AdminUser {
   telegram_notify: boolean
   created_at: string
   last_login_at: string | null
+}
+
+/** 관리자 운영 설정 (core/app_settings.py) */
+export interface AdminSetting {
+  key: string
+  group: string
+  label: string
+  unit: string
+  help: string
+  value: number
+  /** 환경변수·코드 기본값 */
+  default: number
+  min: number
+  max: number
+  /** 1이면 정수만 */
+  step: number
+  /** 관리자가 바꾼 값인지 */
+  overridden: boolean
+}
+
+/** 보낸 항목만 바뀜. telegram_linked는 false(연결 해제)만 가능 */
+export interface AdminUserPatch {
+  name?: string
+  is_active?: boolean
+  telegram_notify?: boolean
+  telegram_linked?: false
 }
 
 export class ApiError extends Error {
@@ -164,6 +217,8 @@ export const Api = {
   stations: (q: string, page = 1) =>
     api<StationResult>(`/api/stations?q=${encodeURIComponent(q)}&page=${page}`),
 
+  trains: (q: TrainQuery) => api<TrainSearch>(`/api/trains?${new URLSearchParams({ ...q })}`),
+
   subscribePush: (subscription: PushSubscriptionJSON) =>
     api<void>('/api/push/subscriptions', { method: 'POST', body: subscription }),
   unsubscribePush: (endpoint: string) =>
@@ -172,7 +227,12 @@ export const Api = {
   users: () => api<AdminUser[]>('/api/admin/users'),
   createUser: (phone: string, name: string) =>
     api<AdminUser>('/api/admin/users', { method: 'POST', body: { phone, name: name || null } }),
-  updateUser: (id: string, patch: { name?: string; is_active?: boolean }) =>
+  updateUser: (id: string, patch: AdminUserPatch) =>
     api<AdminUser>(`/api/admin/users/${id}`, { method: 'PATCH', body: patch }),
   deleteUser: (id: string) => api<void>(`/api/admin/users/${id}`, { method: 'DELETE' }),
+
+  adminSettings: () => api<AdminSetting[]>('/api/admin/settings'),
+  /** null이면 기본값으로 되돌림 */
+  updateAdminSettings: (values: Record<string, number | null>) =>
+    api<AdminSetting[]>('/api/admin/settings', { method: 'PATCH', body: { values } }),
 }

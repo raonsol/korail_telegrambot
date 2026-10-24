@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
+from .app_settings import AppSettingsService, setting_definitions
 from .auth import AuthService, KorailLogin, default_korail_login
 from .crypto import CredentialVault
 from .db import Database
@@ -20,6 +21,7 @@ from .launchers import (
 )
 from .notifier import Notifier, SSEBroker, WebPushChannel
 from .reservations import ReservationService
+from .trains import TrainSearchService
 from .users import UserService
 
 logger = logging.getLogger(__name__)
@@ -40,13 +42,17 @@ class Services:
     sse: SSEBroker
     reservations: ReservationService
     egresses: EgressPool
+    trains: Optional[TrainSearchService] = None
+    app_settings: Optional[AppSettingsService] = None
     push: Optional[WebPushChannel] = None
 
     def init_storage(self) -> None:
-        """스키마 마이그레이션 + ALLOW_LIST 시드 + 관리자 코레일 계정 행"""
+        """스키마 마이그레이션 + ALLOW_LIST 시드 + 관리자 코레일 계정 행 + 관리자 설정 반영"""
         self.db.migrate()
         self.users.seed_from_allow_list(self.settings.allow_list)
         self.users.ensure_admin_account()
+        if self.app_settings is not None:
+            self.app_settings.load()
 
 
 def build_services(
@@ -121,8 +127,46 @@ def build_services(
         sse=sse,
         reservations=reservations,
         egresses=egresses,
+        trains=TrainSearchService(egresses, device_for=users.korail_device),
+        app_settings=AppSettingsService(
+            db,
+            setting_definitions(settings),
+            on_change=functools.partial(
+                apply_settings,
+                reservations,
+                egresses,
+                max_duration_limit=settings.reservation_timeout,
+            ),
+        ),
         push=push,
     )
+
+
+def apply_settings(
+    reservations: ReservationService,
+    egresses: EgressPool,
+    values: dict,
+    *,
+    max_duration_limit: int,
+) -> None:
+    """관리자 설정을 서비스에 반영 (한도는 바로, 워커 설정은 새로 시작하는 예약부터)
+
+    max_duration_limit: 환경변수 RESERVATION_TIMEOUT (Celery 워커가 그보다 오래 돌 수 없음)
+    """
+    reservations.max_active_total = int(values["max_concurrent_reservations"])
+    reservations.max_active_per_user = int(values["max_reservations_per_user"])
+    reservations.max_duration = min(
+        int(values["max_duration_minutes"]) * 60, int(max_duration_limit)
+    )
+    reservations.runner_options = {
+        "interval": float(values["attempt_interval"]),
+        "max_attempts": int(values["max_attempts"]),
+        "relogin_after_errors": int(values["relogin_after_errors"]),
+        "same_error_limit": int(values["same_error_limit"]),
+        "progress_every": int(values["progress_every"]),
+    }
+    egresses.max_active = int(values["korail_egress_max_active"])
+    egresses.set_rpm(int(values["korail_egress_rpm"]))
 
 
 def _gate_factory(launcher: Launcher, rpm: int):

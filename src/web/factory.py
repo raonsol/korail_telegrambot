@@ -23,6 +23,7 @@ from . import (
     routes_push,
     routes_reservations,
     routes_stations,
+    routes_trains,
 )
 from .errors import register_error_handlers
 from .static import mount_webapp, resolve_dist_dir
@@ -126,6 +127,7 @@ def create_app(
             routes_auth,
             routes_reservations,
             routes_stations,
+            routes_trains,
             routes_events,
             routes_push,
             routes_admin,
