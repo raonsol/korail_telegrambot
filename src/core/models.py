@@ -88,7 +88,7 @@ class Reservation(Base):
     error: Mapped[Optional[str]] = mapped_column(Text)
     # 예약 성공 시 코레일 예약번호와 결제 기한 (예약 후 관리: 코레일 예약 취소, 결제 기한 알림)
     # "이미 같은 예약이 있음"으로 끝난 경우에는 없음
-    korail_rsv_id: Mapped[Optional[str]] = mapped_column(String(20))
+    korail_rsv_id: Mapped[Optional[str]] = mapped_column(String(20), index=True)
     pay_deadline: Mapped[Optional[datetime]] = mapped_column(DateTime)  # UTC
     pay_reminded_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     korail_cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime)

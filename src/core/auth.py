@@ -129,16 +129,7 @@ def default_korail_cancel(
     )
     try:
         if not handler.login(korail_id, password):
-            if handler.loginBlocked is True:
-                if gate is not None:
-                    gate.report_block()
-                raise KorailUnavailable(handler.loginError)
-            if getattr(handler, "loginPasswordChange", False) is True:
-                raise KorailPasswordChangeRequired(handler.loginError)
-            raise ServiceError(
-                f"코레일 로그인에 실패했습니다. {handler.loginError}".strip(),
-                code="KORAIL_LOGIN_FAILED",
-            )
+            raise_login_failure(handler, gate)
         try:
             return handler.cancel_reservation(rsv_id)
         except AccessRestrictedError:
@@ -158,6 +149,30 @@ def default_korail_cancel(
             )
     finally:
         handler.close()
+
+
+def raise_login_failure(handler, gate) -> None:
+    """ReserveHandler.login() 이 False 일 때 사유에 맞는 오류 (코레일 취소, 내 승차권)
+
+    Raises:
+        KorailUnavailable: 차단 (출구를 쉬게 함) 또는 코레일 앱 버전 정책 (-8204)
+        KorailPasswordChangeRequired: 코레일 비밀번호 변경 안내
+        ServiceError: 그 밖의 로그인 실패 (KORAIL_LOGIN_FAILED)
+    """
+    from telegramBot.korail_client import APP_OUTDATED_MESSAGE
+
+    if handler.loginBlocked is True:
+        if gate is not None:
+            gate.report_block()
+        raise KorailUnavailable(handler.loginError)
+    if getattr(handler, "loginPasswordChange", False) is True:
+        raise KorailPasswordChangeRequired(handler.loginError)
+    if handler.loginError == APP_OUTDATED_MESSAGE:
+        raise KorailUnavailable(handler.loginError, code="KORAIL_APP_OUTDATED")
+    raise ServiceError(
+        f"코레일 로그인에 실패했습니다. {handler.loginError}".strip(),
+        code="KORAIL_LOGIN_FAILED",
+    )
 
 
 def _login_result(result) -> tuple[bool, str]:

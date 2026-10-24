@@ -275,7 +275,8 @@ export const Api = {
   korailAccount: (refresh = false) =>
     api<KorailAccount>(`/api/korail/account${refresh ? '?refresh=true' : ''}`),
   cancelKorailRsv: (rsvId: string) =>
-    api<KorailAccount>(`/api/korail/reservations/${encodeURIComponent(rsvId)}/cancel`, {
+    // 남은 목록 (서버에 방금 본 목록이 없으면 null - 다시 조회)
+    api<KorailAccount | null>(`/api/korail/reservations/${encodeURIComponent(rsvId)}/cancel`, {
       method: 'POST',
     }),
   cancelAll: (scope: 'mine' | 'all' = 'mine') =>

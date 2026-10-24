@@ -85,6 +85,10 @@ def is_past_time(time: str):
     return time_alt < current_time
 
 
+# /mytickets 에 종류별로 보여 줄 최대 항목 수 (텔레그램 메시지는 4096자까지)
+MYTICKETS_MAX_ITEMS = 10
+
+
 class TelegramBot:
     """텔레그램 채널 어댑터
 
@@ -406,8 +410,10 @@ class TelegramBot:
                 }
             )
 
+            self.userDict[chat_id]["userInfo"].pop("korailLogin", None)
             loginSuc, loginError = self._korail_login(username, password)
             if loginSuc:
+                self.userDict[chat_id]["userInfo"]["korailLogin"] = (username, password)
                 msg = Messages.Info.INPUT_DATE
                 self.userDict[chat_id]["lastAction"] = 4
                 await self.send_message(chat_id, msg, reply_markup=create_calendar())
@@ -459,6 +465,8 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
             self.userDict[chat_id]["userInfo"]["korailId"] = format_phone(
                 normalized_data
             )
+            # 새 계정으로 로그인하는 중: 비밀번호 확인 전까지는 로그인한 계정이 없음
+            self.userDict[chat_id]["userInfo"].pop("korailLogin", None)
             self.userDict[chat_id]["userInfo"]["ownerId"] = normalized_data
             self.userDict[chat_id]["userInfo"]["isAdmin"] = False
             self.userDict[chat_id]["lastAction"] = 3
@@ -469,10 +477,13 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
     # 패스워드 입력 함수
     async def _input_pw(self, chat_id, data):
         self.userDict[chat_id]["userInfo"]["korailPw"] = data
+        self.userDict[chat_id]["userInfo"].pop("korailLogin", None)
         username = self.userDict[chat_id]["userInfo"]["korailId"]
         password = self.userDict[chat_id]["userInfo"]["korailPw"]
         loginSuc, loginError = self._korail_login(username, password)
         if loginSuc:
+            # 코레일이 확인한 계정만 /mytickets, 코레일 예약 취소에 씀
+            self.userDict[chat_id]["userInfo"]["korailLogin"] = (username, password)
             owner_id = self.userDict[chat_id]["userInfo"].get("ownerId")
             if owner_id:
                 # 웹에서 시작한 예약 결과도 이 채팅으로 받을 수 있도록 연결
@@ -1149,13 +1160,12 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
 
     async def _cancel_korail_reservation(self, chat_id, reservation_id):
         # 비밀번호는 이 대화에서 로그인할 때 받은 것만 씀 (DB에 저장하지 않음)
-        user_info = self.userDict.get(chat_id, {}).get("userInfo", {})
-        korail_id = user_info.get("korailId")
-        korail_pw = user_info.get("korailPw")
+        login = self._chat_korail_login(chat_id)
         owner = self._chat_owner(chat_id)
-        if not korail_pw or korail_pw == "no-login-yet" or owner is None:
+        if login is None or owner is None:
             await self.send_message(chat_id, Messages.Info.KORAIL_CANCEL_NEEDS_LOGIN)
             return
+        korail_id, korail_pw = login
         try:
             await self.reservations.cancel_korail(
                 reservation_id,
@@ -1213,12 +1223,13 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
         await self._show_my_tickets(chat_id)
 
     def _chat_korail_login(self, chat_id):
-        """이 대화에서 로그인한 코레일 계정 (비밀번호는 메모리에만 있음). 없으면 None"""
+        """이 대화에서 코레일 로그인에 성공한 (아이디, 비밀번호). 없으면 None
+
+        korailId/korailPw 는 로그인 확인 전에 입력값으로 채워지므로 쓰지 않음 (틀린 비밀번호로
+        남의 계정 캐시를 보거나 남의 계정에 로그인 실패를 쌓지 않도록). 비밀번호는 메모리에만 있음
+        """
         user_info = self.userDict.get(chat_id, {}).get("userInfo", {})
-        korail_id, korail_pw = user_info.get("korailId"), user_info.get("korailPw")
-        if not korail_pw or korail_pw == "no-login-yet" or not korail_id:
-            return None
-        return korail_id, korail_pw
+        return user_info.get("korailLogin")
 
     async def _show_my_tickets(self, chat_id, refresh=False):
         login = self._chat_korail_login(chat_id)
@@ -1258,10 +1269,13 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
 
     @staticmethod
     def _train_line(item) -> str:
-        weekday = "월화수목금토일"[datetime.strptime(item.dep_date, "%Y%m%d").weekday()]
+        try:
+            day = datetime.strptime(item.dep_date, "%Y%m%d")
+            date = f"{day.month}/{day.day}({'월화수목금토일'[day.weekday()]})"
+        except ValueError:
+            date = item.dep_date
         return (
-            f"{item.train_type} {item.train_no.lstrip('0') or item.train_no}  "
-            f"{int(item.dep_date[4:6])}/{int(item.dep_date[6:])}({weekday}) "
+            f"{item.train_type} {item.train_no.lstrip('0') or item.train_no}  {date} "
             f"{item.dep_time[:2]}:{item.dep_time[2:]}→{item.arr_time[:2]}:{item.arr_time[2:]}"
         )
 
@@ -1273,7 +1287,7 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
             "",
             f"💳 결제 대기 {len(data.reservations)}건",
         ]
-        for i, r in enumerate(data.reservations):
+        for i, r in enumerate(data.reservations[:MYTICKETS_MAX_ITEMS]):
             lines.append(f"{self._mark(i)} {self._train_line(r)}")
             lines.append(
                 f"    {r.dep_station}→{r.arr_station} · {r.price:,}원 · {r.seat_count}석"
@@ -1291,26 +1305,38 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
                 lines.append(f"    {source}")
         if not data.reservations:
             lines.append("결제를 기다리는 예약이 없습니다.")
+        lines += self._more_items(data.reservations)
         lines += ["", f"✅ 발권 완료 {len(data.tickets)}건"]
-        offset = len(data.reservations)
-        for i, t in enumerate(data.tickets):
+        offset = min(len(data.reservations), MYTICKETS_MAX_ITEMS)
+        for i, t in enumerate(data.tickets[:MYTICKETS_MAX_ITEMS]):
             lines.append(f"{self._mark(offset + i)} {self._train_line(t)}")
             lines.append(
                 f"    {t.dep_station}→{t.arr_station} · {t.car_no}호차 {t.seats} · {t.price:,}원"
             )
         if not data.tickets:
             lines.append("발권한 승차권이 없습니다.")
+        lines += self._more_items(data.tickets)
         lines += ["", Messages.Info.MYTICKETS_FOOTER]
         return "\n".join(lines)
 
+    @staticmethod
+    def _more_items(items) -> list[str]:
+        hidden = len(items) - MYTICKETS_MAX_ITEMS
+        return [Messages.Info.MYTICKETS_MORE.format(count=hidden)] if hidden > 0 else []
+
     def _my_tickets_keyboard(self, data):
-        cancel_buttons = [
-            InlineKeyboardButton(
-                f"❌ {self._mark(i)} {'예약대기 취소' if r.waiting else '예약 취소'}",
-                callback_data=f"kres_c_{r.rsv_id}",
+        cancel_buttons, seen = [], set()
+        for i, r in enumerate(data.reservations[:MYTICKETS_MAX_ITEMS]):
+            # 환승 예약은 구간마다 항목이 있지만 예약번호는 하나 (취소도 한 번)
+            if r.rsv_id in seen:
+                continue
+            seen.add(r.rsv_id)
+            cancel_buttons.append(
+                InlineKeyboardButton(
+                    f"❌ {self._mark(i)} {'예약대기 취소' if r.waiting else '예약 취소'}",
+                    callback_data=f"kres_c_{r.rsv_id}",
+                )
             )
-            for i, r in enumerate(data.reservations)
-        ]
         rows = [cancel_buttons[i : i + 2] for i in range(0, len(cancel_buttons), 2)]
         if any(not r.waiting for r in data.reservations):
             rows.append(

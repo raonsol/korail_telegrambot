@@ -5,12 +5,15 @@
 
 - 비밀번호는 호출 측이 넘긴 것만 쓴다 (웹: 로그인 세션, 텔레그램: 대화의 로그인 정보)
 - 그 계정의 예약과 같은 출구(IP)·기기 신원으로 요청하고, 출구별 요청 간격과 차단 대기를
-  예약 워커와 함께 지킨다 (로그인·예약 목록·승차권 목록 앞에서 출구 순서를 받음)
+  예약 워커와 함께 지킨다 (로그인 앞, 그리고 pykorail 이 보내는 목록·상세 요청마다 출구 순서를 받음)
 - 예약·승차권마다 상세를 한 번씩 더 조회하므로 (pykorail) 같은 계정은 잠시 캐시한다
+- 코레일이 비밀번호를 거절하면 같은 비밀번호로는 잠시 다시 로그인하지 않는다
+  (웹 세션의 비밀번호가 바뀐 뒤 새로고침을 거듭해 코레일 계정이 잠기지 않도록)
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
 import time
@@ -21,7 +24,8 @@ from pydantic import BaseModel, field_serializer
 
 from .db import utcnow
 from .egress import EgressPool
-from .errors import KorailPasswordChangeRequired, KorailUnavailable, ServiceError
+from .auth import raise_login_failure
+from .errors import KorailUnavailable, ServiceError
 from .schemas import account_key, pay_deadline_utc
 
 logger = logging.getLogger(__name__)
@@ -31,6 +35,8 @@ CACHE_TTL_SECONDS = 60
 CACHE_MAX_ENTRIES = 200
 # 출구 순서를 이만큼 넘게 기다려야 하면 조회하지 않음 (예약 워커가 출구를 많이 쓰는 중)
 MAX_SLOT_WAIT_SECONDS = 8
+# 코레일이 비밀번호를 거절한 뒤 같은 비밀번호로 다시 로그인하지 않는 시간 (코레일은 5회 실패 시 잠금)
+LOGIN_REJECTED_HOLD_SECONDS = 600
 
 BLOCKED_MESSAGE = (
     "코레일 서버가 요청을 일시적으로 차단해 예약·승차권을 불러올 수 없습니다. "
@@ -38,6 +44,34 @@ BLOCKED_MESSAGE = (
 )
 BUSY_MESSAGE = "코레일 조회 요청이 많습니다. 잠시 후 다시 시도해주세요."
 FAILED_MESSAGE = "코레일 예약·승차권을 불러오지 못했습니다. 잠시 후 다시 시도해주세요."
+LOGIN_HELD_MESSAGE = (
+    "코레일이 이 비밀번호로 로그인을 거절했습니다. 코레일 비밀번호를 바꿨다면 로그아웃 후 "
+    "다시 로그인해주세요. (계정 잠김을 막기 위해 10분 동안 같은 비밀번호로 다시 시도하지 않습니다)"
+)
+
+
+def _password_digest(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def _pace_korail_requests(client, before: Callable[[], None]) -> None:
+    """이 클라이언트가 코레일에 보내는 요청마다 먼저 before() (출구 순서) 를 거치게 함
+
+    pykorail 은 목록 한 번에 항목마다 상세 요청을 더 보내므로 (N+1) 목록 호출 앞에서만
+    순서를 받으면 출구 요청 간격(KORAIL_EGRESS_RPM)을 넘는다. 프록시를 넣는 곳과 같은
+    curl_cffi 세션(_http_session)의 get/post 를 이 인스턴스에서만 감싼다.
+    """
+    from telegramBot.korail_client import _http_session
+
+    session = _http_session(client)
+    for name in ("get", "post"):
+        send = getattr(session, name)
+
+        def paced(url, _send=send, **kwargs):
+            before()
+            return _send(url, **kwargs)
+
+        setattr(session, name, paced)
 
 
 def _as_utc(value: Optional[datetime]):
@@ -106,19 +140,26 @@ class KorailAccountService:
         self,
         egresses: EgressPool,
         device_for: Callable[[str], Optional[dict]] = lambda _: None,
-        links_for: Callable[[str], dict[str, str]] = lambda _: {},
+        links_for: Callable[[str, set[str]], dict[str, str]] = lambda *_: {},
         handler_factory: Optional[Callable[..., object]] = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        pace: Callable[[object, Callable[[], None]], None] = _pace_korail_requests,
     ):
         self.egresses = egresses
         self.device_for = device_for
-        # 코레일 예약번호 -> 코레일봇 예약 기록 id (ReservationService.korail_links)
+        # (계정, 코레일 예약번호들) -> {코레일 예약번호: 코레일봇 예약 기록 id}
+        # (ReservationService.korail_links)
         self.links_for = links_for
         self._handler_factory = handler_factory
         self._sleep = sleep
         self._clock = clock
+        self._pace = pace
         self._cache: dict[str, tuple[float, KorailAccountOut]] = {}
+        # forget() 마다 올림: 조회 중에 취소가 있었으면 그 조회 결과는 캐시하지 않음
+        self._generation: dict[str, int] = {}
+        # 계정 -> (거절된 시각, 비밀번호 해시)
+        self._rejected: dict[str, tuple[float, str]] = {}
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ 캐시
@@ -133,8 +174,10 @@ class KorailAccountService:
 
     def forget(self, korail_id: str) -> None:
         """예약을 취소하는 등 코레일 쪽이 바뀌었으면 다음 조회는 새로 받음"""
+        key = account_key(korail_id)
         with self._lock:
-            self._cache.pop(account_key(korail_id), None)
+            self._cache.pop(key, None)
+            self._generation[key] = self._generation.get(key, 0) + 1
 
     @staticmethod
     def without(account: KorailAccountOut, rsv_id: str) -> KorailAccountOut:
@@ -155,8 +198,21 @@ class KorailAccountService:
             cached = self.cached(korail_id)
             if cached is not None:
                 return cached
-        reservations, tickets = self._fetch(korail_id, password)
-        links = self.links_for(korail_id)
+        key = account_key(korail_id)
+        digest = _password_digest(password)
+        with self._lock:
+            rejected = self._rejected.get(key)
+            generation = self._generation.get(key, 0)
+        if (
+            rejected
+            and rejected[1] == digest
+            and self._clock() - rejected[0] < LOGIN_REJECTED_HOLD_SECONDS
+        ):
+            raise ServiceError(LOGIN_HELD_MESSAGE, code="KORAIL_LOGIN_FAILED")
+
+        reservations, tickets = self._fetch(korail_id, password, key, digest)
+        rsv_ids = {r.rsv_id for r in reservations} | {t.pnr_no for t in tickets}
+        links = self.links_for(korail_id, rsv_ids) if rsv_ids else {}
         out = KorailAccountOut(
             korail_id=korail_id,
             reservations=[_reservation_out(r, links) for r in reservations],
@@ -164,12 +220,24 @@ class KorailAccountService:
             fetched_at=utcnow(),
         )
         with self._lock:
-            if len(self._cache) >= CACHE_MAX_ENTRIES:
-                self._cache.pop(next(iter(self._cache)))
-            self._cache[account_key(korail_id)] = (self._clock(), out)
+            if self._generation.get(key, 0) == generation:
+                self._store(key, out)
         return out
 
-    def _fetch(self, korail_id: str, password: str):
+    def _store(self, key: str, out: KorailAccountOut) -> None:
+        """self._lock 안에서 호출"""
+        now = self._clock()
+        for k in [
+            k for k, (t, _) in self._cache.items() if now - t >= CACHE_TTL_SECONDS
+        ]:
+            del self._cache[k]
+        # 같은 계정은 지우고 다시 넣어 가장 최근 항목으로 (넘치면 가장 오래된 것부터 버림)
+        self._cache.pop(key, None)
+        if len(self._cache) >= CACHE_MAX_ENTRIES:
+            self._cache.pop(next(iter(self._cache)))
+        self._cache[key] = (now, out)
+
+    def _fetch(self, korail_id: str, password: str, key: str, digest: str):
         from pykorail import AccessRestrictedError, KorailError
 
         from telegramBot.korail_client import (
@@ -187,12 +255,16 @@ class KorailAccountService:
         try:
             self._wait_for_slot(gate)
             if not handler.login(korail_id, password):
-                _raise_login_failure(handler, gate, APP_OUTDATED_MESSAGE)
+                if getattr(handler, "loginRejected", False) is True:
+                    with self._lock:
+                        self._rejected[key] = (self._clock(), digest)
+                raise_login_failure(handler, gate)
+            with self._lock:
+                self._rejected.pop(key, None)
             client = handler.korail_client
             try:
-                self._wait_for_slot(gate)
+                self._pace(client, lambda: self._wait_for_slot(gate))
                 reservations = client.reservations.all()
-                self._wait_for_slot(gate)
                 tickets = client.tickets.all()
             except AccessRestrictedError as e:
                 # 차단 중에 같은 출구로 계속 요청하면 차단이 길어지므로 예약 워커와 함께 쉼
@@ -230,20 +302,6 @@ class KorailAccountService:
             raise ServiceError(BUSY_MESSAGE, code="KORAIL_ACCOUNT_BUSY")
         if delay > 0:
             self._sleep(delay)
-
-
-def _raise_login_failure(handler, gate, app_outdated_message: str):
-    if handler.loginBlocked is True:
-        gate.report_block()
-        raise KorailUnavailable(handler.loginError)
-    if getattr(handler, "loginPasswordChange", False) is True:
-        raise KorailPasswordChangeRequired(handler.loginError)
-    if handler.loginError == app_outdated_message:
-        raise KorailUnavailable(handler.loginError, code="KORAIL_APP_OUTDATED")
-    raise ServiceError(
-        f"코레일 로그인에 실패했습니다. {handler.loginError}".strip(),
-        code="KORAIL_LOGIN_FAILED",
-    )
 
 
 def _train_fields(train) -> dict:

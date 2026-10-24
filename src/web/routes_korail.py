@@ -5,6 +5,7 @@
 """
 
 import asyncio
+from typing import Optional
 
 from fastapi import APIRouter, Path
 
@@ -27,7 +28,7 @@ async def korail_account(
     )
 
 
-@router.post("/reservations/{rsv_id}/cancel", response_model=KorailAccountOut)
+@router.post("/reservations/{rsv_id}/cancel", response_model=Optional[KorailAccountOut])
 async def cancel_korail_reservation(
     session: SessionDep,
     services: ServicesDep,
@@ -36,7 +37,8 @@ async def cancel_korail_reservation(
     """결제 전 예약(예약대기 포함)을 취소하고 남은 목록을 돌려줌
 
     방금 본 목록이 있으면 거기서 취소한 예약만 빼서 돌려줌 (다시 조회하면 로그인과
-    예약마다 상세 조회가 또 나가므로). 없으면 새로 조회.
+    예약마다 상세 조회가 또 나가므로). 없으면 null - 취소는 이미 끝났으므로 여기서 다시
+    조회하다 실패해 취소까지 실패한 것처럼 보이지 않도록, 목록은 클라이언트가 다시 받음.
     """
     korail_id, korail_pw = await asyncio.to_thread(services.auth.credentials, session)
     before = services.korail_account.cached(korail_id)
@@ -46,8 +48,6 @@ async def cancel_korail_reservation(
         rsv_id,
         source="admin" if session.is_admin else "web",
     )
-    if before is not None:
-        return services.korail_account.without(before, rsv_id)
-    return await asyncio.to_thread(
-        services.korail_account.overview, korail_id, korail_pw, True
-    )
+    if before is None:
+        return None
+    return services.korail_account.without(before, rsv_id)

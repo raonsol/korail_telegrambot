@@ -180,6 +180,7 @@ https://www.korail.com/ticket/reservation/list
             "코레일 로그인 정보가 없습니다. /start 로 다시 로그인한 뒤 "
             "/mytickets 를 입력해주세요."
         )
+        MYTICKETS_MORE: str = '… 외 {count}건은 웹앱 "승차권" 화면에서 볼 수 있습니다.'
         MYTICKETS_FOOTER: str = (
             "결제는 기한 안에 코레일에서 직접 해야 합니다.\n"
             "환불·변경은 코레일톡 앱에서 해주세요."

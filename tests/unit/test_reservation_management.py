@@ -648,7 +648,11 @@ class TestTelegram:
     def _confirm_state(self, bot, chat_id=1):
         bot.userDict[chat_id] = {
             "lastAction": 11,
-            "userInfo": {"korailId": KORAIL_ID, "korailPw": "correct"},
+            "userInfo": {
+                "korailId": KORAIL_ID,
+                "korailPw": "correct",
+                "korailLogin": (KORAIL_ID, "correct"),
+            },
             "trainInfo": {
                 "depDate": "20991231",
                 "srcLocate": "용산",

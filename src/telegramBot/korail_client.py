@@ -8,6 +8,7 @@ from pykorail import (
     AccessRestrictedError,
     HttpStatusError,
     KorailError,
+    LoginFailedError,
     NeedToLoginError,
     PasswordChangeRequiredError,
     ReserveOption,
@@ -220,6 +221,7 @@ class ReserveHandler:
         client = None
         self.loginBlocked = False
         self.loginPasswordChange = False
+        self.loginRejected = False
         try:
             client = create_korail_client(self.proxy_url, device=self.device)
             # pykorail 은 로그인 실패 시 LoginFailedError 를 발생시킴
@@ -238,6 +240,7 @@ class ReserveHandler:
                 client.close()
             self.loginSuc = False
             self.loginPasswordChange = isinstance(e, PasswordChangeRequiredError)
+            self.loginRejected = self._credentials_rejected(e)
             self.loginError = self._login_error_message(e)
             return False
 
@@ -249,6 +252,17 @@ class ReserveHandler:
         self.loginSuc = True
         self.loginError = ""
         return True
+
+    @staticmethod
+    def _credentials_rejected(error):
+        """코레일이 아이디·비밀번호를 거절함 (같은 비밀번호로 다시 시도하면 잠금에 가까워짐)"""
+        return (
+            isinstance(error, LoginFailedError)
+            and not isinstance(error, PasswordChangeRequiredError)
+            and not is_app_outdated(error)
+            # 사유·코드 없는 거부는 비밀번호 오류로 단정할 수 없음 (_login_error_message)
+            and not (error.code is None and error.msg == PYKORAIL_FALLBACK_LOGIN_MSG)
+        )
 
     @staticmethod
     def _login_error_message(error):

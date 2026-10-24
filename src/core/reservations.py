@@ -429,13 +429,16 @@ class ReservationService:
         await self._cancel_on_korail(korail_id, korail_pw, rsv_id)
         await self._mark_korail_cancelled(korail_id, rsv_id, source)
 
-    def korail_links(self, korail_id: str) -> dict[str, str]:
-        """이 코레일 계정에서 코레일봇이 잡은 예약: 코레일 예약번호 -> 예약 기록 id"""
+    def korail_links(self, korail_id: str, rsv_ids: set[str]) -> dict[str, str]:
+        """이 코레일 계정에서 코레일봇이 잡은 예약: 코레일 예약번호 -> 예약 기록 id
+
+        rsv_ids: 코레일 목록에 있는 예약번호 (그 번호의 기록만 읽음)
+        """
         key = account_key(korail_id)
         with self.db.session() as s:
             rows = s.execute(
                 select(Reservation.korail_rsv_id, Reservation.id, Reservation.korail_id)
-                .where(Reservation.korail_rsv_id.is_not(None))
+                .where(Reservation.korail_rsv_id.in_(rsv_ids))
                 .order_by(Reservation.created_at)
             ).all()
         return {rsv: rid for rsv, rid, kid in rows if account_key(kid) == key}

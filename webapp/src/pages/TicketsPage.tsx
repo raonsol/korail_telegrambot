@@ -1,30 +1,25 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import {
-  Api,
-  type KorailAccount,
-  type KorailReservation,
-  type KorailTicket,
-} from "../api";
-import { ErrorBox } from "../components/Feedback";
-import { Icon } from "../components/Icon";
-import { Layout } from "../components/Layout";
-import { Segmented } from "../components/Segmented";
-import { Dialog } from "../components/Sheet";
-import { RouteLine, Ticket } from "../components/Ticket";
-import { KORAIL_PAYMENT_URL, formatDate, formatTime } from "../format";
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Api, type KorailAccount, type KorailReservation, type KorailTicket } from '../api'
+import { ErrorBox } from '../components/Feedback'
+import { Icon } from '../components/Icon'
+import { Layout } from '../components/Layout'
+import { Segmented } from '../components/Segmented'
+import { Dialog } from '../components/Sheet'
+import { RouteLine, Ticket } from '../components/Ticket'
+import { KORAIL_PAYMENT_URL, formatDate, formatTime } from '../format'
 
-type Tab = "pending" | "issued";
+type Tab = 'pending' | 'issued'
 
-const QUERY_KEY = ["korail-account"];
+const QUERY_KEY = ['korail-account']
 
 /** 내 코레일 예약·승차권: 코레일 계정에 지금 있는 결제 전 예약과 발권된 승차권 */
 export function TicketsPage() {
-  const queryClient = useQueryClient();
-  const [tab, setTab] = useState<Tab>("pending");
-  const [target, setTarget] = useState<KorailReservation | null>(null);
-  const now = useNow(30_000);
+  const queryClient = useQueryClient()
+  const [tab, setTab] = useState<Tab>('pending')
+  const [target, setTarget] = useState<KorailReservation | null>(null)
+  const now = useNow(30_000)
 
   const query = useQuery({
     queryKey: QUERY_KEY,
@@ -33,27 +28,28 @@ export function TicketsPage() {
     staleTime: 60_000,
     retry: false,
     refetchOnWindowFocus: false,
-  });
+  })
 
   const refresh = useMutation({
     mutationFn: () => Api.korailAccount(true),
     onSuccess: (data) => queryClient.setQueryData(QUERY_KEY, data),
-  });
+  })
 
   const cancel = useMutation({
     mutationFn: (rsvId: string) => Api.cancelKorailRsv(rsvId),
     onSuccess: (data) => {
-      queryClient.setQueryData(QUERY_KEY, data);
+      if (data) queryClient.setQueryData(QUERY_KEY, data)
+      else queryClient.invalidateQueries({ queryKey: QUERY_KEY })
       // 코레일봇이 잡은 예약이면 그 예약 기록도 "코레일 취소"로 바뀜
-      queryClient.invalidateQueries({ queryKey: ["reservations"] });
-      queryClient.invalidateQueries({ queryKey: ["reservation"] });
-      setTarget(null);
+      queryClient.invalidateQueries({ queryKey: ['reservations'] })
+      queryClient.invalidateQueries({ queryKey: ['reservation'] })
+      setTarget(null)
     },
-  });
+  })
 
-  const data = query.data;
-  const loading = query.isPending || (refresh.isPending && !data);
-  const error = refresh.error ?? query.error;
+  const data = query.data
+  const loading = query.isPending || (refresh.isPending && !data)
+  const error = refresh.error ?? query.error
 
   return (
     <Layout
@@ -73,12 +69,12 @@ export function TicketsPage() {
         <span>{data ? <b>{data.korail_id}</b> : null} 코레일 계정</span>
         <span className="kb-num">
           {refresh.isPending || query.isFetching
-            ? "불러오는 중"
+            ? '불러오는 중'
             : data
               ? `${clock(data.fetched_at)} 조회`
               : error
-                ? "조회 실패"
-                : ""}
+                ? '조회 실패'
+                : ''}
         </span>
       </div>
 
@@ -89,12 +85,12 @@ export function TicketsPage() {
           onChange={setTab}
           options={[
             {
-              value: "pending",
-              label: `결제 대기${data ? ` ${data.reservations.length}` : ""}`,
+              value: 'pending',
+              label: `결제 대기${data ? ` ${data.reservations.length}` : ''}`,
             },
             {
-              value: "issued",
-              label: `발권 완료${data ? ` ${data.tickets.length}` : ""}`,
+              value: 'issued',
+              label: `발권 완료${data ? ` ${data.tickets.length}` : ''}`,
             },
           ]}
         />
@@ -107,14 +103,11 @@ export function TicketsPage() {
       ) : !data ? (
         <div className="kb-empty">
           <p>코레일 예약·승차권을 불러오지 못했습니다.</p>
-          <button
-            className="kb-btn kb-btn--sm"
-            onClick={() => refresh.mutate()}
-          >
+          <button className="kb-btn kb-btn--sm" onClick={() => refresh.mutate()}>
             다시 시도
           </button>
         </div>
-      ) : tab === "pending" ? (
+      ) : tab === 'pending' ? (
         <PendingList account={data} now={now} onCancel={setTarget} />
       ) : (
         <IssuedList account={data} />
@@ -122,31 +115,23 @@ export function TicketsPage() {
 
       {target && (
         <Dialog
-          title={
-            target.waiting
-              ? "예약대기를 취소할까요?"
-              : "코레일 예약을 취소할까요?"
-          }
+          title={target.waiting ? '예약대기를 취소할까요?' : '코레일 예약을 취소할까요?'}
           icon={<Icon name="trash" size={18} />}
           onClose={() => !cancel.isPending && setTarget(null)}
         >
           <p>
             <b>
               {target.train_type} {trainNo(target.train_no)}
-            </b>{" "}
+            </b>{' '}
             · {formatDate(target.dep_date)} {formatTime(target.dep_time)}
             <br />
-            {target.dep_station} → {target.arr_station} · {won(target.price)} ·{" "}
-            {target.seat_count}석
+            {target.dep_station} → {target.arr_station} · {won(target.price)} · {target.seat_count}
+            석
           </p>
           <p className="kb-hint">취소한 좌석은 되돌릴 수 없습니다.</p>
           <ErrorBox error={cancel.error} />
           <div className="kb-dialog__actions">
-            <button
-              className="kb-btn"
-              disabled={cancel.isPending}
-              onClick={() => setTarget(null)}
-            >
+            <button className="kb-btn" disabled={cancel.isPending} onClick={() => setTarget(null)}>
               아니오
             </button>
             <button
@@ -154,17 +139,13 @@ export function TicketsPage() {
               disabled={cancel.isPending}
               onClick={() => cancel.mutate(target.rsv_id)}
             >
-              {cancel.isPending
-                ? "취소하는 중…"
-                : target.waiting
-                  ? "예약대기 취소"
-                  : "예약 취소"}
+              {cancel.isPending ? '취소하는 중…' : target.waiting ? '예약대기 취소' : '예약 취소'}
             </button>
           </div>
         </Dialog>
       )}
     </Layout>
-  );
+  )
 }
 
 function PendingList({
@@ -172,9 +153,9 @@ function PendingList({
   now,
   onCancel,
 }: {
-  account: KorailAccount;
-  now: number;
-  onCancel: (r: KorailReservation) => void;
+  account: KorailAccount
+  now: number
+  onCancel: (r: KorailReservation) => void
 }) {
   if (account.reservations.length === 0) {
     return (
@@ -184,15 +165,15 @@ function PendingList({
           새 예약 시작
         </Link>
       </div>
-    );
+    )
   }
   return (
     <>
       <div className="kb-list">
-        {account.reservations.map((r) => (
+        {account.reservations.map((r, i) => (
           <Ticket
-            key={r.rsv_id}
-            tone={r.waiting ? "plain" : "brand"}
+            key={`${r.rsv_id}-${i}`}
+            tone={r.waiting ? 'plain' : 'brand'}
             stub={
               <>
                 <span>
@@ -202,8 +183,7 @@ function PendingList({
                   <span>좌석 배정 대기 중</span>
                 ) : r.pay_deadline ? (
                   <span className="kb-deadline">
-                    {clock(r.pay_deadline)}까지 ·{" "}
-                    {remaining(r.pay_deadline, now)}
+                    {clock(r.pay_deadline)}까지 · {remaining(r.pay_deadline, now)}
                   </span>
                 ) : null}
               </>
@@ -214,10 +194,8 @@ function PendingList({
                 <TrainName item={r} />
                 <Source item={r} />
               </span>
-              <span
-                className={`kb-badge kb-badge--${r.waiting ? "waitlisted" : "running"}`}
-              >
-                {r.waiting ? "예약대기" : "결제 대기"}
+              <span className={`kb-badge kb-badge--${r.waiting ? 'waitlisted' : 'running'}`}>
+                {r.waiting ? '예약대기' : '결제 대기'}
               </span>
             </div>
             <RouteLine
@@ -226,15 +204,13 @@ function PendingList({
               to={r.arr_station}
               fromTime={formatTime(r.dep_time)}
               toTime={formatTime(r.arr_time)}
-              status={r.waiting ? "queued" : "running"}
+              status={r.waiting ? 'queued' : 'running'}
             />
             <div className="kb-ticket__window">
-              {formatDate(r.dep_date)} ·{" "}
-              <span className="kb-num">{won(r.price)}</span> · {r.seat_count}석
+              {formatDate(r.dep_date)} · <span className="kb-num">{won(r.price)}</span> ·{' '}
+              {r.seat_count}석
             </div>
-            <div
-              className={`kb-ticket__actions${r.waiting ? " is-single" : ""}`}
-            >
+            <div className={`kb-ticket__actions${r.waiting ? ' is-single' : ''}`}>
               {!r.waiting && (
                 <a
                   className="kb-btn kb-btn--primary"
@@ -245,22 +221,18 @@ function PendingList({
                   결제하기
                 </a>
               )}
-              <button
-                className="kb-btn kb-btn--danger"
-                onClick={() => onCancel(r)}
-              >
-                {r.waiting ? "예약대기 취소" : "예약 취소"}
+              <button className="kb-btn kb-btn--danger" onClick={() => onCancel(r)}>
+                {r.waiting ? '예약대기 취소' : '예약 취소'}
               </button>
             </div>
           </Ticket>
         ))}
       </div>
       <p className="kb-hint kb-tickets-note">
-        결제 대기: 아직 결제하지 않은 예약입니다. 기한이 지나면 코레일이
-        자동으로 취소합니다.
+        결제 대기: 아직 결제하지 않은 예약입니다. 기한이 지나면 코레일이 자동으로 취소합니다.
       </p>
     </>
-  );
+  )
 }
 
 function IssuedList({ account }: { account: KorailAccount }) {
@@ -269,7 +241,7 @@ function IssuedList({ account }: { account: KorailAccount }) {
       <div className="kb-empty">
         <p>발권한 승차권이 없습니다.</p>
       </div>
-    );
+    )
   }
   return (
     <>
@@ -307,8 +279,8 @@ function IssuedList({ account }: { account: KorailAccount }) {
               status="success"
             />
             <div className="kb-ticket__window">
-              {formatDate(t.dep_date)} ·{" "}
-              <span className="kb-num">{won(t.price)}</span> · {t.seat_count}석
+              {formatDate(t.dep_date)} · <span className="kb-num">{won(t.price)}</span> ·{' '}
+              {t.seat_count}석
             </div>
           </Ticket>
         ))}
@@ -317,17 +289,15 @@ function IssuedList({ account }: { account: KorailAccount }) {
         발권한 승차권의 환불·변경은 코레일톡 앱이나 홈페이지에서 해주세요.
       </p>
     </>
-  );
+  )
 }
 
 function TrainName({ item }: { item: KorailReservation | KorailTicket }) {
   return (
-    <span
-      className={`kb-tag${item.train_type.startsWith("KTX") ? " kb-tag--brand" : ""}`}
-    >
+    <span className={`kb-tag${item.train_type.startsWith('KTX') ? ' kb-tag--brand' : ''}`}>
       {item.train_type} {trainNo(item.train_no)}
     </span>
-  );
+  )
 }
 
 /** 코레일봇이 잡은 예약이면 그 예약 기록으로 가는 링크 */
@@ -338,7 +308,7 @@ function Source({ item }: { item: KorailReservation | KorailTicket }) {
     </Link>
   ) : (
     <span className="kb-src">직접 예약</span>
-  );
+  )
 }
 
 function LoadingTicket() {
@@ -353,44 +323,43 @@ function LoadingTicket() {
         </Ticket>
       </div>
       <p className="kb-hint kb-tickets-note">
-        예약이 많으면 몇 초 걸릴 수 있습니다 (예약마다 코레일에 한 번씩 더
-        조회).
+        예약이 많으면 몇 초 걸릴 수 있습니다 (예약마다 코레일에 한 번씩 더 조회).
       </p>
     </>
-  );
+  )
 }
 
 /** 남은 시간 표시를 갱신하기 위한 현재 시각 */
 function useNow(interval: number): number {
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), interval);
-    return () => window.clearInterval(timer);
-  }, [interval]);
-  return now;
+    const timer = window.setInterval(() => setNow(Date.now()), interval)
+    return () => window.clearInterval(timer)
+  }, [interval])
+  return now
 }
 
 function trainNo(no: string): string {
-  return no.replace(/^0+(?=\d)/, "");
+  return no.replace(/^0+(?=\d)/, '')
 }
 
 function won(price: number): string {
-  return `${price.toLocaleString()}원`;
+  return `${price.toLocaleString()}원`
 }
 
 /** ISO 시각 → KST "오후 11:24" */
 function clock(iso: string): string {
-  return new Intl.DateTimeFormat("ko-KR", {
-    timeZone: "Asia/Seoul",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(iso));
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(iso))
 }
 
 function remaining(iso: string, now: number): string {
-  const minutes = Math.floor((new Date(iso).getTime() - now) / 60_000);
-  if (minutes < 0) return "기한 지남";
-  if (minutes < 1) return "1분 안에 마감";
-  if (minutes < 60) return `${minutes}분 남음`;
-  return `${Math.floor(minutes / 60)}시간 ${minutes % 60}분 남음`;
+  const minutes = Math.floor((new Date(iso).getTime() - now) / 60_000)
+  if (minutes < 0) return '기한 지남'
+  if (minutes < 1) return '1분 안에 마감'
+  if (minutes < 60) return `${minutes}분 남음`
+  return `${Math.floor(minutes / 60)}시간 ${minutes % 60}분 남음`
 }
