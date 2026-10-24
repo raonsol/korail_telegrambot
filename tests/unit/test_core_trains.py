@@ -185,6 +185,17 @@ class TestTrainSearch:
         service.search("01012345678", _query())
         service._sleep.assert_called_once_with(1.5)
 
+    def test_app_outdated(self):
+        from pykorail import KorailError
+
+        service, _, _ = _service(
+            [KorailError("최신 버전으로 업데이트해 주세요.", "-8204")]
+        )
+        with pytest.raises(KorailUnavailable) as e:
+            service.search("01012345678", _query())
+        assert e.value.code == "KORAIL_APP_OUTDATED"
+        assert "-8204" in e.value.message
+
     def test_unexpected_error_is_reported_as_failure(self):
         service, client, _ = _service([RuntimeError("boom")])
         with pytest.raises(ServiceError) as e:

@@ -113,7 +113,11 @@ class TrainSearchService:
     ) -> TrainSearchOut:
         from pykorail import AccessRestrictedError, NoResultsError, TrainType
 
-        from telegramBot.korail_client import create_korail_client
+        from telegramBot.korail_client import (
+            APP_OUTDATED_MESSAGE,
+            create_korail_client,
+            is_app_outdated,
+        )
         from .runner import TRAIN_TYPES
 
         egress = self.egresses.for_account(korail_id)
@@ -163,6 +167,10 @@ class TrainSearchService:
         except (KorailUnavailable, ServiceError):
             raise
         except Exception as e:
+            if is_app_outdated(e):
+                raise KorailUnavailable(
+                    APP_OUTDATED_MESSAGE, code="KORAIL_APP_OUTDATED"
+                )
             logger.warning(f"Train list search failed: {e}")
             raise ServiceError(FAILED_MESSAGE, code="TRAIN_SEARCH_FAILED")
         finally:
