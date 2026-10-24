@@ -72,6 +72,7 @@ export function Layout({
         <nav className="kb-tabbar" aria-label="메뉴">
           <Tab to="/" icon="home" label="홈" end />
           <Tab to="/new" icon="plus" label="새 예약" />
+          <Tab to="/tickets" icon="ticket" label="승차권" />
           {me?.user.is_admin && <Tab to="/admin" icon="shield" label="관리" />}
           <Tab to="/settings" icon="settings" label="설정" />
         </nav>

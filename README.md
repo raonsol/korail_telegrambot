@@ -15,6 +15,7 @@
 - 🗂️ **사용자 DB 관리 / 30일 예약 이력**: SQLite(기본) 또는 PostgreSQL
 - 🔀 **인근역 포함**: 코레일 앱의 "인접역"처럼 인근역 출발·도착 열차도 예약 (예: 용산→대전에 서울→서대전). 기본은 꺼짐
 - 🧾 **예약 후 관리**: 성공한 예약을 웹/텔레그램에서 바로 코레일 취소(결제 전), 결제 기한 5분 전 알림
+- 🎫 **내 승차권**: 내 코레일 계정의 결제 대기 예약·예약대기·발권 승차권을 코레일톡에서 직접 잡은 것까지 한 번에 조회, 결제 전 예약 취소 (웹 "승차권" 탭, 텔레그램 `/mytickets`)
 
 ## 아키텍처 개요
 
@@ -282,6 +283,8 @@ POST   /api/reservations
 GET    /api/reservations/{id}
 DELETE /api/reservations/{id}
 POST   /api/reservations/{id}/korail-cancel   (성공한 예약을 코레일에서 취소, 결제 전)
+GET    /api/korail/account?refresh=   (내 코레일 결제 대기 예약·발권 승차권, 계정별 60초 캐시)
+POST   /api/korail/reservations/{rsv_id}/cancel   (코레일 예약번호로 결제 전 예약 취소)
 GET    /api/stations?q=
 GET    /api/events                (SSE)
 POST   /api/push/subscriptions | /api/push/unsubscribe
@@ -294,6 +297,7 @@ GET    /api/admin/users           (관리자)
 - `/help` - 도움말 메시지 표시
 - `/cancel` - 현재 예약 프로세스 취소
 - `/status` - 현재 예약 상태 확인
+- `/mytickets` - 내 코레일 결제 대기 예약·발권 승차권 조회, 결제 전 예약 취소
 
 ## 프로젝트 구조
 

@@ -10,6 +10,7 @@ import { LoginPage } from './pages/LoginPage'
 import { NewReservationPage } from './pages/NewReservationPage'
 import { ReservationDetailPage } from './pages/ReservationDetailPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { TicketsPage } from './pages/TicketsPage'
 
 function RequireAuth({ children, admin }: { children: ReactNode; admin?: boolean }) {
   const { me, loading } = useAuth()
@@ -65,6 +66,14 @@ export function App() {
           element={
             <RequireAuth>
               <ReservationDetailPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/tickets"
+          element={
+            <RequireAuth>
+              <TicketsPage />
             </RequireAuth>
           }
         />

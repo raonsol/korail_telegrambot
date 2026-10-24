@@ -124,6 +124,7 @@ class Messages:
 - 예약 시작 : /start
 - 구독 시작 : /subscribe
 - 예약 상태 확인 : /status
+- 내 코레일 예약·승차권 : /mytickets
 - 전체 취소 : /cancelall
 - 전체 유저 확인 : /allusers
 - 등록 사용자 목록 : /users (관리자)
@@ -173,6 +174,16 @@ https://www.korail.com/ticket/reservation/list
             "코레일에서 이 예약을 취소할까요? 취소한 좌석은 되돌릴 수 없습니다."
         )
         KORAIL_CANCELLED: str = "코레일 예약을 취소했습니다."
+        KORAIL_PAYMENT_URL: str = "https://www.korail.com/ticket/reservation/list"
+        MYTICKETS_LOADING: str = "코레일에서 예약·승차권을 불러오는 중입니다…"
+        MYTICKETS_NEEDS_LOGIN: str = (
+            "코레일 로그인 정보가 없습니다. /start 로 다시 로그인한 뒤 "
+            "/mytickets 를 입력해주세요."
+        )
+        MYTICKETS_FOOTER: str = (
+            "결제는 기한 안에 코레일에서 직접 해야 합니다.\n"
+            "환불·변경은 코레일톡 앱에서 해주세요."
+        )
         KORAIL_CANCEL_NEEDS_LOGIN: str = (
             "코레일 로그인 정보가 없습니다. /start 로 다시 로그인한 뒤 "
             "취소 버튼을 다시 눌러주세요."

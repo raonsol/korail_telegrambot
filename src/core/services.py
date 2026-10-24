@@ -26,6 +26,7 @@ from .launchers import (
 )
 from .notifier import Notifier, SSEBroker, WebPushChannel
 from .reservations import ReservationService
+from .korail_account import KorailAccountService
 from .trains import TrainSearchService
 from .users import UserService
 
@@ -48,6 +49,8 @@ class Services:
     reservations: ReservationService
     egresses: EgressPool
     trains: Optional[TrainSearchService] = None
+    # 내 코레일 예약·승차권 (웹 "내 승차권", 텔레그램 /mytickets)
+    korail_account: Optional[KorailAccountService] = None
     app_settings: Optional[AppSettingsService] = None
     push: Optional[WebPushChannel] = None
 
@@ -123,6 +126,13 @@ def build_services(
         device_for=users.korail_device,
         korail_cancel=functools.partial(default_korail_cancel, egresses=egresses),
     )
+    korail_account = KorailAccountService(
+        egresses,
+        device_for=users.korail_device,
+        links_for=reservations.korail_links,
+    )
+    # 코레일에서 예약을 취소하면 "내 승차권" 캐시를 비움
+    reservations.korail_changed = korail_account.forget
     return Services(
         settings=settings,
         db=db,
@@ -134,6 +144,7 @@ def build_services(
         reservations=reservations,
         egresses=egresses,
         trains=TrainSearchService(egresses, device_for=users.korail_device),
+        korail_account=korail_account,
         app_settings=AppSettingsService(
             db,
             setting_definitions(settings),

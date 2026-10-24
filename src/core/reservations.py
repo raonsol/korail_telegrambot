@@ -80,6 +80,8 @@ class ReservationService:
         # 코레일 예약 취소 (core.auth.default_korail_cancel). (코레일 ID, 비밀번호, 예약번호,
         # device=) -> 취소했으면 True, 결제 대기 목록에 없으면 False
         self.korail_cancel = korail_cancel
+        # 코레일 쪽 예약이 바뀌었을 때 (core.korail_account 캐시 비우기). services 에서 연결
+        self.korail_changed: Callable[[str], None] = lambda _korail_id: None
         # 코레일 계정의 기기 신원 (UserService.korail_device) - 워커가 같은 기기로 로그인하도록 spec에 포함
         self.device_for = device_for
         self.launcher = launcher
@@ -412,32 +414,79 @@ class ReservationService:
                 )
             account, rsv_id = r.korail_id, r.korail_rsv_id
 
-        device = self.device_for(account) if self.device_for else None
+        await self._cancel_on_korail(account, korail_pw, rsv_id)
+        await self._mark_korail_cancelled(account, rsv_id, source)
+        return self.get(reservation_id, owner=owner, chat_id=chat_id)
+
+    async def cancel_korail_rsv(
+        self, korail_id: str, korail_pw: str, rsv_id: str, *, source: str
+    ) -> None:
+        """코레일 계정의 결제 전 예약을 예약번호로 취소 ("내 승차권" 화면, /mytickets)
+
+        코레일봇이 잡지 않은 예약도 취소할 수 있다. 코레일봇이 잡은 예약이면 그 예약 기록도
+        코레일 취소로 표시해 홈 이력이 "결제하세요"로 남지 않게 한다.
+        """
+        await self._cancel_on_korail(korail_id, korail_pw, rsv_id)
+        await self._mark_korail_cancelled(korail_id, rsv_id, source)
+
+    def korail_links(self, korail_id: str) -> dict[str, str]:
+        """이 코레일 계정에서 코레일봇이 잡은 예약: 코레일 예약번호 -> 예약 기록 id"""
+        key = account_key(korail_id)
+        with self.db.session() as s:
+            rows = s.execute(
+                select(Reservation.korail_rsv_id, Reservation.id, Reservation.korail_id)
+                .where(Reservation.korail_rsv_id.is_not(None))
+                .order_by(Reservation.created_at)
+            ).all()
+        return {rsv: rid for rsv, rid, kid in rows if account_key(kid) == key}
+
+    async def _cancel_on_korail(
+        self, korail_id: str, korail_pw: str, rsv_id: str
+    ) -> None:
+        if self.korail_cancel is None:
+            raise ServiceError("코레일 예약 취소를 사용할 수 없습니다.")
+        device = self.device_for(korail_id) if self.device_for else None
         cancelled = await asyncio.to_thread(
-            self.korail_cancel, account, korail_pw, rsv_id, device=device
+            self.korail_cancel, korail_id, korail_pw, rsv_id, device=device
         )
+        # 결과와 관계없이 코레일 쪽 목록이 바뀌었을 수 있음 ("내 승차권" 캐시)
+        self.korail_changed(korail_id)
         if not cancelled:
             raise Conflict(
                 "코레일에 결제 대기 중인 예약이 없습니다. "
                 "이미 결제했거나 취소·만료되었을 수 있습니다."
             )
 
+    async def _mark_korail_cancelled(
+        self, korail_id: str, rsv_id: str, source: str
+    ) -> None:
+        """코레일봇이 잡은 같은 예약번호의 예약 기록을 코레일 취소로 표시하고 알림"""
+        key = account_key(korail_id)
+        now = utcnow()
+        changed = []
         with self.db.session() as s:
-            r = s.get(Reservation, reservation_id)
-            r.korail_cancelled_at = r.updated_at = utcnow()
-            out = ReservationOut.from_model(r)
-            reservation_chat = r.chat_id
-        logger.info(f"Cancelled Korail reservation of {reservation_id} via {source}")
-        await self.notifier.notify(
-            ReservationEvent(
-                out,
-                out.status.value,
-                source=source,
-                chat_id=reservation_chat,
-                kind="korail_cancelled",
+            rows = s.scalars(
+                select(Reservation).where(
+                    Reservation.korail_rsv_id == rsv_id,
+                    Reservation.korail_cancelled_at.is_(None),
+                )
             )
-        )
-        return out
+            for r in rows:
+                if account_key(r.korail_id) != key:
+                    continue
+                r.korail_cancelled_at = r.updated_at = now
+                changed.append((ReservationOut.from_model(r), r.chat_id))
+        for out, chat_id in changed:
+            logger.info(f"Cancelled Korail reservation of {out.id} via {source}")
+            await self.notifier.notify(
+                ReservationEvent(
+                    out,
+                    out.status.value,
+                    source=source,
+                    chat_id=chat_id,
+                    kind="korail_cancelled",
+                )
+            )
 
     async def notify_payment_deadlines(
         self, lead: timedelta = PAYMENT_REMINDER_LEAD
