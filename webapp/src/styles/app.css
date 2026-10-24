@@ -420,6 +420,23 @@ a.kb-icon-btn {
   margin-left: 6px;
 }
 
+/* 조건이 다 채워진 승차권 — 연한 파랑만으로는 밝은 배경(--bg)과 구분이 안 되어 테두리를 브랜드색으로 */
+.kb-ticket-form.kb-ticket--brand {
+  --ticket-line: var(--brand);
+}
+.kb-ticket-form.kb-ticket--brand .kb-ticket__stub::before {
+  border-top-color: color-mix(in srgb, var(--brand) 35%, transparent);
+}
+:root:not([data-theme='dark']) .kb-ticket-form.kb-ticket--brand {
+  --ticket-bg: var(--brand-soft-2);
+}
+:root:not([data-theme='dark']) .kb-ticket-form.kb-ticket--brand .kb-route {
+  --stop-fill: var(--brand-soft-2);
+}
+:root:not([data-theme='dark']) .kb-ticket-form.kb-ticket--brand .kb-rowbtn {
+  border-top-color: color-mix(in srgb, var(--brand) 14%, transparent);
+}
+
 /* 좌석 체크박스 — 글자(✓) 대신 SVG라 폰트에 따라 어긋나지 않음 */
 .kb-seat-check {
   flex-shrink: 0;
