@@ -7,6 +7,8 @@ on:
     branches: [ main, dev ]
   workflow_dispatch:
 
+# 테스트 job 은 coverage 데이터(.coverage.*)만 남기고 리포트는 coverage-report job 이 합쳐서 만든다.
+# pytest.ini 의 addopts 가 html/xml/term 리포트를 매번 만들어(테스트 시간의 절반 가까이) -o addopts 로 덮어쓴다.
 jobs:
   lint:
     name: Code Linting
@@ -78,7 +80,7 @@ jobs:
         ADMIN_KORAIL_ID: admin_user
         ADMIN_KORAIL_PW: admin_pass
       run: |
-        COVERAGE_FILE=.coverage.unit uv run --no-sync pytest -m unit -v --cov=src --cov-report=term-missing
+        COVERAGE_FILE=.coverage.unit uv run --no-sync pytest -m unit -o addopts="--strict-markers --tb=short" -v --cov=src --cov-branch --cov-report=
 
     - name: Upload unit coverage data
       uses: actions/upload-artifact@v4
@@ -117,7 +119,7 @@ jobs:
         ADMINPW: test_admin_password
         USE_CELERY: false
       run: |
-        COVERAGE_FILE=.coverage.subprocess uv run --no-sync pytest -m subprocess -v --cov=src --cov-report=term-missing
+        COVERAGE_FILE=.coverage.subprocess uv run --no-sync pytest -m subprocess -o addopts="--strict-markers --tb=short" -v --cov=src --cov-branch --cov-report=
 
     - name: Upload subprocess coverage data
       uses: actions/upload-artifact@v4
@@ -137,9 +139,9 @@ jobs:
         image: redis:7-alpine
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 10s
+          --health-interval 1s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 30
         ports:
           - 6379:6379
 
@@ -172,7 +174,7 @@ jobs:
         CELERY_BROKER: redis://localhost:6379
         CELERY_RESULT_BACKEND: redis://localhost:6379
       run: |
-        COVERAGE_FILE=.coverage.mq uv run --no-sync pytest -m "celery or requires_redis" -v --cov=src --cov-report=term-missing
+        COVERAGE_FILE=.coverage.mq uv run --no-sync pytest -m "celery or requires_redis" -o addopts="--strict-markers --tb=short" -v --cov=src --cov-branch --cov-report=
 
     - name: Upload MQ integration coverage data
       uses: actions/upload-artifact@v4
@@ -210,7 +212,7 @@ jobs:
         ALLOW_LIST: 01012345678
         ADMINPW: test_admin_password
       run: |
-        COVERAGE_FILE=.coverage.e2e uv run --no-sync pytest -m e2e -v --cov=src --cov-report=term-missing
+        COVERAGE_FILE=.coverage.e2e uv run --no-sync pytest -m e2e -o addopts="--strict-markers --tb=short" -v --cov=src --cov-branch --cov-report=
 
     - name: Upload e2e coverage data
       uses: actions/upload-artifact@v4
@@ -287,3 +289,11 @@ jobs:
     - name: Test Docker image
       run: |
         docker images | grep korail-bot
+
+  # main push 에서 테스트가 모두 통과하면 배포 (coverage-report 는 기다리지 않음). docs/deploy.md
+  deploy:
+    name: Deploy
+    needs: [lint, webapp, unit-tests, integration-tests-subprocess, integration-tests-mq, e2e-tests, docker-build-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit
