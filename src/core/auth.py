@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Awaitable, Callable, Iterator, Optional
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from .crypto import CredentialVault, new_token, sha256_hex
 from .db import Database, utcnow
@@ -34,6 +34,7 @@ from .schemas import (
     ADMIN_USER_ID,
     PHONE_FORMAT_HINT,
     Owner,
+    account_key,
     format_phone,
     is_valid_phone,
     normalize_phone,
@@ -459,6 +460,27 @@ class AuthService:
                 "세션이 만료되었습니다. 다시 로그인해주세요.", code="SESSION_EXPIRED"
             )
         return session.korail_id, password
+
+    def korail_passwords(self, korail_id: str) -> list[str]:
+        """이 코레일 계정으로 로그인한 웹 세션들의 비밀번호 (최근 사용 순, 중복 제외)
+
+        서버가 사용자 대신 코레일을 조회할 때 (결제 기한 알림 전 결제 여부 확인) 쓴다.
+        """
+        key = account_key(korail_id)
+        with self.db.session() as s:
+            rows = s.execute(
+                select(WebSession.korail_id, WebSession.korail_pw_enc)
+                .where(WebSession.expires_at > utcnow())
+                .order_by(WebSession.last_seen_at.desc())
+            ).all()
+        passwords: list[str] = []
+        for kid, enc in rows:
+            if account_key(kid) != key:
+                continue
+            password = self.vault.decrypt(enc)
+            if password and password not in passwords:
+                passwords.append(password)
+        return passwords
 
     def logout(self, token: Optional[str]) -> None:
         if not token:

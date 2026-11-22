@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import logging
 import threading
@@ -23,7 +24,14 @@ from sqlalchemy import delete, false, func, or_, select
 from .crypto import new_token, sha256_hex
 from .db import Database, utcnow
 from .egress import Egress, EgressPool, parse_egresses
-from .errors import Conflict, LimitExceeded, NotAllowed, NotFound, ServiceError
+from .errors import (
+    Conflict,
+    KorailLoginFailed,
+    LimitExceeded,
+    NotAllowed,
+    NotFound,
+    ServiceError,
+)
 from .launchers import Launcher, SubprocessLauncher
 from .models import Reservation
 from .notifier import Notifier, ReservationEvent
@@ -59,6 +67,8 @@ WORKER_LOST_MESSAGE = (
 
 # 결제 기한 이만큼 전에 알림 (코레일은 예약 후 보통 20분 안에 결제해야 함)
 PAYMENT_REMINDER_LEAD = timedelta(minutes=5)
+# 결제 여부 확인에 써 볼 비밀번호 수 (계정마다, 알림 한 번에). 틀린 비밀번호가 쌓이면 코레일이 잠금
+PAYMENT_CHECK_MAX_PASSWORDS = 2
 
 
 class ReservationService:
@@ -83,6 +93,16 @@ class ReservationService:
         # 코레일 쪽 예약이 바뀌었을 때: (코레일 계정, 취소한 예약번호 또는 결과를 모르면 None)
         # "내 승차권" 캐시 갱신 (KorailAccountService.forget). services 에서 연결
         self.korail_changed: Callable[[str, Optional[str]], None] = lambda *_: None
+        # 결제 기한 알림 전 결제 여부 확인 (services 에서 연결)
+        # 코레일 계정 -> 그 계정의 비밀번호 후보 (웹 세션, 텔레그램 대화 로그인)
+        self.korail_passwords: list[Callable[[str], list[str]]] = []
+        # (코레일 계정, 비밀번호) -> (결제 대기 예약번호, 발권된 예약번호). 블로킹
+        # (KorailAccountService.overview)
+        self.korail_status: Optional[
+            Callable[[str, str], tuple[set[str], set[str]]]
+        ] = None
+        # 결제 여부 확인에서 코레일이 거절한 (계정, 비밀번호 해시) - 다시 시도하지 않음
+        self._rejected_passwords: set[tuple[str, str]] = set()
         # 코레일 계정의 기기 신원 (UserService.korail_device) - 워커가 같은 기기로 로그인하도록 spec에 포함
         self.device_for = device_for
         self.launcher = launcher
@@ -492,10 +512,78 @@ class ReservationService:
                 )
             )
 
+    def mark_korail_paid(self, korail_id: str, rsv_ids: set[str]) -> int:
+        """코레일 발권 목록에 있는 예약번호의 코레일봇 예약 기록을 결제 완료로 표시
+
+        "내 승차권" 조회 (KorailAccountService) 와 결제 기한 알림 전 확인에서 호출. 블로킹 (DB)
+        """
+        if not rsv_ids:
+            return 0
+        key = account_key(korail_id)
+        now = utcnow()
+        marked = 0
+        with self.db.session() as s:
+            rows = s.scalars(
+                select(Reservation).where(
+                    Reservation.korail_rsv_id.in_(rsv_ids),
+                    Reservation.korail_paid_at.is_(None),
+                    Reservation.korail_cancelled_at.is_(None),
+                )
+            )
+            for r in rows:
+                if account_key(r.korail_id) != key:
+                    continue
+                r.korail_paid_at = r.updated_at = now
+                marked += 1
+        return marked
+
+    async def _korail_payment_status(
+        self, korail_id: str
+    ) -> Optional[tuple[set[str], set[str]]]:
+        """코레일 계정의 (결제 대기 예약번호, 발권된 예약번호). 확인할 수 없으면 None
+
+        저장된 비밀번호(웹 세션·텔레그램 로그인)로 조회한다. 비밀번호가 없거나, 코레일이
+        거절·차단했거나, 요청이 몰리면 None - 알림은 그대로 보낸다.
+        """
+        if self.korail_status is None:
+            return None
+        key = account_key(korail_id)
+        candidates: list[str] = []
+        for source in self.korail_passwords:
+            try:
+                found = source(korail_id)
+            except Exception:
+                logger.exception("Failed to look up Korail credentials")
+                continue
+            for password in found:
+                digest = hashlib.sha256(password.encode()).hexdigest()
+                if password not in candidates and (
+                    (key, digest) not in self._rejected_passwords
+                ):
+                    candidates.append(password)
+        for password in candidates[:PAYMENT_CHECK_MAX_PASSWORDS]:
+            try:
+                return await asyncio.to_thread(self.korail_status, korail_id, password)
+            except KorailLoginFailed as e:
+                if not e.rejected:
+                    logger.warning(f"Payment check login failed: {e}")
+                    return None
+                digest = hashlib.sha256(password.encode()).hexdigest()
+                self._rejected_passwords.add((key, digest))
+                logger.warning("Payment check: Korail rejected a stored password")
+            except Exception as e:
+                logger.warning(f"Payment check failed: {e}")
+                return None
+        return None
+
     async def notify_payment_deadlines(
         self, lead: timedelta = PAYMENT_REMINDER_LEAD
     ) -> int:
-        """결제 기한이 lead 안으로 다가온 예약을 한 번씩 알림 (예약대기·코레일 취소 제외)"""
+        """결제 기한이 lead 안으로 다가온 예약을 한 번씩 알림 (예약대기·코레일 취소·결제 완료 제외)
+
+        보내기 전에 계정마다 코레일 결제 대기 목록을 한 번 확인해, 이미 결제했거나 앱에서
+        취소·만료된 예약(목록에 없음)은 알리지 않는다. 확인할 수 없으면 알린다.
+        """
         now = utcnow()
         with self.db.session() as s:
             due = list(
@@ -504,6 +592,7 @@ class ReservationService:
                         Reservation.status == ReservationStatus.SUCCESS.value,
                         Reservation.waitlisted == false(),
                         Reservation.korail_cancelled_at.is_(None),
+                        Reservation.korail_paid_at.is_(None),
                         Reservation.pay_reminded_at.is_(None),
                         Reservation.pay_deadline.is_not(None),
                         Reservation.pay_deadline > now,
@@ -511,9 +600,44 @@ class ReservationService:
                     )
                 )
             )
-            reminders = []
+            claimed = []
             for r in due:
+                # 확인하는 동안 다음 주기가 다시 고르지 않도록 먼저 표시
                 r.pay_reminded_at = now
+                claimed.append((r.korail_id, r.korail_rsv_id, r.id))
+
+        accounts = list(dict.fromkeys(kid for kid, _, _ in claimed))
+        statuses = dict(
+            zip(
+                accounts,
+                await asyncio.gather(
+                    *(self._korail_payment_status(kid) for kid in accounts)
+                ),
+            )
+        )
+
+        reminders = []
+        for korail_id, rsv_id, reservation_id in claimed:
+            status = statuses[korail_id]
+            if status is not None and rsv_id and rsv_id not in status[0]:
+                if rsv_id in status[1]:
+                    self.mark_korail_paid(korail_id, {rsv_id})
+                    logger.info(f"Skipped payment reminder of {reservation_id}: paid")
+                else:
+                    logger.info(
+                        f"Skipped payment reminder of {reservation_id}: "
+                        "not in Korail unpaid list"
+                    )
+                continue
+            with self.db.session() as s:
+                r = s.get(Reservation, reservation_id)
+                # 확인하는 사이 코레일 취소·결제 확인·삭제됨
+                if (
+                    not r
+                    or r.korail_cancelled_at is not None
+                    or r.korail_paid_at is not None
+                ):
+                    continue
                 reminders.append((ReservationOut.from_model(r), r.chat_id))
         for out, chat_id in reminders:
             await self.notifier.notify(

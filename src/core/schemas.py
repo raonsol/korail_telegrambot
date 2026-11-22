@@ -214,6 +214,8 @@ class ReservationOut(BaseModel):
     korail_rsv_id: Optional[str] = None
     pay_deadline: Optional[datetime] = None
     korail_cancelled_at: Optional[datetime] = None
+    # 코레일 발권 목록에서 결제 완료를 확인한 시각
+    korail_paid_at: Optional[datetime] = None
     # 이 서비스에서 코레일 예약을 취소할 수 있는지
     korail_cancellable: bool = False
     created_at: datetime
@@ -227,6 +229,7 @@ class ReservationOut(BaseModel):
         "finished_at",
         "pay_deadline",
         "korail_cancelled_at",
+        "korail_paid_at",
     )
     def _as_utc(self, value: Optional[datetime]):
         return utc_iso(value)
@@ -256,10 +259,12 @@ class ReservationOut(BaseModel):
             korail_rsv_id=r.korail_rsv_id,
             pay_deadline=r.pay_deadline,
             korail_cancelled_at=r.korail_cancelled_at,
+            korail_paid_at=r.korail_paid_at,
             korail_cancellable=(
                 r.status == ReservationStatus.SUCCESS.value
                 and bool(r.korail_rsv_id)
                 and r.korail_cancelled_at is None
+                and r.korail_paid_at is None
             ),
             created_at=r.created_at,
             updated_at=r.updated_at,

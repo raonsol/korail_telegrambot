@@ -38,6 +38,8 @@ if settings.enable_telegram:
     bot = TelegramBot(bot_token, services)
     services.notifier.add(bot)
     services.auth.alert = bot.broadcast_message
+    # 결제 기한 알림 전 결제 여부 확인에 텔레그램 대화의 로그인도 사용
+    services.reservations.korail_passwords.append(bot.korail_passwords)
 
 if not (settings.enable_telegram or settings.enable_webapp):
     logger.warning("Both ENABLE_TELEGRAM and ENABLE_WEBAPP are disabled")

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import threading
 import time
 from datetime import datetime
@@ -44,6 +45,8 @@ LOGIN_HELD_MESSAGE = (
     "코레일이 이 비밀번호로 로그인을 거절했습니다. 코레일 비밀번호를 바꿨다면 로그아웃 후 "
     "다시 로그인해주세요. (계정 잠김을 막기 위해 10분 동안 같은 비밀번호로 다시 시도하지 않습니다)"
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _password_digest(password: str) -> str:
@@ -123,6 +126,7 @@ class KorailAccountService:
         egresses: EgressPool,
         device_for: Callable[[str], Optional[dict]] = lambda _: None,
         links_for: Callable[[str, set[str]], dict[str, str]] = lambda *_: {},
+        on_tickets: Callable[[str, set[str]], object] = lambda *_: None,
         handler_factory: Optional[Callable[..., object]] = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
@@ -133,6 +137,8 @@ class KorailAccountService:
         # (계정, 코레일 예약번호들) -> {코레일 예약번호: 코레일봇 예약 기록 id}
         # (ReservationService.korail_links)
         self.links_for = links_for
+        # 발권(결제 완료)된 예약번호를 알림 (ReservationService.mark_korail_paid)
+        self.on_tickets = on_tickets
         self._handler_factory = handler_factory
         self._sleep = sleep
         self._clock = clock
@@ -207,7 +213,13 @@ class KorailAccountService:
         with self._lock:
             self._rejected.pop(key, None)
 
-        rsv_ids = {r.pnr_no for r in reservations} | {t.pnr_no for t in tickets}
+        ticket_ids = {t.pnr_no for t in tickets}
+        if ticket_ids:
+            try:
+                self.on_tickets(korail_id, ticket_ids)
+            except Exception:
+                logger.exception("Failed to record paid reservations")
+        rsv_ids = {r.pnr_no for r in reservations} | ticket_ids
         links = self.links_for(korail_id, rsv_ids) if rsv_ids else {}
         out = KorailAccountOut(
             korail_id=korail_id,

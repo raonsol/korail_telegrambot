@@ -100,24 +100,33 @@ export function ReservationDetailPage() {
                   인근역 포함 예약입니다. 실제 출발·도착역을 확인하세요.
                 </p>
               )}
-              <p className="kb-small">
-                <strong>
-                  {payBy
-                    ? `${payBy}까지 결제하지 않으면 예약이 취소됩니다.`
-                    : '20분 안에 결제하지 않으면 예약이 취소됩니다.'}
-                </strong>
-              </p>
-              <a
-                className="kb-btn kb-btn--primary kb-btn--block"
-                href={KORAIL_PAYMENT_URL}
-                target="_blank"
-                rel="noreferrer"
-              >
-                코레일 홈페이지에서 결제하기
-              </a>
-              <p className="kb-hint">
-                코레일톡 앱: 오른쪽 상단 메뉴 → 승차권 예매 → 예약 승차권 조회/취소
-              </p>
+              {r.korail_paid_at ? (
+                <p className="kb-small">
+                  <strong>결제를 마쳤습니다.</strong> 승차권은 코레일톡 앱이나 내 승차권에서
+                  확인하세요.
+                </p>
+              ) : (
+                <>
+                  <p className="kb-small">
+                    <strong>
+                      {payBy
+                        ? `${payBy}까지 결제하지 않으면 예약이 취소됩니다.`
+                        : '20분 안에 결제하지 않으면 예약이 취소됩니다.'}
+                    </strong>
+                  </p>
+                  <a
+                    className="kb-btn kb-btn--primary kb-btn--block"
+                    href={KORAIL_PAYMENT_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    코레일 홈페이지에서 결제하기
+                  </a>
+                  <p className="kb-hint">
+                    코레일톡 앱: 오른쪽 상단 메뉴 → 승차권 예매 → 예약 승차권 조회/취소
+                  </p>
+                </>
+              )}
             </section>
           )}
 
@@ -225,9 +234,11 @@ function DetailTicket({
         ? `${relativeTime(r.updated_at)} 갱신`
         : r.status === 'success' && r.waitlisted
           ? '예약대기 신청'
-          : r.status === 'success' && payBy
-            ? `결제 기한 ${payBy}`
-            : `${formatDateTime(r.finished_at ?? r.updated_at)} 종료`
+          : r.status === 'success' && r.korail_paid_at
+            ? '결제 완료'
+            : r.status === 'success' && payBy
+              ? `결제 기한 ${payBy}`
+              : `${formatDateTime(r.finished_at ?? r.updated_at)} 종료`
 
   return (
     <Ticket

@@ -574,6 +574,197 @@ class TestPaymentReminder:
         services.reservations.notify_payment_deadlines.assert_awaited()
 
 
+class TestPaidReservationSkipsReminder:
+    """결제 기한 알림 전에 코레일 결제 대기 목록을 확인 - 결제한 예약에는 알리지 않음"""
+
+    @pytest.fixture
+    def korail(self, services):
+        """저장된 비밀번호와 코레일 조회 결과 대체"""
+        state = SimpleNamespace(
+            passwords=["pw"], unpaid=set(), tickets=set(), calls=[], errors={}
+        )
+
+        def status(korail_id, password):
+            state.calls.append((korail_id, password))
+            if password in state.errors:
+                raise state.errors[password]
+            return set(state.unpaid), set(state.tickets)
+
+        services.reservations.korail_passwords[:] = [lambda _id: list(state.passwords)]
+        services.reservations.korail_status = status
+        return state
+
+    async def _due(self, services, fake_launcher, valid_request, rsv="PNR123"):
+        return await _succeeded(
+            services,
+            fake_launcher,
+            valid_request,
+            korail_rsv_id=rsv,
+            pay_deadline=_deadline_kst(3),
+        )
+
+    @pytest.mark.asyncio
+    async def test_paid_reservation_is_not_reminded_and_marked(
+        self, services, fake_launcher, valid_request, events, korail
+    ):
+        rid = await self._due(services, fake_launcher, valid_request)
+        korail.tickets = {"PNR123"}
+        events.reset_mock()
+
+        assert await services.reservations.notify_payment_deadlines() == 0
+        events.assert_not_awaited()
+        assert korail.calls == [(KORAIL_ID, "pw")]
+        out = services.reservations.get(rid, owner=USER)
+        assert out.korail_paid_at is not None
+        assert out.korail_cancellable is False
+        # 한 번 확인한 예약은 다시 확인하지 않음
+        assert await services.reservations.notify_payment_deadlines() == 0
+        assert len(korail.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_not_in_unpaid_list_is_not_reminded(
+        self, services, fake_launcher, valid_request, events, korail
+    ):
+        """앱에서 취소했거나 만료됨 - 결제 완료로는 표시하지 않음"""
+        rid = await self._due(services, fake_launcher, valid_request)
+        events.reset_mock()
+
+        assert await services.reservations.notify_payment_deadlines() == 0
+        events.assert_not_awaited()
+        assert services.reservations.get(rid, owner=USER).korail_paid_at is None
+
+    @pytest.mark.asyncio
+    async def test_unpaid_reservation_is_reminded(
+        self, services, fake_launcher, valid_request, events, korail
+    ):
+        rid = await self._due(services, fake_launcher, valid_request)
+        korail.unpaid = {"PNR123"}
+        events.reset_mock()
+
+        assert await services.reservations.notify_payment_deadlines() == 1
+        event = events.await_args.args[0]
+        assert (event.kind, event.reservation.id) == ("payment_reminder", rid)
+
+    @pytest.mark.asyncio
+    async def test_one_check_per_account(
+        self, services, fake_launcher, valid_request, events, korail
+    ):
+        await self._due(services, fake_launcher, valid_request, rsv="PNR1")
+        await self._due(services, fake_launcher, valid_request, rsv="PNR2")
+        korail.unpaid = {"PNR2"}
+        korail.tickets = {"PNR1"}
+
+        assert await services.reservations.notify_payment_deadlines() == 1
+        assert len(korail.calls) == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error",
+        [KorailUnavailable("차단"), ServiceError("요청이 많습니다")],
+    )
+    async def test_reminds_when_korail_check_fails(
+        self, services, fake_launcher, valid_request, events, korail, error
+    ):
+        await self._due(services, fake_launcher, valid_request)
+        korail.errors["pw"] = error
+
+        assert await services.reservations.notify_payment_deadlines() == 1
+
+    @pytest.mark.asyncio
+    async def test_reminds_without_stored_password(
+        self, services, fake_launcher, valid_request, events, korail
+    ):
+        await self._due(services, fake_launcher, valid_request)
+        korail.passwords = []
+
+        assert await services.reservations.notify_payment_deadlines() == 1
+        assert korail.calls == []
+
+    @pytest.mark.asyncio
+    async def test_rejected_password_is_skipped_afterwards(
+        self, services, fake_launcher, valid_request, events, korail
+    ):
+        from core.errors import KorailLoginFailed
+
+        await self._due(services, fake_launcher, valid_request, rsv="PNR1")
+        korail.passwords = ["old", "new"]
+        korail.errors["old"] = KorailLoginFailed("거절", rejected=True)
+        korail.unpaid = {"PNR1"}
+
+        assert await services.reservations.notify_payment_deadlines() == 1
+        assert [pw for _, pw in korail.calls] == ["old", "new"]
+
+        await self._due(services, fake_launcher, valid_request, rsv="PNR2")
+        korail.calls.clear()
+        await services.reservations.notify_payment_deadlines()
+        assert [pw for _, pw in korail.calls] == ["new"]
+
+    @pytest.mark.asyncio
+    async def test_tries_at_most_two_passwords(
+        self, services, fake_launcher, valid_request, events, korail
+    ):
+        from core.errors import KorailLoginFailed
+
+        await self._due(services, fake_launcher, valid_request)
+        korail.passwords = ["a", "b", "c"]
+        for pw in korail.passwords:
+            korail.errors[pw] = KorailLoginFailed("거절", rejected=True)
+
+        assert await services.reservations.notify_payment_deadlines() == 1
+        assert [pw for _, pw in korail.calls] == ["a", "b"]
+
+    def test_mark_paid_only_for_same_account(self, services):
+        from core.db import utcnow as now
+
+        with services.db.session() as s:
+            for rid, kid in (("mine", KORAIL_ID), ("other", "010-9999-8888")):
+                s.add(
+                    Reservation(
+                        id=rid,
+                        owner_id=USER.user_id,
+                        origin="web",
+                        korail_id=kid,
+                        dep_date="20991231",
+                        src_station="서울",
+                        dst_station="부산",
+                        dep_time="0900",
+                        max_dep_time="2359",
+                        train_type="KTX",
+                        seat_type="general",
+                        status="success",
+                        runner="subprocess",
+                        callback_token_hash="x",
+                        korail_rsv_id="PNR1",
+                        created_at=now(),
+                    )
+                )
+
+        assert services.reservations.mark_korail_paid("01012345678", {"PNR1"}) == 1
+        assert services.reservations.get("mine", owner=USER).korail_paid_at
+        assert services.reservations.get("other", owner=USER).korail_paid_at is None
+
+    def test_web_sessions_provide_passwords(self, services):
+        auth = services.auth
+        auth._create_session(USER.user_id, False, KORAIL_ID, "older", True)
+        auth._create_session(USER.user_id, False, "01012345678", "newer", False)
+        auth._create_session(OTHER.user_id, False, "010-8765-4321", "x", True)
+        assert set(auth.korail_passwords("01012345678")) == {"older", "newer"}
+        assert auth.korail_passwords("010-0000-0000") == []
+
+    def test_services_wire_payment_check(self, services):
+        """기본 연결: 웹 세션 비밀번호 + "내 승차권" 조회"""
+        assert services.auth.korail_passwords in services.reservations.korail_passwords
+        account = SimpleNamespace(
+            reservations=[SimpleNamespace(rsv_id="A")],
+            tickets=[SimpleNamespace(rsv_id="B")],
+        )
+        services.korail_account.overview = Mock(return_value=account)
+        assert services.reservations.korail_status(KORAIL_ID, "pw") == ({"A"}, {"B"})
+        services.korail_account.overview.assert_called_once_with(
+            KORAIL_ID, "pw", refresh=True
+        )
+
+
 class TestWebApi:
     @pytest.fixture
     def app(self, services, tmp_path):
@@ -720,6 +911,15 @@ class TestTelegram:
         msg = bot.send_message.call_args.args[1]
         assert "결제 기한" in msg
         assert "10:15까지" in msg  # KST
+
+    def test_chat_logins_provide_passwords(self, bot):
+        bot.userDict[1] = {"userInfo": {"korailLogin": (KORAIL_ID, "pw1")}}
+        bot.userDict[2] = {"userInfo": {"korailLogin": ("01012345678", "pw1")}}
+        bot.userDict[3] = {
+            "userInfo": {"korailId": KORAIL_ID, "korailPw": "unverified"}
+        }
+        bot.userDict[4] = {"userInfo": {"korailLogin": ("010-9999-8888", "x")}}
+        assert bot.korail_passwords("01012345678") == ["pw1"]
 
     @pytest.mark.asyncio
     async def test_korail_cancel_asks_then_cancels(

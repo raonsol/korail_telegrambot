@@ -130,9 +130,16 @@ def build_services(
         egresses,
         device_for=users.korail_device,
         links_for=reservations.korail_links,
+        on_tickets=reservations.mark_korail_paid,
     )
     # 코레일에서 예약을 취소하면 "내 승차권" 캐시를 비움
     reservations.korail_changed = korail_account.forget
+    # 결제 기한 알림 전 결제 여부 확인: 웹 세션의 비밀번호로 "내 승차권"과 같은 조회
+    # (텔레그램 대화의 로그인은 app.py 에서 TelegramBot.korail_passwords 를 더함)
+    reservations.korail_passwords.append(auth.korail_passwords)
+    reservations.korail_status = functools.partial(
+        _korail_payment_status, korail_account
+    )
     return Services(
         settings=settings,
         db=db,
@@ -184,6 +191,17 @@ def apply_settings(
     }
     egresses.max_active = int(values["korail_egress_max_active"])
     egresses.set_rpm(int(values["korail_egress_rpm"]))
+
+
+def _korail_payment_status(
+    korail_account: KorailAccountService, korail_id: str, password: str
+) -> tuple[set[str], set[str]]:
+    """(결제 대기 예약번호, 발권된 예약번호) - 캐시 대신 코레일에 새로 물음 (블로킹)"""
+    account = korail_account.overview(korail_id, password, refresh=True)
+    return (
+        {r.rsv_id for r in account.reservations},
+        {t.rsv_id for t in account.tickets},
+    )
 
 
 def _gate_factory(launcher: Launcher, rpm: int):

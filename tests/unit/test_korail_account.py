@@ -123,6 +123,21 @@ def _service(pool=None, links=None, clock=None, **behaviour):
 
 
 class TestOverview:
+    def test_reports_issued_tickets_as_paid(self):
+        service, _ = _service()
+        paid = Mock()
+        service.on_tickets = paid
+
+        service.overview(KORAIL_ID, "pw")
+
+        paid.assert_called_once_with(KORAIL_ID, {"PNR9"})
+
+    def test_paid_hook_error_does_not_break_listing(self):
+        service, _ = _service()
+        service.on_tickets = Mock(side_effect=RuntimeError("db"))
+
+        assert service.overview(KORAIL_ID, "pw").tickets
+
     def test_lists_pending_and_issued(self):
         service, _ = _service(links={"PNR1": "bot-r1"})
 
