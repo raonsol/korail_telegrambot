@@ -1,6 +1,7 @@
 # 자동 배포
 
-`main` 에 머지되어 Test Suite 가 통과하면 GitHub Actions(`.github/workflows/deploy.yml`)가 서버에 SSH 로 접속해
+`main` 에 머지되면 Test Suite(`.github/workflows/test.yml`)의 테스트 job 이 모두 통과한 직후 `deploy` job 이
+`.github/workflows/deploy.yml` 을 호출하고 (coverage 리포트는 기다리지 않음), 서버에 SSH 로 접속해
 `scripts/deploy.sh <커밋 SHA>` 를 실행한다. 이미지는 서버에서 빌드한다 (`make docker-compose-up-mq`).
 
 `scripts/deploy.sh` 가 하는 일:
