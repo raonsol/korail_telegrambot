@@ -3,10 +3,11 @@ import { useEffect, useState } from 'react'
 import { useLocation, useParams } from 'react-router-dom'
 import { Api, type Reservation } from '../api'
 import { useAuth } from '../auth'
-import { ErrorBox, Spinner } from '../components/Feedback'
+import { ErrorBox, TicketSkeleton } from '../components/Feedback'
 import { Icon } from '../components/Icon'
 import { Layout } from '../components/Layout'
 import { ticketTone } from '../components/ReservationCard'
+import { TickNumber, flashClass, useStatusFlash } from '../components/Motion'
 import { StatusBadge } from '../components/StatusBadge'
 import { RouteLine, Ticket } from '../components/Ticket'
 import {
@@ -63,7 +64,7 @@ export function ReservationDetailPage() {
   return (
     <Layout title="예약 상세" back>
       {query.isPending ? (
-        <Spinner />
+        <TicketSkeleton label="예약을 불러오는 중" />
       ) : query.isError || !r ? (
         <ErrorBox error={query.error ?? '예약을 찾을 수 없습니다.'} />
       ) : (
@@ -229,6 +230,7 @@ function DetailTicket({
   info: ResultInfo
   payBy?: string
 }) {
+  const flash = useStatusFlash(displayStatus(r))
   const stubRight =
     r.status === 'success' && r.korail_cancelled_at
       ? `${formatDateTime(r.korail_cancelled_at)} 코레일 취소`
@@ -247,11 +249,15 @@ function DetailTicket({
   return (
     <Ticket
       shared
+      className={flashClass(flash)}
       tone={ticketTone(r, 'brand')}
       stub={
         <>
           <span>
-            시도 <b className="kb-num">{r.attempts.toLocaleString()}회</b>
+            시도{' '}
+            <b className="kb-num">
+              <TickNumber value={r.attempts}>{r.attempts.toLocaleString()}회</TickNumber>
+            </b>
           </span>
           <span>{stubRight}</span>
         </>

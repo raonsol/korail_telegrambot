@@ -1410,3 +1410,188 @@ html[data-nav='pop']::view-transition-new(kb-ticket):only-child {
     animation-name: kb-fade-out;
   }
 }
+
+/* ---------- 목록 항목 생김·사라짐 (components/Motion.tsx AnimatedList) ---------- */
+.kb-list-item {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+.kb-list-item__inner {
+  min-width: 0;
+  min-height: 0;
+}
+.kb-list-item.is-entering {
+  animation: kb-list-in var(--dur-slow) var(--ease-nav) both;
+}
+/* 높이가 0으로 접히며 목록 간격도 함께 줄어듦 */
+.kb-list-item.is-leaving {
+  pointer-events: none;
+  animation: kb-list-out 260ms var(--ease-in-out) forwards;
+}
+.kb-list-item.is-leaving > .kb-list-item__inner {
+  overflow: hidden;
+}
+@keyframes kb-list-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.98);
+  }
+}
+@keyframes kb-list-out {
+  to {
+    grid-template-rows: 0fr;
+    margin-bottom: calc(-1 * var(--space-3));
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+/* 마지막 항목이 접히는 동안 빈 목록 안내가 서서히 나타남 */
+.kb-empty {
+  animation: kb-fade-in var(--dur-slow) ease-out;
+}
+
+/* ---------- 보는 중에 예약이 끝났을 때 (useStatusFlash) ---------- */
+.kb-flash--success {
+  animation: kb-stamp 520ms var(--ease-out);
+}
+.kb-flash--success .kb-badge {
+  animation: kb-badge-pop 520ms var(--ease-out);
+}
+.kb-flash--fail {
+  animation: kb-shake 420ms var(--ease-in-out);
+}
+@keyframes kb-stamp {
+  35% {
+    transform: scale(1.025);
+  }
+}
+@keyframes kb-badge-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.15);
+  }
+}
+@keyframes kb-shake {
+  20%,
+  60% {
+    transform: translateX(-5px);
+  }
+  40%,
+  80% {
+    transform: translateX(5px);
+  }
+}
+
+/* ---------- 바뀌는 숫자 (TickNumber) ---------- */
+.kb-tick {
+  display: inline-block;
+  animation: kb-tick 260ms var(--ease-out);
+}
+@keyframes kb-tick {
+  from {
+    opacity: 0;
+    transform: translateY(45%);
+  }
+}
+
+/* ---------- 불러오는 중 승차권 (TicketSkeleton) ---------- */
+.kb-skeleton .kb-ticket__main,
+.kb-skeleton .kb-ticket__stub {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+.kb-skeleton__line {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(
+      90deg,
+      transparent 0,
+      color-mix(in srgb, var(--surface) 70%, transparent) 50%,
+      transparent 100%
+    )
+    no-repeat,
+    var(--surface-3);
+  background-size:
+    50% 100%,
+    100% 100%;
+  animation: kb-shimmer 1.3s ease-in-out infinite;
+}
+.kb-skeleton__line--short {
+  width: 38%;
+}
+.kb-skeleton__line--title {
+  height: 22px;
+}
+@keyframes kb-shimmer {
+  from {
+    background-position:
+      -100% 0,
+      0 0;
+  }
+  to {
+    background-position:
+      200% 0,
+      0 0;
+  }
+}
+
+/* ---------- 알림(토스트)은 아래에서 올라옴 ---------- */
+.kb-toast--float {
+  animation: kb-toast-in var(--dur-slow) var(--ease-nav);
+}
+@keyframes kb-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+
+/* ---------- 누르는 반응 (버튼·승차권 카드에는 디자인 키트에 이미 있음) ---------- */
+.kb-rowbtn,
+.kb-station-btn,
+.kb-calendar__day,
+.kb-tab,
+.kb-fab {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+.kb-segmented > button {
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast),
+    background var(--dur-fast);
+}
+.kb-rowbtn:active {
+  transform: scale(0.985);
+}
+.kb-station-btn:not(:disabled):active,
+.kb-calendar__day:not(:disabled):active,
+.kb-segmented > button:active,
+.kb-tab:active {
+  transform: scale(0.94);
+}
+.kb-fab:active {
+  transform: scale(0.92);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kb-list-item.is-entering,
+  .kb-flash--success,
+  .kb-flash--success .kb-badge,
+  .kb-flash--fail,
+  .kb-tick,
+  .kb-toast--float {
+    animation: none;
+  }
+  .kb-skeleton__line {
+    animation: none;
+  }
+  .kb-list-item.is-leaving {
+    animation-duration: 1ms;
+  }
+}

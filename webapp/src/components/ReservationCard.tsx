@@ -1,5 +1,6 @@
 import type { Reservation } from '../api'
 import { useIsSharedTicket } from '../motion'
+import { TickNumber, flashClass, useStatusFlash } from './Motion'
 import { SEAT_SUMMARY, displayStatus, formatDate, relativeTime, timeRange } from '../format'
 import { StatusBadge, TrainTag } from './StatusBadge'
 import { RouteLine, Ticket, type TicketTone } from './Ticket'
@@ -12,8 +13,10 @@ export function ticketTone(r: Reservation, activeTone: TicketTone = 'plain'): Ti
 
 export function ReservationCard({ reservation: r }: { reservation: Reservation }) {
   const shared = useIsSharedTicket(r.id)
+  const flash = useStatusFlash(displayStatus(r))
   return (
     <Ticket
+      className={flashClass(flash)}
       to={`/r/${r.id}`}
       sharedId={r.id}
       shared={shared}
@@ -25,7 +28,7 @@ export function ReservationCard({ reservation: r }: { reservation: Reservation }
             {!r.is_active
               ? relativeTime(r.finished_at ?? r.updated_at)
               : r.attempts > 0
-                ? `${r.attempts.toLocaleString()}회 시도`
+                ? <TickNumber value={r.attempts}>{r.attempts.toLocaleString()}회 시도</TickNumber>
                 : r.status === 'running'
                   ? '검색 시작'
                   : '시작 대기'}
