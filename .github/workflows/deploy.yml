@@ -1,0 +1,52 @@
+name: Deploy
+
+# main 의 Test Suite 가 통과하면 서버에서 scripts/deploy.sh 를 실행한다. 손으로 실행(Actions > Deploy >
+# Run workflow)하면 고른 ref 의 커밋을 배포한다 (main 에 있는 커밋만, 예전 커밋으로 되돌리기 가능).
+# 서버 설정과 아래 시크릿: docs/deploy.md
+on:
+  workflow_run:
+    workflows: [Test Suite]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# 배포끼리 겹치거나 중간에 취소되지 않게 한다
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: deploy to the server
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # 배포를 잠시 막으려면 이 environment 에 required reviewers 나 wait timer 를 건다
+    environment: production
+    steps:
+      # 서버의 배포 키는 scripts/deploy.sh 만 실행할 수 있고, 커밋 SHA 를 인자로 받는다
+      - name: run scripts/deploy.sh on the server
+        env:
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_USER" ] || [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$DEPLOY_KNOWN_HOSTS" ]; then
+            echo "::error::DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS 시크릿이 필요합니다 (docs/deploy.md)."
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -p "${DEPLOY_PORT:-22}" \
+            "$DEPLOY_USER@$DEPLOY_HOST" "$SHA"

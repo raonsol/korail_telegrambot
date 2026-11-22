@@ -15,6 +15,7 @@ services:
       - redis_data:/data
     networks:
       - korail_network
+    restart: unless-stopped
     profiles:
       - celery  # Only start with Celery profile
 
@@ -36,6 +37,7 @@ services:
       retries: 10
     networks:
       - korail_network
+    restart: unless-stopped
     profiles:
       - celery  # Only start with Celery profile
 
@@ -59,6 +61,7 @@ services:
       - ./data:/app/data
     networks:
       - korail_network
+    restart: unless-stopped
     profiles:
       - subprocess
 
@@ -91,6 +94,7 @@ services:
       - ./logs:/app/logs
     networks:
       - korail_network
+    restart: unless-stopped
     profiles:
       - celery
 
@@ -122,6 +126,7 @@ services:
       - ./logs:/app/logs
     networks:
       - korail_network
+    restart: unless-stopped
     profiles:
       - celery  # Only start with Celery profile
 
@@ -143,6 +148,7 @@ services:
       - redis
     networks:
       - korail_network
+    restart: unless-stopped
     profiles:
       - celery  # Only start with Celery profile
 
