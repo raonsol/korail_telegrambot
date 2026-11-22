@@ -11,6 +11,19 @@ body {
 }
 html {
   background: var(--bg);
+  /* 버튼(스테퍼 ±, 달력)을 빨리 연달아 누를 때 iOS 가 두 번 탭 확대를 하지 않게 (두 손가락 확대는 그대로).
+     확대된 채 남으면 화면이 가로로 밀림 */
+  touch-action: manipulation;
+}
+/* iOS Safari 는 글자가 16px 보다 작은 입력칸에 포커스하면 화면을 확대하고 되돌리지 않음
+   (로그인 전화번호 칸 15px → 이후 예약 화면 내내 가로로 밀림). 터치 기기에서는 16px 이상 */
+@media (pointer: coarse) {
+  /* :not() 은 .kb-select 등 클래스 규칙보다 우선하도록 */
+  html input:not([type='checkbox']):not([type='radio']),
+  html select:not([multiple]),
+  html textarea:not([hidden]) {
+    font-size: max(16px, 1em);
+  }
 }
 body {
   min-height: 100dvh;
