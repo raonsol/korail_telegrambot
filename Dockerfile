@@ -15,13 +15,15 @@ RUN apt-get update && apt-get install -y tzdata && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
+# pykorail 은 PyPI 에서 삭제되어 vendor/ 의 휠로 설치 (uv.lock 이 경로와 해시를 고정)
+COPY vendor ./vendor
 
 # uv.lock 그대로 시스템 Python 에 설치 (PATH 의 fastapi·celery 를 그대로 사용)
 # --locked: uv.lock 이 pyproject.toml 과 맞지 않으면 빌드 실패. 설치 후 uv 는 이미지에서 제거
 RUN pip install --no-cache-dir uv==0.12.19 && \
-  uv export --locked --no-dev --format requirements.txt -o /tmp/requirements.txt && \
-  uv pip install --system --no-cache --require-hashes -r /tmp/requirements.txt && \
-  rm /tmp/requirements.txt && \
+  uv export --locked --no-dev --format requirements.txt -o requirements.txt && \
+  uv pip install --system --no-cache --require-hashes -r requirements.txt && \
+  rm -r requirements.txt vendor && \
   pip uninstall -y uv
 
 COPY src .

@@ -17,8 +17,9 @@ dependencies = [
     "pywebpush",
     "psycopg[binary]",
     "cryptography",
-    # create_korail_client() 가 비공개 client._api._session 을 쓰므로 정확히 고정 (CLAUDE.md 참고)
-    "pykorail==0.4.0",
+    # PyPI·GitHub 에서 삭제되어(2026-11-02) vendor/ 의 휠로 설치 ([tool.uv.sources], CLAUDE.md 참고)
+    # create_korail_client() 가 비공개 client._api._session 을 쓰므로 정확히 고정
+    "pykorail==0.6.1",
 ]
 
 [dependency-groups]
@@ -37,3 +38,6 @@ dev = [
 # 배포용 패키지가 아닌 애플리케이션 - 의존성만 설치하고 프로젝트 자체는 설치하지 않음
 package = false
 required-version = ">=0.12"
+
+[tool.uv.sources]
+pykorail = { path = "vendor/pykorail-0.6.1-py3-none-any.whl" }

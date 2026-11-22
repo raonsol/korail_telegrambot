@@ -207,7 +207,7 @@ class KorailAccountService:
         with self._lock:
             self._rejected.pop(key, None)
 
-        rsv_ids = {r.rsv_id for r in reservations} | {t.pnr_no for t in tickets}
+        rsv_ids = {r.pnr_no for r in reservations} | {t.pnr_no for t in tickets}
         links = self.links_for(korail_id, rsv_ids) if rsv_ids else {}
         out = KorailAccountOut(
             korail_id=korail_id,
@@ -261,20 +261,20 @@ def _reservation_out(r, links: dict[str, str]) -> KorailReservationOut:
 
     _, deadline = reservation_details(r)
     return KorailReservationOut(
-        rsv_id=r.rsv_id,
+        rsv_id=r.pnr_no,
         **_train_fields(r.train),
         price=r.price,
-        seat_count=r.seat_no_count,
+        seat_count=r.seat_count,
         waiting=r.is_waiting,
         pay_deadline=pay_deadline_utc(deadline),
-        reservation_id=links.get(r.rsv_id),
+        reservation_id=links.get(r.pnr_no),
     )
 
 
 def _ticket_out(t, links: dict[str, str]) -> KorailTicketOut:
     seats = (
         t.seat_no
-        if t.seat_no_count == 1 or not t.seat_no_end
+        if t.seat_count == 1 or not t.seat_no_end
         else f"{t.seat_no}~{t.seat_no_end}"
     )
     return KorailTicketOut(
@@ -282,7 +282,7 @@ def _ticket_out(t, links: dict[str, str]) -> KorailTicketOut:
         **_train_fields(t.train),
         car_no=t.car_no,
         seats=seats or "",
-        seat_count=t.seat_no_count,
+        seat_count=t.seat_count,
         price=t.price,
         reservation_id=links.get(t.pnr_no),
     )
