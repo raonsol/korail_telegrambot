@@ -173,15 +173,6 @@ class TestCeleryLauncher:
 class TestCeleryTasks:
     """Test Celery tasks"""
 
-    def test_celery_app_configuration(self):
-        """Test Celery app is configured correctly"""
-        from telegramBot.tasks import app
-
-        assert app.conf.broker_url
-        assert app.conf.result_backend
-        assert app.conf.task_serializer == "json"
-        assert app.conf.accept_content == ["json"]
-
     def test_reservation_task_success(self, mock_redis_client):
         from telegramBot.tasks import reservation_task
 
@@ -452,6 +443,9 @@ class TestCeleryTasks:
         from telegramBot.tasks import RESERVATION_TIMEOUT, app
 
         assert app.conf.worker_pool == "threads"
+        # 명세는 JSON 으로만 (pickle 금지)
+        assert app.conf.task_serializer == "json"
+        assert app.conf.accept_content == ["json"]
         assert app.conf.worker_concurrency >= 1
         # 실행 중인 태스크가 재전달(중복 실행)되지 않도록 최대 실행 시간보다 길게
         visibility = app.conf.broker_transport_options["visibility_timeout"]

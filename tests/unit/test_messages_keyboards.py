@@ -3,9 +3,9 @@ Unit tests for messages and keyboard utilities
 """
 
 import pytest
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import Mock, AsyncMock
 from datetime import datetime
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import InlineKeyboardMarkup
 
 
 class TestMessages:
@@ -17,40 +17,6 @@ class TestMessages:
         from version import VERSION
 
         assert f"[rs-korailbot:{VERSION}]" in Messages.Info.START_MESSAGE
-
-    def test_messages_info_constants(self):
-        """Test that all Info messages are defined"""
-        from telegramBot.messages import Messages
-
-        assert Messages.Info.START_MESSAGE
-        assert Messages.Info.INPUT_ID
-        assert Messages.Info.INPUT_PW
-        assert Messages.Info.INPUT_DATE
-        assert Messages.Info.INPUT_SRC_STATION
-        assert Messages.Info.INPUT_DST_STATION
-        assert Messages.Info.INPUT_DEP_TIME
-        assert Messages.Info.INPUT_MAX_DEP_TIME
-        assert Messages.Info.INPUT_TRAIN_TYPE
-        assert Messages.Info.INPUT_SEAT_TYPE
-        assert Messages.Info.CONFIRM_DETAILS
-        assert Messages.Info.RESERVE_STARTED
-        assert Messages.Info.RESERVE_SUCCESS
-        assert Messages.Info.RESERVE_FINISHED
-
-    def test_messages_error_constants(self):
-        """Test that all Error messages are defined"""
-        from telegramBot.messages import Messages
-
-        assert Messages.Error.RESERVE_CANCELLED
-        assert Messages.Error.RESERVE_CANCELLED_BY_ADMIN
-        assert Messages.Error.RESERVE_WRONG
-        assert Messages.Error.RESERVE_FAILED
-        assert Messages.Error.INPUT_WRONG
-        assert Messages.Error.INPUT_DATE_FAILURE
-        assert Messages.Error.INPUT_DEP_TIME_FAILURE
-        assert Messages.Error.INPUT_DEP_TIME_PAST_FAILURE
-        assert Messages.Error.INPUT_DEP_TIME_MAX_PAST_FAILURE
-        assert Messages.Error.RESERVE_ALREADY_DOING
 
     def test_confirm_details_formatting(self):
         """Test CONFIRM_DETAILS message formatting"""

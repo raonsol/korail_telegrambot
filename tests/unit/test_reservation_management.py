@@ -1,17 +1,16 @@
 """인근역 포함 예약과 예약 후 관리 (코레일 예약 취소, 결제 기한 알림)"""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from pykorail import AccessRestrictedError, KorailError
 
-from core.db import utcnow
 from core.errors import Conflict, KorailUnavailable, NotAllowed, ServiceError
 from core.models import Reservation
 from core.notifier import ReservationEvent, push_message
-from core.schemas import Owner, ReservationOut, WorkerEvent, pay_deadline_utc
+from core.schemas import Owner, WorkerEvent, pay_deadline_utc
 
 USER = Owner(user_id="01012345678")
 OTHER = Owner(user_id="01087654321")
@@ -1061,7 +1060,8 @@ class TestTrainListNearby:
             dep_time="0900",
             max_dep_time="0930",
             train_type="KTX",
-            include_nearby=nearby,
+            # None: 값을 주지 않음 (기본값 확인)
+            **({} if nearby is None else {"include_nearby": nearby}),
         )
         return service.search(KORAIL_ID, query), client
 
@@ -1075,7 +1075,7 @@ class TestTrainListNearby:
         ]
 
     def test_off_by_default(self):
-        _, client = self._search(False)
+        _, client = self._search(None)
         assert client.trains.search.call_args.kwargs["include_nearby_stations"] is False
 
     @pytest.mark.asyncio

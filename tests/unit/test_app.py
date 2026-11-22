@@ -172,13 +172,6 @@ class TestLifespan:
         bot.app.stop.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_lifespan_without_telegram(self, test_settings, services):
-        app = create_app(test_settings, services, None, run_housekeeping=False)
-        async with app.router.lifespan_context(app):
-            # 저장소 초기화 + ALLOW_LIST 시드
-            assert services.users.is_allowed("01012345678")
-
-    @pytest.mark.asyncio
     async def test_lifespan_runs_housekeeping(self, test_settings, services):
         with patch(
             "web.factory.housekeeping_loop", new=AsyncMock(return_value=None)

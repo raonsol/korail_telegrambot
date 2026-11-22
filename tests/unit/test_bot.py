@@ -3,8 +3,9 @@ Unit tests for Telegram bot (bot.py)
 """
 
 import pytest
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-import asyncio
+from unittest.mock import Mock, AsyncMock, patch
+
+from core.schemas import Owner
 
 
 class TestTelegramBot:
@@ -54,9 +55,6 @@ class TestTelegramBot:
             assert bot.token == "test_token"
             assert bot.reservations is services.reservations
             assert bot.users is services.users
-            assert isinstance(bot.userDict, dict)
-            assert isinstance(bot.subscribes, list)
-            assert not hasattr(bot, "runningStatus")
 
     def test_create_user(self, bot_instance):
         """Test _create_user method"""
@@ -93,7 +91,6 @@ class TestTelegramBot:
         assert bot_instance.userDict[chat_id]["inProgress"] is False
         assert bot_instance.userDict[chat_id]["lastAction"] == 0
         assert bot_instance.userDict[chat_id]["trainInfo"] == {}
-        assert bot_instance.userDict[chat_id]["pid"] == 9999999
 
     def test_get_user_progress_existing_user(self, bot_instance, sample_user_data):
         """Test _get_user_progress for existing user"""
@@ -189,6 +186,9 @@ class TestTelegramBot:
             assert bot_instance.userDict[chat_id]["userInfo"]["korailPw"] == "admin_pw"
             assert bot_instance.userDict[chat_id]["userInfo"]["isAdmin"] is True
             assert bot_instance.userDict[chat_id]["lastAction"] == 4
+            assert bot_instance._chat_owner(chat_id) == Owner(
+                user_id="admin", is_admin=True
+            )
 
     @pytest.mark.asyncio
     async def test_start_accept_admin_login_failure_shows_reason(self, bot_instance):
@@ -218,27 +218,9 @@ class TestTelegramBot:
             assert "사유 : 아이디 또는 비밀번호가 올바르지 않습니다" in msg
 
     @pytest.mark.asyncio
-    async def test_input_id_valid_phone(self, bot_instance):
-        """Test _input_id with valid phone number"""
-        chat_id = 123456
-        bot_instance._create_user(chat_id)
-        bot_instance.userDict[chat_id]["inProgress"] = True
-        bot_instance.userDict[chat_id]["lastAction"] = 2
-
-        # 01012345678 is seeded into the user DB from ALLOW_LIST
-        bot_instance.send_message = AsyncMock()
-
-        await bot_instance._input_id(chat_id, "010-1234-5678")
-
-        user_info = bot_instance.userDict[chat_id]["userInfo"]
-        assert user_info["korailId"] == "010-1234-5678"
-        assert user_info["ownerId"] == "01012345678"
-        assert bot_instance.userDict[chat_id]["lastAction"] == 3
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("phone", ["01012345678", "010 1234 5678"])
-    async def test_input_id_accepts_phone_without_hyphens(self, bot_instance, phone):
-        """Phone numbers are accepted with or without hyphens"""
+    @pytest.mark.parametrize("phone", ["010-1234-5678", "01012345678", "010 1234 5678"])
+    async def test_input_id_valid_phone(self, bot_instance, phone):
+        """Phone numbers are accepted with or without hyphens (01012345678 is seeded from ALLOW_LIST)"""
         chat_id = 123456
         bot_instance._create_user(chat_id)
         bot_instance.userDict[chat_id]["inProgress"] = True
@@ -340,6 +322,38 @@ class TestTelegramBot:
             msg = bot_instance.send_message.call_args[0][1]
             assert "사유 : 아이디 또는 비밀번호가 올바르지 않습니다" in msg
 
+        # 다시 전화번호부터 입력
+        await bot_instance._handle_login_callback(chat_id, "login_back")
+        assert bot_instance.userDict[chat_id]["lastAction"] == 2
+
+    @pytest.mark.asyncio
+    async def test_input_dep_time_invalid(self, bot_instance):
+        """잘못된 시각은 같은 단계에 머묾"""
+        from datetime import datetime, timedelta
+
+        chat_id = 123456
+        bot_instance._create_user(chat_id)
+        bot_instance.send_message = AsyncMock()
+        bot_instance.userDict[chat_id]["inProgress"] = True
+        bot_instance.userDict[chat_id]["lastAction"] = 7
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y%m%d")
+        bot_instance.userDict[chat_id]["trainInfo"]["depDate"] = tomorrow
+
+        await bot_instance._input_dep_time(chat_id, "invalid_time")
+
+        assert bot_instance.userDict[chat_id]["lastAction"] == 7
+
+    @pytest.mark.asyncio
+    async def test_help_lists_commands(self, bot_instance, mock_telegram_update):
+        mock_telegram_update.message.chat_id = 123456
+        bot_instance.send_message = AsyncMock()
+
+        await bot_instance.return_help(mock_telegram_update, None)
+
+        msg = bot_instance.send_message.call_args[0][1]
+        for command in ("/start", "/status", "/cancel"):
+            assert command in msg
+
     @pytest.mark.asyncio
     async def test_subscribe_user(self, bot_instance, mock_telegram_update):
         """Test /subscribe command handler"""
@@ -428,6 +442,8 @@ class TestTelegramBot:
     async def test_cancel_callback_cancel_all(self, bot_instance, valid_request):
         chat_id = 123456
         bot_instance._create_user(chat_id)
+        bot_instance.userDict[chat_id]["inProgress"] = True
+        bot_instance.userDict[chat_id]["lastAction"] = 12
         bot_instance.send_message = AsyncMock()
         await self._start(bot_instance, chat_id, valid_request)
         await self._start(bot_instance, chat_id, valid_request)
@@ -436,6 +452,8 @@ class TestTelegramBot:
 
         assert bot_instance._active_reservations(chat_id) == []
         assert "모든 예약이 취소" in bot_instance.send_message.call_args[0][1]
+        # 남은 예약이 없으면 대화도 처음으로
+        assert bot_instance.userDict[chat_id]["lastAction"] == 0
 
     @pytest.mark.asyncio
     async def test_start_reserve_launches_via_service(
