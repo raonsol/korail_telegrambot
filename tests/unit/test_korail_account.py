@@ -37,10 +37,10 @@ def _train(
 
 def _reservation(rsv_id="PNR1", waiting=False, **train):
     return SimpleNamespace(
-        rsv_id=rsv_id,
+        pnr_no=rsv_id,
         train=_train(**train),
         price=23700,
-        seat_no_count=1,
+        seat_count=1,
         is_waiting=waiting,
         buy_limit_date="00000000" if waiting else "20991031",
         buy_limit_time="000000" if waiting else "232400",
@@ -54,7 +54,7 @@ def _ticket(pnr="PNR9", seat_end=None, count=1):
         car_no="3",
         seat_no="12A",
         seat_no_end=seat_end,
-        seat_no_count=count,
+        seat_count=count,
         price=59800,
     )
 

@@ -40,8 +40,9 @@ WAITLIST_OPTIONS = (
 # pykorail 이 서버 응답에 사유가 없을 때 넣는 기본 로그인 실패 문구
 PYKORAIL_FALLBACK_LOGIN_MSG = "아이디 또는 비밀번호가 올바르지 않습니다"
 
-# 코레일이 앱 버전·보안 정책을 바꿔 이 클라이언트의 요청을 받지 않음 (2026-10-21부터 -8204,
-# pykorail 이 새 기기 인증을 지원해야 풀림). 다시 시도해도 결과가 같으므로 바로 중단한다
+# 코레일이 앱 버전·보안 정책을 바꿔 이 클라이언트의 요청을 받지 않음 (-8204. 2026-10-21 앱 7.0.10
+# 때는 pykorail 0.6 의 새 토큰으로 풀림 - 다시 나오면 vendor 휠을 고쳐야 함).
+# 다시 시도해도 결과가 같으므로 바로 중단한다
 APP_OUTDATED_CODES = frozenset({"-8204"})
 APP_OUTDATED_MESSAGE = (
     "코레일 앱 보안 정책이 바뀌어 지금은 예약을 진행할 수 없습니다. "
@@ -139,7 +140,8 @@ def reservation_details(reservation):
     예약 후 관리(코레일 예약 취소, 결제 기한 알림)에 쓴다. 예약대기는 결제 기한이 없고,
     pykorail 예약이 아니면(이미 같은 예약이 있음 등) 둘 다 None
     """
-    rsv_id = getattr(reservation, "rsv_id", None)
+    # pykorail 0.6: 예약번호 속성은 pnr_no (rsv_id 는 폐기 예정)
+    rsv_id = getattr(reservation, "pnr_no", None)
     if not isinstance(rsv_id, str) or not rsv_id:
         return None, None
     if getattr(reservation, "is_waiting", False) is True:

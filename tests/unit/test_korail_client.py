@@ -551,7 +551,7 @@ class TestKorailBlockLogging:
 
     def test_proxy_applies_only_to_korail_session(self):
         """The proxy reaches the curl_cffi session pykorail actually sends with
-        (pykorail 0.4.0 wraps it in IdempotentSession). Re-check this when upgrading pykorail.
+        (pykorail 0.4.0+ wraps it in IdempotentSession). Re-check this when upgrading pykorail.
         """
         from curl_cffi import Session
         from telegramBot.korail_client import create_korail_client
@@ -572,6 +572,46 @@ class TestKorailBlockLogging:
             assert not direct._api._session._session.proxies
         finally:
             direct.close()
+
+    def test_pykorail_model_fields_we_read(self):
+        """Contract with the pinned pykorail: attribute names read from its models
+        (0.6 renamed rsv_id -> pnr_no and seat_no_count -> seat_count; the old names
+        warn and go away in the next release). Re-check this when upgrading pykorail."""
+        import dataclasses
+        from pykorail import Reservation, Ticket, Train
+
+        def names(model):
+            return {f.name for f in dataclasses.fields(model)}
+
+        assert {
+            "pnr_no",
+            "seat_count",
+            "buy_limit_date",
+            "buy_limit_time",
+            "price",
+            "train",
+        } <= names(Reservation)
+        assert isinstance(Reservation.is_waiting, property)
+        assert {
+            "pnr_no",
+            "seat_count",
+            "seat_no",
+            "seat_no_end",
+            "car_no",
+            "price",
+            "train",
+        } <= names(Ticket)
+        assert {
+            "train_no",
+            "train_type_name",
+            "dep_date",
+            "dep_time",
+            "arr_time",
+            "dep_name",
+            "arr_name",
+            "dep_code",
+            "arr_code",
+        } <= names(Train)
 
     def test_proxy_fails_loudly_if_pykorail_session_changes(self):
         """If pykorail's session layout changes, refuse instead of silently going direct"""

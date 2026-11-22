@@ -160,7 +160,7 @@ class TestReservationDetails:
         from telegramBot.korail_client import reservation_details
 
         r = SimpleNamespace(
-            rsv_id="PNR1",
+            pnr_no="PNR1",
             is_waiting=False,
             buy_limit_date="20991231",
             buy_limit_time="101500",
@@ -171,7 +171,7 @@ class TestReservationDetails:
         from telegramBot.korail_client import reservation_details
 
         r = SimpleNamespace(
-            rsv_id="PNR1",
+            pnr_no="PNR1",
             is_waiting=False,
             buy_limit_date="20991231",
             buy_limit_time="1015",
@@ -182,7 +182,7 @@ class TestReservationDetails:
         from telegramBot.korail_client import reservation_details
 
         r = SimpleNamespace(
-            rsv_id="PNR1",
+            pnr_no="PNR1",
             is_waiting=True,
             buy_limit_date="00000000",
             buy_limit_time="000000",
@@ -199,7 +199,7 @@ class TestReservationDetails:
         from core.runner import run_reservation
 
         reservation = SimpleNamespace(
-            rsv_id="PNR1",
+            pnr_no="PNR1",
             is_waiting=False,
             buy_limit_date="20991231",
             buy_limit_time="101500",
