@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { TransitionLink } from '../navigation'
 import { Api, type KorailAccount, type KorailReservation, type KorailTrain } from '../api'
 import { ErrorBox } from '../components/Feedback'
 import { Icon } from '../components/Icon'
 import { Layout } from '../components/Layout'
 import { Segmented } from '../components/Segmented'
-import { Dialog } from '../components/Sheet'
+import { Dialog, useLastWhileOpen } from '../components/Sheet'
 import { RouteLine, Ticket } from '../components/Ticket'
 import {
   KORAIL_PAYMENT_URL,
@@ -27,6 +27,8 @@ export function TicketsPage() {
   const queryClient = useQueryClient()
   const [tab, setTab] = useState<Tab>('pending')
   const [target, setTarget] = useState<KorailReservation | null>(null)
+  // 닫히는 애니메이션 동안에도 마지막 예약을 보여 줌
+  const shownTarget = useLastWhileOpen(target !== null, target)
   const now = useNow(30_000)
 
   const query = useQuery({
@@ -126,20 +128,21 @@ export function TicketsPage() {
         <IssuedList account={data} />
       )}
 
-      {target && (
+      {shownTarget && (
         <Dialog
-          title={target.waiting ? '예약대기를 취소할까요?' : '코레일 예약을 취소할까요?'}
+          open={target !== null}
+          title={shownTarget.waiting ? '예약대기를 취소할까요?' : '코레일 예약을 취소할까요?'}
           icon={<Icon name="trash" size={18} />}
           onClose={() => !cancel.isPending && openCancel(null)}
         >
           <p>
             <b>
-              {target.train_type} {trainNumber(target.train_no)}
+              {shownTarget.train_type} {trainNumber(shownTarget.train_no)}
             </b>{' '}
-            · {formatDate(target.dep_date)} {formatTime(target.dep_time)}
+            · {formatDate(shownTarget.dep_date)} {formatTime(shownTarget.dep_time)}
             <br />
-            {target.dep_station} → {target.arr_station} · {formatWon(target.price)} ·{' '}
-            {target.seat_count}석
+            {shownTarget.dep_station} → {shownTarget.arr_station} · {formatWon(shownTarget.price)} ·{' '}
+            {shownTarget.seat_count}석
           </p>
           <p className="kb-hint">취소한 좌석은 되돌릴 수 없습니다.</p>
           <ErrorBox error={cancel.error} />
@@ -150,9 +153,9 @@ export function TicketsPage() {
             <button
               className="kb-btn kb-btn--danger"
               disabled={cancel.isPending}
-              onClick={() => cancel.mutate(target.rsv_id)}
+              onClick={() => cancel.mutate(shownTarget.rsv_id)}
             >
-              {cancel.isPending ? '취소하는 중…' : target.waiting ? '예약대기 취소' : '예약 취소'}
+              {cancel.isPending ? '취소하는 중…' : shownTarget.waiting ? '예약대기 취소' : '예약 취소'}
             </button>
           </div>
         </Dialog>
@@ -174,9 +177,9 @@ function PendingList({
     return (
       <div className="kb-empty">
         <p>결제를 기다리는 코레일 예약이 없습니다.</p>
-        <Link className="kb-btn kb-btn--sm kb-btn--primary" to="/new">
+        <TransitionLink className="kb-btn kb-btn--sm kb-btn--primary" to="/new">
           새 예약 시작
-        </Link>
+        </TransitionLink>
       </div>
     )
   }
@@ -316,9 +319,9 @@ function TrainName({ item }: { item: KorailTrain }) {
 /** 코레일봇이 잡은 예약이면 그 예약 기록으로 가는 링크 */
 function Source({ item }: { item: KorailTrain }) {
   return item.reservation_id ? (
-    <Link className="kb-src kb-src--bot" to={`/r/${item.reservation_id}`}>
+    <TransitionLink className="kb-src kb-src--bot" to={`/r/${item.reservation_id}`}>
       코레일봇 예약
-    </Link>
+    </TransitionLink>
   ) : (
     <span className="kb-src">직접 예약</span>
   )

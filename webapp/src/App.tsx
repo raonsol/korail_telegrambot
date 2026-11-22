@@ -4,6 +4,7 @@ import { useAuth } from './auth'
 import { Spinner } from './components/Feedback'
 import { UpdatePrompt } from './components/UpdatePrompt'
 import { useReservationEvents } from './hooks'
+import { RouteTransitions } from './navigation'
 import { AdminPage } from './pages/AdminPage'
 import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
@@ -43,6 +44,7 @@ export function App() {
 
   return (
     <>
+      <RouteTransitions />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route

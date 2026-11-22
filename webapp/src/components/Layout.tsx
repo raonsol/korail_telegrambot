@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink } from 'react-router-dom'
 import { useAuth } from '../auth'
 import { useOnline } from '../hooks'
+import { useTransitionNavigate } from '../navigation'
 import { Icon, type IconName } from './Icon'
 
 interface LayoutProps {
@@ -29,7 +30,7 @@ export function Layout({
   contentClassName,
   children,
 }: LayoutProps) {
-  const navigate = useNavigate()
+  const go = useTransitionNavigate()
   const online = useOnline()
   const { me } = useAuth()
 
@@ -40,7 +41,11 @@ export function Layout({
           <button
             className="kb-icon-btn"
             // 알림 등으로 바로 들어온 경우 돌아갈 화면이 없으면 홈으로
-            onClick={() => (window.history.state?.idx > 0 ? navigate(-1) : navigate('/'))}
+            onClick={() =>
+              window.history.state?.idx > 0
+                ? go(-1, { direction: 'pop' })
+                : go('/', { direction: 'pop' })
+            }
             aria-label="뒤로"
           >
             <Icon name="back" />
@@ -82,8 +87,18 @@ export function Layout({
 }
 
 function Tab({ to, icon, label, end }: { to: string; icon: IconName; label: string; end?: boolean }) {
+  const go = useTransitionNavigate()
   return (
-    <NavLink to={to} end={end} className={({ isActive }) => `kb-tab${isActive ? ' is-active' : ''}`}>
+    <NavLink
+      to={to}
+      end={end}
+      className={({ isActive }) => `kb-tab${isActive ? ' is-active' : ''}`}
+      onClick={(e) => {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+        e.preventDefault()
+        go(to, { direction: 'tab' })
+      }}
+    >
       <Icon name={icon} size={22} />
       <span>{label}</span>
     </NavLink>

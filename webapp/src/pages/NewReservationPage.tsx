@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation } from 'react-router-dom'
 import {
   Api,
   type Reservation,
@@ -30,6 +30,8 @@ import {
   toSeatType,
   type SeatSelection,
 } from '../format'
+import { SHARED_TICKET_CLASS } from '../motion'
+import { useTransitionNavigate } from '../navigation'
 import { recentStations, rememberStations } from '../storage'
 
 /** 출발 시각 범위를 고르는 단위 (분) */
@@ -132,7 +134,7 @@ function nextMinute(time: string): string {
 }
 
 export function NewReservationPage() {
-  const navigate = useNavigate()
+  const go = useTransitionNavigate()
   const location = useLocation()
   const queryClient = useQueryClient()
   const prefill = (location.state as { prefill?: Reservation } | null)?.prefill
@@ -186,7 +188,7 @@ export function NewReservationPage() {
       rememberStations(reservation.src_station, reservation.dst_station)
       queryClient.setQueryData(['reservation', reservation.id], reservation)
       queryClient.invalidateQueries({ queryKey: ['reservations'] })
-      navigate(`/r/${reservation.id}`, { replace: true, state: { created: true } })
+      go(`/r/${reservation.id}`, { replace: true, state: { created: true } })
     },
   })
 
@@ -288,7 +290,9 @@ export function NewReservationPage() {
             : '승차권의 빈 칸을 눌러 채워주세요.'}
         </p>
 
-        <div className={`kb-ticket kb-ticket-form${ready ? ' kb-ticket--brand' : ''}`}>
+        <div
+          className={`kb-ticket kb-ticket-form ${SHARED_TICKET_CLASS}${ready ? ' kb-ticket--brand' : ''}`}
+        >
           <div className="kb-ticket__paper">
             <div className="kb-ticket__main">
               <div className="kb-ticket__head">
@@ -412,9 +416,9 @@ export function NewReservationPage() {
         </div>
       </div>
 
-      {sheet && (
-        <Sheet
-          title={SHEET_TITLES[sheet]}
+      <Sheet
+          open={sheet !== null}
+          title={sheet ? SHEET_TITLES[sheet] : ''}
           onClose={closeSheet}
           fill={sheet === 'time'}
           footer={
@@ -503,10 +507,9 @@ export function NewReservationPage() {
             </div>
           )}
         </Sheet>
-      )}
 
-      {nearbyInfoOpen && (
-        <Dialog
+      <Dialog
+          open={nearbyInfoOpen}
           title="인근역 포함이란?"
           icon={<Icon name="info" size={18} />}
           onClose={() => setNearbyInfoOpen(false)}
@@ -521,10 +524,9 @@ export function NewReservationPage() {
             확인
           </button>
         </Dialog>
-      )}
 
-      {waitInfoOpen && (
-        <Dialog title="예약대기란?" icon={<Icon name="info" size={18} />} onClose={() => setWaitInfoOpen(false)}>
+      <Dialog
+          open={waitInfoOpen} title="예약대기란?" icon={<Icon name="info" size={18} />} onClose={() => setWaitInfoOpen(false)}>
           <p>
             매진된 열차에 대기를 걸어 두면, 취소표가 생겼을 때 코레일이 신청 순서대로 좌석을 배정해
             주는 코레일의 기능입니다.
@@ -541,7 +543,6 @@ export function NewReservationPage() {
             확인
           </button>
         </Dialog>
-      )}
     </Layout>
   )
 }

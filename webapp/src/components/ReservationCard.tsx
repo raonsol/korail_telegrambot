@@ -1,4 +1,5 @@
 import type { Reservation } from '../api'
+import { useIsSharedTicket } from '../motion'
 import { SEAT_SUMMARY, displayStatus, formatDate, relativeTime, timeRange } from '../format'
 import { StatusBadge, TrainTag } from './StatusBadge'
 import { RouteLine, Ticket, type TicketTone } from './Ticket'
@@ -10,9 +11,12 @@ export function ticketTone(r: Reservation, activeTone: TicketTone = 'plain'): Ti
 }
 
 export function ReservationCard({ reservation: r }: { reservation: Reservation }) {
+  const shared = useIsSharedTicket(r.id)
   return (
     <Ticket
       to={`/r/${r.id}`}
+      sharedId={r.id}
+      shared={shared}
       tone={ticketTone(r)}
       stub={
         <>

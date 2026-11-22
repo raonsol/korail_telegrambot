@@ -1224,3 +1224,189 @@ a.kb-src--bot {
   gap: 8px;
   margin-top: 6px;
 }
+
+/* =========================================================
+   모션 — 네이티브 앱 같은 화면 전환·시트·작은 반응
+   (디자인 키트의 --dur / --ease-out 위에 화면 전환용 값만 더함)
+   ========================================================= */
+:root {
+  /* iOS 화면 전환과 비슷한 감속 곡선 */
+  --ease-nav: cubic-bezier(0.32, 0.72, 0, 1);
+  --dur-nav: 380ms;
+  --dur-tab: 180ms;
+  --dur-sheet: 320ms;
+  --dur-sheet-out: 240ms;
+}
+
+/* ---------- 화면 전환 (motion.ts runNavTransition, <html data-nav>) ---------- */
+::view-transition-group(*) {
+  animation-duration: var(--dur-nav);
+  animation-timing-function: var(--ease-nav);
+}
+/* 앞으로: 새 화면이 오른쪽에서 들어오고, 이전 화면은 왼쪽으로 조금 밀리며 어두워짐 */
+html[data-nav='push']::view-transition-old(root) {
+  animation: kb-nav-behind var(--dur-nav) var(--ease-nav) both;
+}
+html[data-nav='push']::view-transition-new(root) {
+  animation: kb-nav-from-right var(--dur-nav) var(--ease-nav) both;
+}
+/* 뒤로: 같은 움직임을 거꾸로 (떠나는 화면이 위) */
+html[data-nav='pop']::view-transition-old(root) {
+  z-index: 1;
+  animation: kb-nav-to-right var(--dur-nav) var(--ease-nav) both;
+}
+html[data-nav='pop']::view-transition-new(root) {
+  animation: kb-nav-from-behind var(--dur-nav) var(--ease-nav) both;
+}
+/* 하단 탭: 밀지 않고 짧게 겹쳐 바뀜, 탭바는 그대로 */
+html[data-nav='tab']::view-transition-old(root),
+html[data-nav='tab']::view-transition-new(root) {
+  animation-duration: var(--dur-tab);
+}
+html[data-nav='tab'] .kb-tabbar {
+  view-transition-name: kb-tabbar;
+}
+::view-transition-group(kb-tabbar) {
+  animation: none;
+}
+@keyframes kb-nav-from-right {
+  from {
+    transform: translateX(100vw);
+  }
+}
+@keyframes kb-nav-to-right {
+  to {
+    transform: translateX(100vw);
+  }
+}
+@keyframes kb-nav-behind {
+  to {
+    transform: translateX(-28vw);
+    filter: brightness(0.92);
+  }
+}
+@keyframes kb-nav-from-behind {
+  from {
+    transform: translateX(-28vw);
+    filter: brightness(0.92);
+  }
+}
+
+/* ---------- 이어지는 승차권 (목록 카드 → 상세 → 다시 예약) ---------- */
+.kb-vt-ticket {
+  view-transition-name: kb-ticket;
+}
+/* 모양이 커지는 동안 내용은 빨리 바뀜 (두 승차권 글자가 오래 겹쳐 보이지 않게) */
+::view-transition-old(kb-ticket) {
+  animation: kb-fade-out 140ms ease-out both;
+}
+::view-transition-new(kb-ticket) {
+  animation: kb-fade-in 200ms 60ms ease-out both;
+}
+/* 상대 화면에 승차권이 없으면 화면과 함께 밀려 들어오고 나감 */
+html[data-nav='push']::view-transition-new(kb-ticket):only-child {
+  animation: kb-nav-from-right var(--dur-nav) var(--ease-nav) both;
+}
+html[data-nav='push']::view-transition-old(kb-ticket):only-child {
+  animation: kb-nav-behind var(--dur-nav) var(--ease-nav) both;
+}
+html[data-nav='pop']::view-transition-old(kb-ticket):only-child {
+  animation: kb-nav-to-right var(--dur-nav) var(--ease-nav) both;
+}
+html[data-nav='pop']::view-transition-new(kb-ticket):only-child {
+  animation: kb-nav-from-behind var(--dur-nav) var(--ease-nav) both;
+}
+
+/* ---------- 동작 줄이기: 움직임 대신 짧은 페이드 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  html[data-nav]::view-transition-group(*),
+  html[data-nav]::view-transition-old(*),
+  html[data-nav]::view-transition-new(*) {
+    animation-duration: 120ms !important;
+    animation-timing-function: ease !important;
+  }
+  html[data-nav]::view-transition-old(*) {
+    animation-name: kb-fade-out !important;
+  }
+  html[data-nav]::view-transition-new(*) {
+    animation-name: kb-fade-in !important;
+  }
+}
+@keyframes kb-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes kb-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* ---------- 시트·다이얼로그 (components/Sheet.tsx) ---------- */
+/* 뒤 배경은 ::before 로 따로 그림 - 시트를 끌어내리는 만큼 옅어짐 (--scrim-opacity) */
+.kb-sheet-backdrop {
+  background: transparent;
+}
+.kb-sheet-backdrop::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--scrim);
+  opacity: var(--scrim-opacity, 1);
+  animation: kb-fade-in var(--dur-sheet) ease-out;
+}
+.kb-sheet {
+  position: relative;
+  /* 화면 아래에서 끝까지 올라옴 (디자인 키트의 짧은 slide-up 대신) */
+  animation: kb-sheet-in var(--dur-sheet) var(--ease-nav);
+  will-change: transform;
+}
+.kb-sheet-backdrop.is-closing,
+.kb-dialog-backdrop.is-closing {
+  pointer-events: none;
+}
+.kb-sheet-backdrop.is-closing::before {
+  animation: kb-fade-out var(--dur-sheet-out) ease-in forwards;
+}
+.kb-sheet-backdrop.is-closing .kb-sheet {
+  animation: kb-sheet-out var(--dur-sheet-out) cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+@keyframes kb-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+@keyframes kb-sheet-out {
+  to {
+    transform: translateY(100%);
+  }
+}
+.kb-dialog-backdrop {
+  animation: kb-fade-in var(--dur) ease-out;
+}
+.kb-dialog-backdrop.is-closing {
+  animation: kb-fade-out 160ms ease-in forwards;
+}
+.kb-dialog-backdrop.is-closing .kb-dialog {
+  animation: kb-pop-out 160ms ease-in forwards;
+}
+@keyframes kb-pop-out {
+  to {
+    transform: scale(0.94);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kb-sheet,
+  .kb-sheet-backdrop.is-closing .kb-sheet,
+  .kb-dialog,
+  .kb-dialog-backdrop.is-closing .kb-dialog {
+    animation-name: kb-fade-in;
+    animation-duration: 120ms;
+  }
+  .kb-sheet-backdrop.is-closing .kb-sheet,
+  .kb-dialog-backdrop.is-closing .kb-dialog {
+    animation-name: kb-fade-out;
+  }
+}

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
+import { TransitionLink } from '../navigation'
 import { Api } from '../api'
 import { useAuth } from '../auth'
 import { EmptyState, ErrorBox, Spinner } from '../components/Feedback'
@@ -42,9 +42,9 @@ export function HomePage() {
         ) : active.data.length === 0 ? (
           <EmptyState title="진행 중인 예약이 없습니다">
             <p>원하는 열차 조건을 등록하면 빈 좌석이 나올 때까지 계속 찾아 예약합니다.</p>
-            <Link to="/new" className="kb-btn kb-btn--primary">
+            <TransitionLink to="/new" className="kb-btn kb-btn--primary">
               새 예약 시작
-            </Link>
+            </TransitionLink>
           </EmptyState>
         ) : (
           <div className="kb-list">
@@ -74,9 +74,9 @@ export function HomePage() {
         )}
       </section>
 
-      <Link to="/new" className="kb-fab kb-fab--float" aria-label="새 예약">
+      <TransitionLink to="/new" className="kb-fab kb-fab--float" aria-label="새 예약">
         <Icon name="plus" size={26} />
-      </Link>
+      </TransitionLink>
     </Layout>
   )
 }

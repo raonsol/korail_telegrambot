@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useParams } from 'react-router-dom'
 import { Api, type Reservation } from '../api'
 import { useAuth } from '../auth'
 import { ErrorBox, Spinner } from '../components/Feedback'
@@ -20,11 +20,12 @@ import {
   timeRange,
   type ResultInfo,
 } from '../format'
+import { useTransitionNavigate } from '../navigation'
 import { getPushState, subscribePush, type PushState } from '../push'
 
 export function ReservationDetailPage() {
   const { id = '' } = useParams()
-  const navigate = useNavigate()
+  const go = useTransitionNavigate()
   const location = useLocation()
   const queryClient = useQueryClient()
   const justCreated = Boolean((location.state as { created?: boolean } | null)?.created)
@@ -32,6 +33,9 @@ export function ReservationDetailPage() {
   const query = useQuery({
     queryKey: ['reservation', id],
     queryFn: () => Api.reservation(id),
+    // 목록에서 들어오면 목록의 값으로 바로 그림 (화면 전환 중 승차권이 이어지도록), 오래됐으면 다시 조회
+    initialData: () => listedReservation(queryClient, id)?.data,
+    initialDataUpdatedAt: () => listedReservation(queryClient, id)?.updatedAt,
     refetchInterval: (q) => (q.state.data?.is_active ? 15_000 : false),
   })
 
@@ -204,7 +208,7 @@ export function ReservationDetailPage() {
           ) : (
             <button
               className="kb-btn kb-btn--block kb-detail-action"
-              onClick={() => navigate('/new', { state: { prefill: r } })}
+              onClick={() => go('/new', { state: { prefill: r } })}
             >
               <Icon name="refresh" size={18} /> 같은 조건으로 다시 예약
             </button>
@@ -242,6 +246,7 @@ function DetailTicket({
 
   return (
     <Ticket
+      shared
       tone={ticketTone(r, 'brand')}
       stub={
         <>
@@ -277,6 +282,18 @@ function DetailTicket({
       </div>
     </Ticket>
   )
+}
+
+/** 목록 캐시(홈, 관리자 전체 예약)에 있는 이 예약 */
+function listedReservation(
+  queryClient: ReturnType<typeof useQueryClient>,
+  id: string,
+): { data: Reservation; updatedAt: number } | undefined {
+  for (const [key, list] of queryClient.getQueriesData<Reservation[]>({ queryKey: ['reservations'] })) {
+    const found = Array.isArray(list) ? list.find((r) => r.id === id) : undefined
+    if (found) return { data: found, updatedAt: queryClient.getQueryState(key)?.dataUpdatedAt ?? 0 }
+  }
+  return undefined
 }
 
 /** 예약 직후 알림 권한 요청 (맥락 없이 앱 진입 시 요청하지 않음) */

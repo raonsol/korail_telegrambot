@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { SHARED_TICKET_CLASS } from '../motion'
+import { TransitionLink } from '../navigation'
 
 export type TicketTone = 'plain' | 'brand' | 'success' | 'muted'
 
@@ -9,15 +10,26 @@ export function Ticket({
   to,
   stub,
   className,
+  shared,
+  sharedId,
   children,
 }: {
   tone?: TicketTone
   to?: string
   stub?: ReactNode
   className?: string
+  /** 화면 전환에서 다른 화면의 승차권과 이어짐 (한 화면에 하나만) */
+  shared?: boolean
+  /** 누르면 이 예약 카드가 상세 승차권으로 이어지게 (목록 카드) */
+  sharedId?: string
   children: ReactNode
 }) {
-  const cls = ['kb-ticket', tone !== 'plain' && `kb-ticket--${tone}`, className]
+  const cls = [
+    'kb-ticket',
+    tone !== 'plain' && `kb-ticket--${tone}`,
+    shared && SHARED_TICKET_CLASS,
+    className,
+  ]
     .filter(Boolean)
     .join(' ')
   const paper = (
@@ -27,9 +39,9 @@ export function Ticket({
     </div>
   )
   return to ? (
-    <Link to={to} className={cls}>
+    <TransitionLink to={to} className={cls} sharedTicket={sharedId}>
       {paper}
-    </Link>
+    </TransitionLink>
   ) : (
     <div className={cls}>{paper}</div>
   )
