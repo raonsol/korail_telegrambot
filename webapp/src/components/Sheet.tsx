@@ -8,14 +8,19 @@ function useEscape(onClose: () => void) {
   }, [onClose])
 }
 
-/** 하단 시트 (바깥을 누르거나 Esc로 닫힘) */
+/** 하단 시트 (바깥을 누르거나 Esc로 닫힘). 내용만 스크롤되고 footer(완료 버튼 등)는 항상 보임 */
 export function Sheet({
   title,
   onClose,
+  footer,
+  fill,
   children,
 }: {
   title: string
   onClose: () => void
+  footer?: ReactNode
+  /** 내용과 상관없이 높이 고정 (안쪽 목록이 남는 높이를 채움 - 결과가 바뀌어도 시트 크기가 그대로) */
+  fill?: boolean
   children: ReactNode
 }) {
   const titleId = useId()
@@ -23,7 +28,7 @@ export function Sheet({
   return (
     <div className="kb-sheet-backdrop" onClick={onClose}>
       <div
-        className="kb-sheet"
+        className={`kb-sheet${fill ? ' kb-sheet--fill' : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -33,7 +38,8 @@ export function Sheet({
         <h2 className="kb-sheet__title" id={titleId}>
           {title}
         </h2>
-        {children}
+        <div className="kb-sheet__content">{children}</div>
+        {footer && <div className="kb-sheet__footer">{footer}</div>}
       </div>
     </div>
   )

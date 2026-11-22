@@ -144,10 +144,40 @@ a.kb-icon-btn {
   z-index: 40;
 }
 .kb-sheet {
+  display: flex;
+  flex-direction: column;
   max-height: 85dvh;
+  overflow: hidden;
+  padding-bottom: calc(20px + env(safe-area-inset-bottom));
+}
+.kb-sheet__handle,
+.kb-sheet__title {
+  flex: none;
+}
+/* 내용만 스크롤 (좌우 여백은 시트 가장자리까지 넓혀 포커스 링·슬라이더 손잡이가 잘리지 않게) */
+.kb-sheet__content {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 -20px;
+  padding: 2px 20px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding-bottom: calc(20px + env(safe-area-inset-bottom));
+}
+.kb-sheet__footer {
+  flex: none;
+  padding-top: 12px;
+}
+.kb-sheet--fill {
+  height: min(85dvh, 760px);
+}
+.kb-sheet--fill .kb-sheet__content {
+  display: flex;
+  flex-direction: column;
+}
+/* 기준 높이 0에서 남는 높이만큼 늘어남 (목록 길이가 시트 높이를 바꾸지 않음) */
+.kb-sheet--fill .kb-sheet__content > * {
+  flex: 1 1 0;
+  min-height: 0;
 }
 .kb-dialog-backdrop {
   position: fixed;
@@ -466,6 +496,7 @@ a.kb-icon-btn {
   gap: 12px;
 }
 .kb-sheet-body--time {
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 16px;
 }
 .kb-sheet-body--calendar {
@@ -510,9 +541,68 @@ a.kb-icon-btn {
   opacity: 0.4;
   cursor: not-allowed;
 }
+/* 시각 범위 슬라이더 - 막대를 누르거나 끌어서 조절 (손잡이는 디자인 시안의 ::before/::after 대신 실제 요소) */
+.kb-timebar--drag {
+  height: 36px;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.kb-timebar--drag .kb-timebar__track,
+.kb-timebar--drag .kb-timebar__range,
+.kb-timebar__past {
+  top: 12px;
+}
+.kb-timebar--drag .kb-timebar__range::before,
+.kb-timebar--drag .kb-timebar__range::after {
+  display: none;
+}
+.kb-timebar--drag.is-dragging .kb-timebar__range,
+.kb-timebar--drag.is-dragging .kb-timebar__thumb {
+  transition: none;
+}
+/* 오늘 이미 지난 시간 */
+.kb-timebar__past {
+  position: absolute;
+  left: 0;
+  height: 12px;
+  border-radius: 6px 0 0 6px;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--surface-3) 0 4px,
+    color-mix(in srgb, var(--text-3) 22%, var(--surface-3)) 4px 6px
+  );
+}
+.kb-timebar__thumb {
+  position: absolute;
+  top: 50%;
+  width: 26px;
+  height: 26px;
+  box-sizing: border-box;
+  border: 3px solid var(--brand);
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+  transform: translate(-50%, -50%);
+  transition:
+    left var(--dur) var(--ease-out),
+    transform var(--dur-fast);
+  cursor: grab;
+}
+.kb-timebar__thumb.is-active {
+  transform: translate(-50%, -50%) scale(1.15);
+  cursor: grabbing;
+}
+.kb-timebar__thumb:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--brand) 40%, transparent);
+  outline-offset: 2px;
+}
+
 /* 시각 시트의 열차 목록 */
 .kb-trains {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 8px;
 }
 .kb-trains__head {
@@ -532,20 +622,37 @@ a.kb-icon-btn {
   color: var(--text-3);
   font-size: var(--fs-body-sm);
 }
-.kb-trains__list {
-  /* 시트 안에서 완료 버튼이 밀려나지 않도록 목록만 스크롤 */
-  max-height: min(260px, 32dvh);
-  margin: 0;
-  padding: 0;
+/* 목록 칸은 시트의 남는 높이를 채우고 그 안에서만 스크롤 (불러오는 중·없음·오류도 같은 크기) */
+.kb-trains__box {
+  display: flex;
+  flex-direction: column;
+  min-height: 160px;
   overflow-y: auto;
   overscroll-behavior: contain;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  list-style: none;
   transition: opacity var(--dur-fast);
 }
-.kb-trains__list.is-updating {
+.kb-trains__box.is-updating {
   opacity: 0.55;
+}
+.kb-trains__box > .kb-trains__note {
+  margin: auto;
+  padding: 16px;
+  text-align: center;
+}
+.kb-trains__error {
+  padding: 12px;
+}
+.kb-trains__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.kb-train--more {
+  display: block;
+  color: var(--text-3);
+  font-size: var(--fs-body-sm);
 }
 .kb-train {
   display: grid;
@@ -818,6 +925,12 @@ a.kb-icon-btn {
 .kb-grid-row .is-mono {
   font-family: var(--font-mono);
   font-size: 12.5px;
+  white-space: nowrap;
+}
+/* 칸보다 긴 값(이메일 계정·긴 이름)은 옆 칸을 덮지 않고 말줄임 (전체 값은 title) */
+.kb-grid-row .is-clip {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .kb-grid-row .is-sub {
