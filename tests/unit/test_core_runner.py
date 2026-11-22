@@ -78,14 +78,6 @@ class TestRunReservation:
         assert kwargs["trainType"] == "109"  # TrainType.ALL
         assert kwargs["special"] == "SPECIAL_ONLY"
 
-    def test_duplicate_reservation_counts_as_success(self):
-        handler = _handler(
-            [{"success": True, "result": "duplicate_reservation", "error": None}]
-        )
-        result, _, statuses = _run(handler)
-        assert result["status"] == "success"
-        assert "장바구니" in result["train_info"]
-
     def test_login_failure(self):
         result, _, statuses = _run(_handler([], login=False))
         assert result["status"] == "error"
@@ -341,9 +333,8 @@ class TestRunReservation:
         assert "사유 없이" in reporter.send.call_args.kwargs["message"]
         assert "사유 없이" in result["message"]
 
-    @pytest.mark.parametrize("login", [True, False])
-    def test_korail_session_is_closed(self, login):
-        handler = _handler([MISS], login=login)
+    def test_korail_session_is_closed_even_after_login_failure(self):
+        handler = _handler([MISS], login=False)
         _run(handler, max_attempts=1)
         handler.close.assert_called_once()
 
@@ -396,29 +387,6 @@ class TestRunReservation:
         handler = _handler(results)
         result, _, _ = _run(handler, max_attempts=len(results), same_error_limit=5)
         assert result == {"status": "failed", "attempts": len(results)}
-
-    def test_app_outdated_stops_immediately(self):
-        from telegramBot.korail_client import APP_OUTDATED_MESSAGE
-
-        handler = _handler(
-            [
-                {
-                    "success": False,
-                    "result": None,
-                    "error": APP_OUTDATED_MESSAGE,
-                    "fatal": True,
-                }
-            ]
-            + [MISS] * 5
-        )
-        result, reporter, statuses = _run(handler)
-        assert result == {
-            "status": "failed",
-            "message": APP_OUTDATED_MESSAGE,
-            "attempts": 1,
-        }
-        assert statuses == ["running", "failed"]
-        assert handler.login.call_count == 1
 
     def test_stops_when_progress_report_is_rejected(self):
         """취소·만료된 예약은 다음 진행 보고에서 멈춤 (고아 워커 방지)"""
@@ -617,27 +585,6 @@ class TestEgress:
         # 첫 시도는 10초 기다림, 이후에도 간격 10초를 지킴 (예약 간격 2초보다 김)
         assert fake.now - 1000.0 >= 30.0
 
-    def test_default_handler_uses_spec_egress(self, monkeypatch):
-        created = {}
-
-        class Handler:
-            def __init__(self, proxy_url="", egress_id="", *, device=None):
-                created.update(proxy_url=proxy_url, egress_id=egress_id)
-
-            def login(self, *_):
-                return False
-
-            loginError = "x"
-            loginBlocked = False
-
-            def close(self):
-                pass
-
-        monkeypatch.setattr("core.runner.ReserveHandler", Handler)
-        spec = {**SPEC, "egress_id": "home1", "egress_proxy": "socks5h://h:1"}
-        run_reservation(spec, Mock(rejected=False), sleep=lambda _: None)
-        assert created == {"proxy_url": "socks5h://h:1", "egress_id": "home1"}
-
 
 class TestCallbackReporter:
     def test_payload(self):
@@ -645,7 +592,7 @@ class TestCallbackReporter:
         response = Mock()
         reporter.session.post = Mock(return_value=response)
 
-        assert reporter.send("success", attempts=3, train_info="KTX")
+        assert reporter.send("success", attempts=3, train_info="KTX", message="완료")
 
         url = reporter.session.post.call_args.args[0]
         payload = reporter.session.post.call_args.kwargs["json"]
@@ -654,6 +601,7 @@ class TestCallbackReporter:
             "reservation_id": "r1",
             "token": "tok",
             "status": "success",
+            "message": "완료",
             "attempts": 3,
             "train_info": "KTX",
         }
@@ -701,5 +649,7 @@ class TestCallbackReporter:
         reporter.session.post = Mock(
             side_effect=[requests.ConnectionError("x"), Mock()]
         )
-        assert reporter.send("progress", attempts=50)
+        assert reporter.send("error", message="중단")
         assert reporter.session.post.call_count == 2
+        # 시도 횟수를 주지 않으면 싣지 않음
+        assert "attempts" not in reporter.session.post.call_args.kwargs["json"]

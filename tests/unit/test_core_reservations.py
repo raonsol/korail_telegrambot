@@ -199,6 +199,8 @@ class TestAccess:
         theirs = await _start(services, OTHER, request=valid_request, chat_id=2)
 
         assert [r.id for r in services.reservations.list(USER)] == [mine.id]
+        # 텔레그램: 내 예약 + 이 대화의 예약 (다른 대화의 남의 예약은 제외)
+        assert [r.id for r in services.reservations.list(USER, chat_id=1)] == [mine.id]
         assert [r.id for r in services.reservations.list(None, chat_id=2)] == [
             theirs.id
         ]
@@ -314,12 +316,15 @@ class TestWorkerEvents:
         )
 
     @pytest.mark.asyncio
-    async def test_invalid_token(self, services, valid_request):
+    async def test_invalid_token(self, services, fake_launcher, valid_request):
         r = await _start(services, request=valid_request)
-        with pytest.raises(NotAllowed):
-            await services.reservations.handle_worker_event(
-                WorkerEvent(reservation_id=r.id, token="forged", status="success")
-            )
+        await _start(services, request=valid_request)
+        # 위조 토큰도, 다른 예약의 토큰도 안 됨
+        for token in ("forged", fake_launcher.launched[1]["callback_token"]):
+            with pytest.raises(NotAllowed):
+                await services.reservations.handle_worker_event(
+                    WorkerEvent(reservation_id=r.id, token=token, status="success")
+                )
 
     @pytest.mark.asyncio
     async def test_unknown_reservation(self, services):

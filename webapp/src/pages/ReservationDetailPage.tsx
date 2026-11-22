@@ -1,12 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useParams } from 'react-router-dom'
 import { Api, type Reservation } from '../api'
 import { useAuth } from '../auth'
-import { ErrorBox, Spinner } from '../components/Feedback'
+import { ErrorBox, TicketSkeleton } from '../components/Feedback'
 import { Icon } from '../components/Icon'
 import { Layout } from '../components/Layout'
 import { ticketTone } from '../components/ReservationCard'
+import { TickNumber, flashClass, useStatusFlash } from '../components/Motion'
 import { StatusBadge } from '../components/StatusBadge'
 import { RouteLine, Ticket } from '../components/Ticket'
 import {
@@ -20,11 +21,12 @@ import {
   timeRange,
   type ResultInfo,
 } from '../format'
+import { useTransitionNavigate } from '../navigation'
 import { getPushState, subscribePush, type PushState } from '../push'
 
 export function ReservationDetailPage() {
   const { id = '' } = useParams()
-  const navigate = useNavigate()
+  const go = useTransitionNavigate()
   const location = useLocation()
   const queryClient = useQueryClient()
   const justCreated = Boolean((location.state as { created?: boolean } | null)?.created)
@@ -32,6 +34,9 @@ export function ReservationDetailPage() {
   const query = useQuery({
     queryKey: ['reservation', id],
     queryFn: () => Api.reservation(id),
+    // 목록에서 들어오면 목록의 값으로 바로 그림 (화면 전환 중 승차권이 이어지도록), 오래됐으면 다시 조회
+    initialData: () => listedReservation(queryClient, id)?.data,
+    initialDataUpdatedAt: () => listedReservation(queryClient, id)?.updatedAt,
     refetchInterval: (q) => (q.state.data?.is_active ? 15_000 : false),
   })
 
@@ -59,12 +64,17 @@ export function ReservationDetailPage() {
   return (
     <Layout title="예약 상세" back>
       {query.isPending ? (
-        <Spinner />
+        <TicketSkeleton label="예약을 불러오는 중" />
       ) : query.isError || !r ? (
         <ErrorBox error={query.error ?? '예약을 찾을 수 없습니다.'} />
       ) : (
         <div className="kb-stack">
-          <DetailTicket reservation={r} info={info} payBy={payBy} />
+          <DetailTicket
+            reservation={r}
+            info={info}
+            payBy={payBy}
+            fresh={query.isFetchedAfterMount}
+          />
 
           {justCreated && r.is_active && <PushPrompt />}
 
@@ -100,24 +110,33 @@ export function ReservationDetailPage() {
                   인근역 포함 예약입니다. 실제 출발·도착역을 확인하세요.
                 </p>
               )}
-              <p className="kb-small">
-                <strong>
-                  {payBy
-                    ? `${payBy}까지 결제하지 않으면 예약이 취소됩니다.`
-                    : '20분 안에 결제하지 않으면 예약이 취소됩니다.'}
-                </strong>
-              </p>
-              <a
-                className="kb-btn kb-btn--primary kb-btn--block"
-                href={KORAIL_PAYMENT_URL}
-                target="_blank"
-                rel="noreferrer"
-              >
-                코레일 홈페이지에서 결제하기
-              </a>
-              <p className="kb-hint">
-                코레일톡 앱: 오른쪽 상단 메뉴 → 승차권 예매 → 예약 승차권 조회/취소
-              </p>
+              {r.korail_paid_at ? (
+                <p className="kb-small">
+                  <strong>결제를 마쳤습니다.</strong> 승차권은 코레일톡 앱이나 내 승차권에서
+                  확인하세요.
+                </p>
+              ) : (
+                <>
+                  <p className="kb-small">
+                    <strong>
+                      {payBy
+                        ? `${payBy}까지 결제하지 않으면 예약이 취소됩니다.`
+                        : '20분 안에 결제하지 않으면 예약이 취소됩니다.'}
+                    </strong>
+                  </p>
+                  <a
+                    className="kb-btn kb-btn--primary kb-btn--block"
+                    href={KORAIL_PAYMENT_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    코레일 홈페이지에서 결제하기
+                  </a>
+                  <p className="kb-hint">
+                    코레일톡 앱: 오른쪽 상단 메뉴 → 승차권 예매 → 예약 승차권 조회/취소
+                  </p>
+                </>
+              )}
             </section>
           )}
 
@@ -195,7 +214,7 @@ export function ReservationDetailPage() {
           ) : (
             <button
               className="kb-btn kb-btn--block kb-detail-action"
-              onClick={() => navigate('/new', { state: { prefill: r } })}
+              onClick={() => go('/new', { state: { prefill: r } })}
             >
               <Icon name="refresh" size={18} /> 같은 조건으로 다시 예약
             </button>
@@ -211,11 +230,15 @@ function DetailTicket({
   reservation: r,
   info,
   payBy,
+  fresh,
 }: {
   reservation: Reservation
   info: ResultInfo
   payBy?: string
+  /** 이 화면에서 서버에 새로 물어본 값인지 (목록 캐시로 먼저 그린 값이 아니라) */
+  fresh: boolean
 }) {
+  const flash = useStatusFlash(displayStatus(r), fresh)
   const stubRight =
     r.status === 'success' && r.korail_cancelled_at
       ? `${formatDateTime(r.korail_cancelled_at)} 코레일 취소`
@@ -225,17 +248,24 @@ function DetailTicket({
         ? `${relativeTime(r.updated_at)} 갱신`
         : r.status === 'success' && r.waitlisted
           ? '예약대기 신청'
-          : r.status === 'success' && payBy
-            ? `결제 기한 ${payBy}`
-            : `${formatDateTime(r.finished_at ?? r.updated_at)} 종료`
+          : r.status === 'success' && r.korail_paid_at
+            ? '결제 완료'
+            : r.status === 'success' && payBy
+              ? `결제 기한 ${payBy}`
+              : `${formatDateTime(r.finished_at ?? r.updated_at)} 종료`
 
   return (
     <Ticket
+      shared
+      className={flashClass(flash)}
       tone={ticketTone(r, 'brand')}
       stub={
         <>
           <span>
-            시도 <b className="kb-num">{r.attempts.toLocaleString()}회</b>
+            시도{' '}
+            <b className="kb-num">
+              <TickNumber value={r.attempts}>{r.attempts.toLocaleString()}회</TickNumber>
+            </b>
           </span>
           <span>{stubRight}</span>
         </>
@@ -266,6 +296,18 @@ function DetailTicket({
       </div>
     </Ticket>
   )
+}
+
+/** 목록 캐시(홈, 관리자 전체 예약)에 있는 이 예약 */
+function listedReservation(
+  queryClient: ReturnType<typeof useQueryClient>,
+  id: string,
+): { data: Reservation; updatedAt: number } | undefined {
+  for (const [key, list] of queryClient.getQueriesData<Reservation[]>({ queryKey: ['reservations'] })) {
+    const found = Array.isArray(list) ? list.find((r) => r.id === id) : undefined
+    if (found) return { data: found, updatedAt: queryClient.getQueryState(key)?.dataUpdatedAt ?? 0 }
+  }
+  return undefined
 }
 
 /** 예약 직후 알림 권한 요청 (맥락 없이 앱 진입 시 요청하지 않음) */

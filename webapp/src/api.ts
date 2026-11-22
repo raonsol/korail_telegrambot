@@ -38,6 +38,8 @@ export interface Reservation {
   korail_rsv_id: string | null
   pay_deadline: string | null
   korail_cancelled_at: string | null
+  /** 코레일 발권 목록에서 결제 완료를 확인한 시각 */
+  korail_paid_at: string | null
   /** 이 앱에서 코레일 예약을 취소할 수 있음 */
   korail_cancellable: boolean
   created_at: string

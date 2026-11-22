@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
-import { Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
+import { useTransitionNavigate } from '../navigation'
 import { useAuth } from '../auth'
 import { ErrorBox } from '../components/Feedback'
 import { Logo } from '../components/Layout'
@@ -9,7 +10,7 @@ type Mode = 'user' | 'admin'
 
 export function LoginPage() {
   const { me, login, adminLogin } = useAuth()
-  const navigate = useNavigate()
+  const go = useTransitionNavigate()
   const location = useLocation()
   const [mode, setMode] = useState<Mode>('user')
   const [phone, setPhone] = useState('')
@@ -30,7 +31,7 @@ export function LoginPage() {
     try {
       if (mode === 'admin') await adminLogin(password, remember)
       else await login(phone, password, remember)
-      navigate(from, { replace: true })
+      go(from, { replace: true })
     } catch (err) {
       setError(err)
       setPassword('')

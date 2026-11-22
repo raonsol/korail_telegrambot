@@ -39,6 +39,7 @@ from core.schemas import (
     Owner,
     ReservationRequest,
     ReservationStatus,
+    account_key,
     format_phone,
     is_valid_phone,
     normalize_phone,
@@ -1214,6 +1215,25 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
         """
         user_info = self.userDict.get(chat_id, {}).get("userInfo", {})
         return user_info.get("korailLogin")
+
+    def korail_passwords(self, korail_id: str) -> list[str]:
+        """이 코레일 계정으로 로그인에 성공한 대화들의 비밀번호 (결제 기한 알림 전 결제 여부 확인)"""
+        key = account_key(korail_id)
+        passwords = []
+        for state in list(self.userDict.values()):
+            login = state.get("userInfo", {}).get("korailLogin")
+            if login and account_key(login[0]) == key and login[1] not in passwords:
+                passwords.append(login[1])
+        return passwords
+
+    def forget_korail_password(self, korail_id: str, password: str) -> None:
+        """코레일이 거절한 비밀번호로 확인된 대화 로그인을 지움 (/mytickets 등은 다시 /start)"""
+        key = account_key(korail_id)
+        for state in list(self.userDict.values()):
+            user_info = state.get("userInfo", {})
+            login = user_info.get("korailLogin")
+            if login and account_key(login[0]) == key and login[1] == password:
+                user_info.pop("korailLogin", None)
 
     async def _show_my_tickets(self, chat_id, refresh=False):
         login = self._chat_korail_login(chat_id)

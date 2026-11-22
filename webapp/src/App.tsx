@@ -1,9 +1,10 @@
 import { useEffect, type ReactNode } from 'react'
-import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { useAuth } from './auth'
 import { Spinner } from './components/Feedback'
 import { UpdatePrompt } from './components/UpdatePrompt'
 import { useReservationEvents } from './hooks'
+import { RouteTransitions, useTransitionNavigate } from './navigation'
 import { AdminPage } from './pages/AdminPage'
 import { HomePage } from './pages/HomePage'
 import { LoginPage } from './pages/LoginPage'
@@ -23,17 +24,17 @@ function RequireAuth({ children, admin }: { children: ReactNode; admin?: boolean
 
 /** 알림 클릭 시 서비스 워커가 보낸 경로로 이동 */
 function useServiceWorkerNavigation() {
-  const navigate = useNavigate()
+  const go = useTransitionNavigate()
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return
     const handler = (event: MessageEvent) => {
       if (event.data?.type === 'NAVIGATE' && typeof event.data.url === 'string') {
-        navigate(event.data.url.replace(/^\/app/, '') || '/')
+        go(event.data.url.replace(/^\/app/, '') || '/')
       }
     }
     navigator.serviceWorker.addEventListener('message', handler)
     return () => navigator.serviceWorker.removeEventListener('message', handler)
-  }, [navigate])
+  }, [go])
 }
 
 export function App() {
@@ -43,6 +44,7 @@ export function App() {
 
   return (
     <>
+      <RouteTransitions />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route

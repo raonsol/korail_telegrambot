@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { TransitionLink } from '../navigation'
 import { Api, type AdminSetting, type AdminUser, type AdminUserPatch, type Reservation } from '../api'
 import { ErrorBox, Spinner } from '../components/Feedback'
 import { Icon } from '../components/Icon'
@@ -44,7 +44,7 @@ const SORTS: Record<Sort, (a: Reservation, b: Reservation) => number> = {
 
 const RESERVATION_COLS =
   '36px 124px minmax(180px,1.4fr) 116px 128px minmax(150px,1fr) minmax(190px,1.1fr) 84px 148px 76px'
-const USER_COLS = '150px minmax(90px,1fr) 90px 100px 80px 90px 150px 190px'
+const USER_COLS = '200px minmax(110px,1fr) 90px 100px 80px 90px 150px 190px'
 
 function tableStyle(cols: string, minWidth: number) {
   return { '--cols': cols, '--table-min': `${minWidth}px` } as CSSProperties
@@ -101,10 +101,15 @@ export function AdminPage() {
   return (
     <div className="kb-admin">
       <header className="kb-admin__head">
-        <Link to="/" className="kb-admin__brand" aria-label="코레일봇 홈으로">
+        <TransitionLink
+          to="/"
+          direction="pop"
+          className="kb-admin__brand"
+          aria-label="코레일봇 홈으로"
+        >
           <Logo size={30} />
           <b>코레일봇 관리</b>
-        </Link>
+        </TransitionLink>
         <div className="kb-tabs" role="tablist">
           <button
             role="tab"
@@ -398,9 +403,9 @@ function ReservationsTab({ query, users }: { query: QueryState<Reservation[]>; u
                       취소
                     </button>
                   ) : (
-                    <Link to={`/r/${r.id}`} className="kb-btn kb-btn--sm kb-btn--ghost">
+                    <TransitionLink to={`/r/${r.id}`} className="kb-btn kb-btn--sm kb-btn--ghost">
                       상세
-                    </Link>
+                    </TransitionLink>
                   )}
                 </div>
               </div>
@@ -537,10 +542,12 @@ function UsersTab({ query, reservations }: { query: QueryState<AdminUser[]>; res
               const mine = reservations.filter((r) => r.owner_id === user.id)
               return (
                 <div key={user.id} className={`kb-grid-row${user.is_active ? '' : ' is-dim'}`} role="row">
-                  <div role="cell" className="is-mono">
+                  <div role="cell" className="is-mono is-clip" title={user.phone}>
                     {user.phone}
                   </div>
-                  <div role="cell">{user.name || '-'}</div>
+                  <div role="cell" className="is-clip" title={user.name || undefined}>
+                    {user.name || '-'}
+                  </div>
                   <div role="cell">
                     <span className={`kb-badge kb-badge--${user.is_active ? 'success' : 'cancelled'}`}>
                       {user.is_active ? '활성' : '비활성'}

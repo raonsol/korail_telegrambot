@@ -92,6 +92,8 @@ class Reservation(Base):
     pay_deadline: Mapped[Optional[datetime]] = mapped_column(DateTime)  # UTC
     pay_reminded_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     korail_cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # 코레일 발권 목록에서 확인한 시각 (결제 완료 - 결제 기한 알림을 보내지 않음)
+    korail_paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

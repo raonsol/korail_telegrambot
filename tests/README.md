@@ -17,12 +17,15 @@
 이 테스트 스위트는 다음을 포괄적으로 커버합니다:
 - **단위 테스트**: 개별 컴포넌트 테스트
 - **통합 테스트**: 컴포넌트 간 상호작용 테스트
-- **엔드투엔드 테스트**: 완전한 워크플로우 테스트
-- **Make 커맨드 테스트**: 빌드 및 배포 스크립트 검증
+- **엔드투엔드 테스트**: 텔레그램 대화 전체 흐름과 여러 예약 동시 진행
+
+테스트는 코레일·텔레그램 등 외부 서비스에 요청을 보내지 않습니다 (모두 가짜 객체로 대체).
+실제 코레일 계정으로 확인할 일은 `make korail-login-check` 등 별도 스크립트로 하고,
+`tests/` 아래 `test_*.py` 파일에는 넣지 않습니다 - pytest 가 파일을 불러오는 순간 모듈
+최상단 코드가 실행되기 때문입니다.
 
 ### 테스트 통계
 
-- **총 테스트 파일 수**: 10개 이상
 - **테스트 카테고리**: Unit, Integration, E2E
 - **테스트된 실행 모드**: Subprocess와 Celery
 - **커버리지 목표**: >80%
@@ -31,20 +34,29 @@
 
 ```
 tests/
-├── conftest.py                          # 공유 픽스처 및 설정
-├── unit/                                # 단위 테스트
-│   ├── test_config.py                  # 설정 관리 테스트
-│   ├── test_korail_client.py           # 코레일 API 클라이언트 테스트
-│   ├── test_bot.py                     # 봇 로직 및 핸들러 테스트
-│   ├── test_messages_keyboards.py      # UI 컴포넌트 테스트
-│   └── test_app.py                     # FastAPI 엔드포인트 테스트
-├── integration/                         # 통합 테스트
-│   ├── test_subprocess_mode.py         # Subprocess 실행 테스트
-│   ├── test_celery_mode.py             # Celery 실행 테스트
-│   └── test_make_commands.py           # Makefile 커맨드 테스트
-├── e2e/                                 # 엔드투엔드 테스트
-│   └── test_reservation_flow.py        # 완전한 예약 플로우 테스트
-└── README.ko.md                         # 이 문서
+├── conftest.py                     # 테스트 환경변수, 공유 픽스처 (services, fake_launcher ...)
+├── unit/
+│   ├── test_core_*.py              # core/ 도메인 (예약·러너·인증·사용자·출구·열차 조회·알림 ...)
+│   ├── test_reservation_management.py  # 예약 후 관리 (코레일 취소, 결제 기한 알림, 인근역)
+│   ├── test_korail_account.py      # 내 승차권 (웹 /tickets, 텔레그램 /mytickets)
+│   ├── test_korail_client.py       # pykorail 래퍼 (로그인, 조회 페이지, 예약) + pykorail 계약
+│   ├── test_korail_device.py       # 계정별 기기 신원(Android ID)
+│   ├── test_waitlist.py            # 예약대기
+│   ├── test_bot.py                 # 텔레그램 대화 상태·핸들러
+│   ├── test_messages_keyboards.py  # 메시지·달력/시각 키보드
+│   ├── test_web_api.py             # 웹앱 REST API (세션 쿠키, CSRF, 권한)
+│   ├── test_web_push_delivery.py   # Web Push 실제 전송 (로컬 HTTP 서버)
+│   ├── test_app.py / test_config.py / test_app_settings.py
+│   ├── test_cache.py / test_log_redaction.py
+│   └── test_task_id_keys.py        # 실제 Redis 필요 (없으면 건너뜀)
+├── integration/
+│   ├── test_subprocess_mode.py     # forkserver 워커, 결과 파일, 출구 파일
+│   ├── test_celery_mode.py         # Celery 태스크 (fakeredis), 취소·재시작 감지
+│   └── fake_workers.py             # 실제 워커 진입점에 넣는 가짜 코레일
+├── e2e/
+│   ├── test_reservation_flow.py    # /start 부터 예약 결과까지, 워커 비정상 종료
+│   └── test_multiple_reservations.py  # 한 사용자의 여러 예약이 서로 영향 없음
+└── README.md                       # 이 문서
 ```
 
 ## 테스트 실행하기
@@ -140,9 +152,6 @@ uv run pytest -x
 # 마지막 실패한 테스트만 실행
 uv run pytest --lf
 
-# 병렬 실행 (pytest-xdist 필요)
-uv run pytest -n auto
-
 # 빠른 테스트만 실행 (느린 E2E 테스트 제외)
 uv run pytest -m "not slow"
 ```
@@ -154,11 +163,8 @@ uv run pytest -m "not slow"
 개별 컴포넌트를 독립적으로 테스트합니다.
 
 **파일**:
-- `test_config.py`: 설정 관리 (WebSettings, CelerySettings)
-- `test_korail_client.py`: 코레일 API 클라이언트 (로그인, 검색, 예약)
-- `test_bot.py`: 봇 로직 (핸들러, 상태 관리)
-- `test_messages_keyboards.py`: UI 컴포넌트 (메시지, 키보드)
-- `test_app.py`: FastAPI 엔드포인트 (health, message, completion)
+- 위 구조의 `unit/` 참고. `core/` 규칙(제한, 검증, 워커 보고)은 `test_core_*.py`,
+  채널 어댑터(텔레그램, 웹)는 `test_bot.py`, `test_web_api.py` 에서 확인합니다
 
 **예제**:
 ```bash
@@ -172,7 +178,6 @@ uv run pytest tests/unit/test_config.py -v
 **파일**:
 - `test_subprocess_mode.py`: Subprocess 실행 모드
 - `test_celery_mode.py`: Celery 분산 실행 모드
-- `test_make_commands.py`: Makefile 커맨드 및 Docker 작업
 
 **예제**:
 ```bash
@@ -180,15 +185,15 @@ uv run pytest tests/integration/ -v
 ```
 
 **특별 요구사항**:
-- 일부 테스트는 Redis 필요: `-m requires_redis`
-- 일부 테스트는 외부 서비스 필요: `-m requires_external`
+- 실제 Redis 가 필요한 테스트: `-m requires_redis` (없으면 건너뜀, CI MQ 단계에서 실행)
 
 ### 엔드투엔드 테스트 (`-m e2e`)
 
 처음부터 끝까지 완전한 사용자 워크플로우를 테스트합니다.
 
 **파일**:
-- `test_reservation_flow.py`: 완전한 예약 플로우, 에러 복구, 사용자 경험
+- `test_reservation_flow.py`: /start 부터 예약 결과까지, 다른 사용자 대화, 워커 비정상 종료
+- `test_multiple_reservations.py`: 예약마다 독립된 상태·콜백
 
 **예제**:
 ```bash
@@ -267,10 +272,10 @@ def test_<함수명>_<시나리오>():
 ### 픽스처 사용하기
 
 ```python
-def test_my_function(mock_telegram_bot, sample_user_data):
-    """conftest.py의 픽스처 사용"""
-    # 픽스처가 자동으로 주입됨
-    assert mock_telegram_bot is not None
+async def test_my_function(services, valid_request):
+    """conftest.py의 픽스처 사용 (임시 DB + 가짜 런처로 만든 Services)"""
+    r = await services.reservations.start(owner, valid_request, "010", "pw", origin="web")
+    assert r.is_active
 ```
 
 ### 테스트 마커 추가하기
@@ -321,18 +326,13 @@ def test_with_mocks():
 
 ### 사용 가능한 픽스처 (conftest.py에서)
 
-- **`mock_telegram_bot`**: 모킹된 Telegram 봇 인스턴스
-- **`mock_telegram_update`**: 모킹된 Telegram Update 객체
-- **`mock_telegram_callback_query`**: 모킹된 CallbackQuery
-- **`mock_korail_client`**: 모킹된 코레일 API 클라이언트
-- **`mock_redis_client`**: 모킹된/가짜 Redis 클라이언트
-- **`mock_celery_app`**: 모킹된 Celery 애플리케이션
-- **`sample_user_data`**: 샘플 사용자 예약 데이터
-- **`sample_train_data`**: 샘플 열차 정보
-- **`sample_reservation_data`**: 샘플 Celery 태스크 데이터
-- **`mock_subprocess`**: 모킹된 subprocess
-- **`mock_requests`**: 모킹된 requests 라이브러리
-- **`temp_log_dir`**: 임시 로그 디렉토리
+- **`services`**: 임시 SQLite DB + 가짜 런처로 만든 `Services` (ALLOW_LIST 시드 포함)
+- **`fake_launcher`**: 워커를 띄우지 않고 시작·취소 호출과 명세만 기록
+- **`korail_login`**: 코레일 로그인 대체 (`"correct"`·관리자 비밀번호만 성공)
+- **`test_settings`**: 테스트용 `WebSettings`
+- **`valid_request`**: 7일 뒤 출발하는 올바른 `ReservationRequest`
+- **`mock_telegram_update`**, **`mock_korail_client`**, **`mock_redis_client`** (fakeredis)
+- **`sample_user_data`**, **`sample_train_data`**: 텔레그램 대화 상태·pykorail 열차 예시
 
 ### 커스텀 픽스처 만들기
 
@@ -428,7 +428,7 @@ ALLOW_LIST=01012345678
 ADMINPW=test_password
 ```
 
-이는 테스트를 위해 `pytest.ini`에 자동으로 설정됩니다.
+이는 `tests/conftest.py` 맨 위에서 자동으로 설정됩니다 (`pythonpath = src` 등은 `pytest.ini`).
 
 ## 모범 사례
 
@@ -453,14 +453,11 @@ ADMINPW=test_password
 ### 테스트 속도 향상
 
 ```bash
-# 병렬로 실행
-uv run pytest -n auto
-
-# 느린 테스트 건너뛰기
+# 느린 테스트(E2E) 건너뛰기
 uv run pytest -m "not slow"
 
-# 변경된 테스트만 실행
-uv run pytest --testmon
+# 커버리지 없이 (빠름)
+uv run pytest --no-cov
 ```
 
 ## 유지보수

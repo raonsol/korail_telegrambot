@@ -383,12 +383,10 @@ class TestWorkerEntrypoint:
         from telegramBot import worker
 
         spec = {"egress_id": "home1", "egress_rpm": 60}
-        a = worker.build_gate(spec, str(tmp_path))
-        b = worker.build_gate(spec, str(tmp_path))
-        assert isinstance(a, FileGate) and a.rpm == 60
-        a.report_block()
-        assert b.blocked_for() > 0
-        assert (tmp_path / "egress_home1.json").exists()
+        gate = worker.build_gate(spec, str(tmp_path))
+        # 파일 공유 자체는 test_core_egress (FileGate) 에서 확인
+        assert isinstance(gate, FileGate) and gate.rpm == 60
+        assert gate.path == str(tmp_path / "egress_home1.json")
         # 출구가 없는 명세(수동 실행 등)는 제한 없음
         assert isinstance(worker.build_gate({}, str(tmp_path)), NullGate)
 

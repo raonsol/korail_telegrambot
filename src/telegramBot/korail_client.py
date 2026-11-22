@@ -199,10 +199,7 @@ class ReserveHandler:
             "srcLocate": "",
             "dstLocate": "",
             "special": "",
-            "reserveSuc": False,
         }
-        self.interval = 1  # sec 분당 100회 이상이면 이상탐지에 걸림
-        self.loginSuc = False
         self.loginError = ""  # 사용자에게 보여줄 마지막 로그인 실패 사유
         self.loginBlocked = False  # 마지막 로그인이 코레일 차단 응답으로 실패했는지
         # 마지막 로그인이 비밀번호 변경 안내로 막혔는지 (비밀번호 오류가 아님)
@@ -238,7 +235,6 @@ class ReserveHandler:
             _log_block(e, self.egress_id, "로그인")
             if client is not None:
                 client.close()
-            self.loginSuc = False
             self.loginBlocked = True
             self.loginError = BLOCKED_LOGIN_MESSAGE
             return False
@@ -246,7 +242,6 @@ class ReserveHandler:
             print(f"Login failed with exception: {e}")
             if client is not None:
                 client.close()
-            self.loginSuc = False
             self.loginPasswordChange = isinstance(e, PasswordChangeRequiredError)
             self.loginAppOutdated = is_app_outdated(e)
             # 코레일이 아이디·비밀번호를 거절함 (같은 비밀번호로 다시 시도하면 잠금에 가까워짐)
@@ -264,7 +259,6 @@ class ReserveHandler:
         self.korail_client = client
         self.username = username
         self.password = password
-        self.loginSuc = True
         self.loginError = ""
         return True
 
@@ -411,7 +405,6 @@ class ReserveHandler:
             error_str = str(e)
             # Check for duplicate reservation at top level too
             if "동일한 예약 내역이 있으니" in error_str or "WRR800029" in error_str:
-                self.reserveInfo["reserveSuc"] = True
                 return {
                     "success": True,
                     "result": "duplicate_reservation",
@@ -434,7 +427,6 @@ class ReserveHandler:
             error_str = str(e)
             # 이미 같은 예약(또는 예약대기)이 있음 - 사실상 성공
             if "동일한 예약 내역이 있으니" in error_str or "WRR800029" in error_str:
-                self.reserveInfo["reserveSuc"] = True
                 return {
                     "success": True,
                     "result": "duplicate_reservation",
@@ -444,7 +436,6 @@ class ReserveHandler:
             raise
         if not reservation:
             return None
-        self.reserveInfo["reserveSuc"] = True
         return {
             "success": True,
             "result": reservation,

@@ -1,13 +1,13 @@
 """내 코레일 예약·승차권 (웹 "내 승차권", 텔레그램 /mytickets)"""
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from pykorail import AccessRestrictedError, KorailError
 
-from core.egress import Egress, EgressPool, MemoryGate
+from core.egress import Egress, EgressPool
 from core.errors import (
     Conflict,
     KorailPasswordChangeRequired,
@@ -123,6 +123,21 @@ def _service(pool=None, links=None, clock=None, **behaviour):
 
 
 class TestOverview:
+    def test_reports_issued_tickets_as_paid(self):
+        service, _ = _service()
+        paid = Mock()
+        service.on_tickets = paid
+
+        service.overview(KORAIL_ID, "pw")
+
+        paid.assert_called_once_with(KORAIL_ID, {"PNR9"})
+
+    def test_paid_hook_error_does_not_break_listing(self):
+        service, _ = _service()
+        service.on_tickets = Mock(side_effect=RuntimeError("db"))
+
+        assert service.overview(KORAIL_ID, "pw").tickets
+
     def test_lists_pending_and_issued(self):
         service, _ = _service(links={"PNR1": "bot-r1"})
 
@@ -415,17 +430,6 @@ class TestCancelByRsv:
         )
 
     @pytest.mark.asyncio
-    async def test_not_in_korail_list(self, services, korail_cancel):
-        korail_cancel.return_value = False
-        changed = Mock()
-        services.reservations.korail_changed = changed
-        with pytest.raises(Conflict, match="이미 결제"):
-            await services.reservations.cancel_korail_rsv(
-                KORAIL_ID, "pw", "PNR1", source="web"
-            )
-        changed.assert_called_once_with(KORAIL_ID, None)
-
-    @pytest.mark.asyncio
     async def test_cancel_updates_account_cache(self, services, korail_cancel):
         account = services.korail_account
         account._cache.put("01012345678", _account_out("PNR1", "PNR2"))
@@ -436,7 +440,7 @@ class TestCancelByRsv:
 
         # 목록에 없었으면(이미 결제·만료) 캐시를 버림
         korail_cancel.return_value = False
-        with pytest.raises(Conflict):
+        with pytest.raises(Conflict, match="이미 결제"):
             await services.reservations.cancel_korail_rsv(
                 KORAIL_ID, "pw", "PNR2", source="web"
             )

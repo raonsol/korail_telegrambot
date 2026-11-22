@@ -29,7 +29,6 @@ def record_process_info(spec, log_path):
 
 def run_with_no_trains(spec, log_path):
     """매번 "열차 없음"을 돌려주는 코레일로 실제 워커 진입점(run_process) 실행"""
-    import telegramBot.korail_client as kc
     import core.runner as runner
 
     class NoTrains:
@@ -45,7 +44,6 @@ def run_with_no_trains(spec, log_path):
         def close(self):
             pass
 
-    kc.ReserveHandler = NoTrains
     original = runner.run_reservation
 
     def fast(spec, reporter, **kwargs):
