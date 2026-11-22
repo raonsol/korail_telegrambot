@@ -1,4 +1,12 @@
-import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react'
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react'
 import { reducedMotion } from '../motion'
 
 /** 닫힘 애니메이션 길이 (app.css --dur-sheet-out, .kb-dialog 닫힘과 맞춤) */
@@ -64,6 +72,17 @@ export function Sheet({
   const backdropRef = useRef<HTMLDivElement>(null)
   useEscape(onClose, open)
   useSheetDrag(sheetRef, backdropRef, open ? onClose : null, present)
+
+  // 끌어내려 닫는 중에 다시 열면 같은 요소를 쓰므로, 끌던 위치·배경 옅어짐을 지움
+  useLayoutEffect(() => {
+    if (!open) return
+    const sheet = sheetRef.current
+    if (sheet) {
+      sheet.style.transform = ''
+      sheet.style.transition = ''
+    }
+    backdropRef.current?.style.removeProperty('--scrim-opacity')
+  }, [open])
 
   if (!present) return null
   return (

@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useTransitionNavigate } from '../navigation'
 import { Api } from '../api'
 import { useAuth } from '../auth'
 import { ErrorBox } from '../components/Feedback'
@@ -27,7 +27,7 @@ const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
 
 export function SettingsPage() {
   const { me, logout, setMe } = useAuth()
-  const navigate = useNavigate()
+  const go = useTransitionNavigate()
   const { canInstall, install } = useInstallPrompt()
   const [pushState, setPushState] = useState<PushState | null>(null)
   const [pushBusy, setPushBusy] = useState(false)
@@ -160,7 +160,7 @@ export function SettingsPage() {
         className="kb-btn kb-btn--ghost kb-btn--block kb-logout"
         onClick={async () => {
           await logout()
-          navigate('/login', { replace: true })
+          go('/login', { replace: true, direction: 'pop' })
         }}
       >
         로그아웃

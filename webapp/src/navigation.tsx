@@ -25,13 +25,13 @@ export function useTransitionNavigate() {
 
   return useCallback(
     (to: To | number, { direction = 'push', replace, state, sharedTicket }: GoOptions = {}) => {
-      const go = () =>
-        typeof to === 'number' ? navigate(to) : navigate(to, { replace, state })
-      // 지금 화면으로 다시 이동 (활성 탭을 또 누름 등) - 애니메이션 없이
+      // 지금 화면으로 다시 이동 (활성 탭을 또 누름 등): <Link> 처럼 기록을 쌓지 않고 바꿈, 애니메이션 없이
       if (typeof to === 'string' && to === here) {
-        go()
+        navigate(to, { replace: replace ?? true, state })
         return
       }
+      const go = () =>
+        typeof to === 'number' ? navigate(to) : navigate(to, { replace, state })
       if (direction !== 'pop') setSharedTicket(sharedTicket ?? null)
       runNavTransition(direction, go)
     },

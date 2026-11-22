@@ -1461,6 +1461,13 @@ html[data-nav='pop']::view-transition-new(kb-ticket):only-child {
 .kb-flash--fail {
   animation: kb-shake 420ms var(--ease-in-out);
 }
+/* 이력 목록에 들어오면서 반응할 때는 펼쳐진 뒤에 */
+.kb-list-item.is-entering .kb-flash--success,
+.kb-list-item.is-entering .kb-flash--success .kb-badge,
+.kb-list-item.is-entering .kb-flash--fail {
+  animation-delay: 220ms;
+  animation-fill-mode: both;
+}
 @keyframes kb-stamp {
   35% {
     transform: scale(1.025);

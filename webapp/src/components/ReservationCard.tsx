@@ -1,6 +1,6 @@
 import type { Reservation } from '../api'
 import { useIsSharedTicket } from '../motion'
-import { TickNumber, flashClass, useStatusFlash } from './Motion'
+import { TickNumber, flashClass, type Flash } from './Motion'
 import { SEAT_SUMMARY, displayStatus, formatDate, relativeTime, timeRange } from '../format'
 import { StatusBadge, TrainTag } from './StatusBadge'
 import { RouteLine, Ticket, type TicketTone } from './Ticket'
@@ -11,9 +11,15 @@ export function ticketTone(r: Reservation, activeTone: TicketTone = 'plain'): Ti
   return displayStatus(r) === 'success' ? 'success' : 'muted'
 }
 
-export function ReservationCard({ reservation: r }: { reservation: Reservation }) {
+/** flash: 보는 중에 끝나 이력 목록으로 옮겨 온 예약의 반응 (홈이 정함) */
+export function ReservationCard({
+  reservation: r,
+  flash = null,
+}: {
+  reservation: Reservation
+  flash?: Flash
+}) {
   const shared = useIsSharedTicket(r.id)
-  const flash = useStatusFlash(displayStatus(r))
   return (
     <Ticket
       className={flashClass(flash)}

@@ -742,6 +742,94 @@ class TestPaidReservationSkipsReminder:
         assert services.reservations.get("mine", owner=USER).korail_paid_at
         assert services.reservations.get("other", owner=USER).korail_paid_at is None
 
+    @pytest.mark.asyncio
+    async def test_rejected_web_session_is_removed_and_not_retried_after_restart(
+        self, services, fake_launcher, valid_request, events
+    ):
+        """서버를 다시 시작해도(메모리 기록이 사라져도) 거절된 비밀번호로 다시 로그인하지 않음"""
+        from core.errors import KorailLoginFailed
+
+        auth = services.auth
+        auth._create_session(USER.user_id, False, KORAIL_ID, "new", True)
+        # 최근에 쓴 세션부터 시도 - 오래된 비밀번호를 가진 세션이 먼저 걸리게
+        auth._create_session(USER.user_id, False, KORAIL_ID, "old", True)
+        tried = []
+
+        def status(korail_id, password):
+            tried.append(password)
+            if password == "old":
+                raise KorailLoginFailed("거절", rejected=True)
+            return {"PNR1", "PNR2"}, set()
+
+        services.reservations.korail_status = status
+        await _succeeded(
+            services,
+            fake_launcher,
+            valid_request,
+            korail_rsv_id="PNR1",
+            pay_deadline=_deadline_kst(3),
+        )
+        assert await services.reservations.notify_payment_deadlines() == 1
+        assert "old" in tried
+        assert auth.korail_passwords(KORAIL_ID) == ["new"]
+
+        # 재시작 흉내: 프로세스 메모리의 거절 기록을 비움
+        services.reservations._rejected_passwords.clear()
+        tried.clear()
+        await _succeeded(
+            services,
+            fake_launcher,
+            valid_request,
+            korail_rsv_id="PNR2",
+            pay_deadline=_deadline_kst(3),
+        )
+        await services.reservations.notify_payment_deadlines()
+        assert tried == ["new"]
+
+    @pytest.mark.asyncio
+    async def test_held_password_moves_on_to_next_candidate(
+        self, services, fake_launcher, valid_request, events, korail
+    ):
+        """'내 승차권'에서 잠시 막아 둔 비밀번호면 다음 후보(텔레그램 로그인 등)로"""
+        await self._due(services, fake_launcher, valid_request)
+        korail.passwords = ["held", "good"]
+        korail.errors["held"] = ServiceError("잠시 막힘", code="KORAIL_LOGIN_FAILED")
+        korail.tickets = {"PNR123"}
+
+        assert await services.reservations.notify_payment_deadlines() == 0
+        assert [pw for _, pw in korail.calls] == ["held", "good"]
+
+    @pytest.mark.asyncio
+    async def test_one_failing_reservation_does_not_drop_others(
+        self, services, fake_launcher, valid_request, events, korail, monkeypatch
+    ):
+        bad = await self._due(services, fake_launcher, valid_request, rsv="PNR1")
+        good = await self._due(services, fake_launcher, valid_request, rsv="PNR2")
+        korail.unpaid = {"PNR1", "PNR2"}
+        events.reset_mock()
+
+        real_session = services.db.session
+        calls = {"n": 0}
+
+        def flaky_session():
+            # 알림 준비 중 첫 예약에서만 DB 오류
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("database is locked")
+            return real_session()
+
+        monkeypatch.setattr(services.db, "session", flaky_session)
+        assert await services.reservations.notify_payment_deadlines() == 1
+        monkeypatch.setattr(services.db, "session", real_session)
+
+        sent = events.await_args.args[0].reservation.id
+        assert sent in {bad, good}
+        missed = ({bad, good} - {sent}).pop()
+        # 보내지 못한 알림은 다음 주기에 다시 고름
+        events.reset_mock()
+        assert await services.reservations.notify_payment_deadlines() == 1
+        assert events.await_args.args[0].reservation.id == missed
+
     def test_web_sessions_provide_passwords(self, services):
         auth = services.auth
         auth._create_session(USER.user_id, False, KORAIL_ID, "older", True)
@@ -919,6 +1007,14 @@ class TestTelegram:
         }
         bot.userDict[4] = {"userInfo": {"korailLogin": ("010-9999-8888", "x")}}
         assert bot.korail_passwords("01012345678") == ["pw1"]
+
+        # 코레일이 거절한 비밀번호의 대화 로그인은 지움 (다른 계정·다른 비밀번호는 그대로)
+        bot.userDict[5] = {"userInfo": {"korailLogin": (KORAIL_ID, "pw2")}}
+        bot.forget_korail_password("01012345678", "pw1")
+        assert "korailLogin" not in bot.userDict[1]["userInfo"]
+        assert "korailLogin" not in bot.userDict[2]["userInfo"]
+        assert bot.userDict[4]["userInfo"]["korailLogin"] == ("010-9999-8888", "x")
+        assert bot.korail_passwords(KORAIL_ID) == ["pw2"]
 
     @pytest.mark.asyncio
     async def test_korail_cancel_asks_then_cancels(

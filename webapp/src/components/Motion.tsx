@@ -4,25 +4,35 @@ import { reducedMotion } from '../motion'
 /** 목록 항목이 접히며 사라지는 시간 (app.css .kb-list-item.is-leaving 과 맞춤) */
 const LEAVE_MS = 260
 
-type Flash = 'success' | 'fail' | null
+export type Flash = 'success' | 'fail' | null
+
+/** 끝난 상태의 반응 (성공: 도장 찍히듯, 실패: 가볍게 흔들림). 그 밖의 상태는 null */
+export function terminalFlash(status: string): Flash {
+  return status === 'success' ? 'success' : status === 'failed' || status === 'error' ? 'fail' : null
+}
 
 /**
- * 보고 있는 동안 예약이 끝나면 한 번 반응 (성공: 도장 찍히듯, 실패: 가볍게 흔들림).
- * 처음 그릴 때 이미 끝나 있던 예약에는 반응하지 않음
+ * 보고 있는 동안 예약이 끝나면 한 번 반응.
+ * settled: 이 화면에서 서버로부터 새로 받은 값인지. 캐시(목록에서 가져온 값 등)가 새 값으로
+ * 바뀌는 것은 보는 중에 끝난 것이 아니므로 반응하지 않고, 처음 받은 새 값은 기준으로만 삼음
  */
-export function useStatusFlash(status: string): Flash {
-  const previous = useRef(status)
+export function useStatusFlash(status: string, settled = true): Flash {
+  const previous = useRef<string | null>(settled ? status : null)
   const [flash, setFlash] = useState<Flash>(null)
   useEffect(() => {
+    if (!settled) return
+    if (previous.current === null) {
+      previous.current = status
+      return
+    }
     if (previous.current === status) return
     previous.current = status
-    const next: Flash =
-      status === 'success' ? 'success' : status === 'failed' || status === 'error' ? 'fail' : null
+    const next = terminalFlash(status)
     if (!next) return
     setFlash(next)
     const timer = window.setTimeout(() => setFlash(null), 900)
     return () => window.clearTimeout(timer)
-  }, [status])
+  }, [status, settled])
   return flash
 }
 
@@ -71,7 +81,8 @@ export function AnimatedList<T>({
 }: {
   items: T[]
   getKey: (item: T) => string
-  render: (item: T) => ReactNode
+  /** phase 'in': 처음 그린 뒤에 새로 들어온 항목 */
+  render: (item: T, phase: Entry<T>['phase']) => ReactNode
 }) {
   const [entries, setEntries] = useState(() => merge<T>([], items, getKey, false))
   const [seen, setSeen] = useState(items)
@@ -104,7 +115,7 @@ export function AnimatedList<T>({
           className={`kb-list-item${e.phase === 'in' ? ' is-entering' : ''}${e.phase === 'out' ? ' is-leaving' : ''}`}
           aria-hidden={e.phase === 'out' || undefined}
         >
-          <div className="kb-list-item__inner">{render(e.item)}</div>
+          <div className="kb-list-item__inner">{render(e.item, e.phase)}</div>
         </div>
       ))}
     </div>

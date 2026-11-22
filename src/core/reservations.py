@@ -101,7 +101,11 @@ class ReservationService:
         self.korail_status: Optional[
             Callable[[str, str], tuple[set[str], set[str]]]
         ] = None
-        # 결제 여부 확인에서 코레일이 거절한 (계정, 비밀번호 해시) - 다시 시도하지 않음
+        # 코레일이 저장된 비밀번호를 거절했을 때: (코레일 계정, 비밀번호) -> 그 비밀번호를 가진
+        # 웹 세션·텔레그램 로그인을 지움. 서버를 다시 시작해도 같은 비밀번호로 다시 시도하지 않도록
+        # (코레일은 5번 틀리면 계정을 잠금)
+        self.korail_password_rejected: list[Callable[[str, str], None]] = []
+        # 같은 프로세스 안에서는 지우기에 실패했어도 다시 시도하지 않음
         self._rejected_passwords: set[tuple[str, str]] = set()
         # 코레일 계정의 기기 신원 (UserService.korail_device) - 워커가 같은 기기로 로그인하도록 spec에 포함
         self.device_for = device_for
@@ -568,13 +572,37 @@ class ReservationService:
                 if not e.rejected:
                     logger.warning(f"Payment check login failed: {e}")
                     return None
-                digest = hashlib.sha256(password.encode()).hexdigest()
-                self._rejected_passwords.add((key, digest))
-                logger.warning("Payment check: Korail rejected a stored password")
+                self._forget_rejected_password(korail_id, password)
+            except ServiceError as e:
+                # "내 승차권"에서 최근 거절된 비밀번호 (잠시 다시 시도하지 않음) - 다음 후보로
+                if e.code == KorailLoginFailed.code:
+                    continue
+                logger.warning(f"Payment check failed: {e}")
+                return None
             except Exception as e:
                 logger.warning(f"Payment check failed: {e}")
                 return None
         return None
+
+    def _forget_rejected_password(self, korail_id: str, password: str) -> None:
+        digest = hashlib.sha256(password.encode()).hexdigest()
+        self._rejected_passwords.add((account_key(korail_id), digest))
+        logger.warning("Payment check: Korail rejected a stored password")
+        for forget in self.korail_password_rejected:
+            try:
+                forget(korail_id, password)
+            except Exception:
+                logger.exception("Failed to forget a rejected Korail password")
+
+    def _release_reminder_claim(self, reservation_id: str) -> None:
+        """보내지 못한 알림은 다음 주기에 다시 고르도록 표시를 되돌림 (최선)"""
+        try:
+            with self.db.session() as s:
+                r = s.get(Reservation, reservation_id)
+                if r:
+                    r.pay_reminded_at = None
+        except Exception:
+            logger.exception(f"Failed to release payment reminder of {reservation_id}")
 
     async def notify_payment_deadlines(
         self, lead: timedelta = PAYMENT_REMINDER_LEAD
@@ -617,11 +645,15 @@ class ReservationService:
         )
 
         reminders = []
+        # 예약 하나의 오류(DB 잠김 등)가 같은 주기의 다른 알림을 막지 않도록 하나씩 처리
         for korail_id, rsv_id, reservation_id in claimed:
             status = statuses[korail_id]
             if status is not None and rsv_id and rsv_id not in status[0]:
                 if rsv_id in status[1]:
-                    self.mark_korail_paid(korail_id, {rsv_id})
+                    try:
+                        self.mark_korail_paid(korail_id, {rsv_id})
+                    except Exception:
+                        logger.exception(f"Failed to mark {reservation_id} paid")
                     logger.info(f"Skipped payment reminder of {reservation_id}: paid")
                 else:
                     logger.info(
@@ -629,16 +661,22 @@ class ReservationService:
                         "not in Korail unpaid list"
                     )
                 continue
-            with self.db.session() as s:
-                r = s.get(Reservation, reservation_id)
-                # 확인하는 사이 코레일 취소·결제 확인·삭제됨
-                if (
-                    not r
-                    or r.korail_cancelled_at is not None
-                    or r.korail_paid_at is not None
-                ):
-                    continue
-                reminders.append((ReservationOut.from_model(r), r.chat_id))
+            try:
+                with self.db.session() as s:
+                    r = s.get(Reservation, reservation_id)
+                    # 확인하는 사이 코레일 취소·결제 확인·삭제됨
+                    if (
+                        not r
+                        or r.korail_cancelled_at is not None
+                        or r.korail_paid_at is not None
+                    ):
+                        continue
+                    reminders.append((ReservationOut.from_model(r), r.chat_id))
+            except Exception:
+                logger.exception(
+                    f"Failed to prepare payment reminder of {reservation_id}"
+                )
+                self._release_reminder_claim(reservation_id)
         for out, chat_id in reminders:
             await self.notifier.notify(
                 ReservationEvent(

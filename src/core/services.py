@@ -137,6 +137,7 @@ def build_services(
     # 결제 기한 알림 전 결제 여부 확인: 웹 세션의 비밀번호로 "내 승차권"과 같은 조회
     # (텔레그램 대화의 로그인은 app.py 에서 TelegramBot.korail_passwords 를 더함)
     reservations.korail_passwords.append(auth.korail_passwords)
+    reservations.korail_password_rejected.append(auth.forget_korail_password)
     reservations.korail_status = functools.partial(
         _korail_payment_status, korail_account
     )

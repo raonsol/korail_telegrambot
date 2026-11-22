@@ -1,12 +1,14 @@
 import { useQuery } from '@tanstack/react-query'
+import { useRef } from 'react'
 import { TransitionLink } from '../navigation'
 import { Api } from '../api'
 import { useAuth } from '../auth'
 import { EmptyState, ErrorBox, TicketSkeleton } from '../components/Feedback'
-import { AnimatedList } from '../components/Motion'
+import { AnimatedList, terminalFlash } from '../components/Motion'
 import { Icon } from '../components/Icon'
 import { Layout } from '../components/Layout'
 import { ReservationCard } from '../components/ReservationCard'
+import { displayStatus } from '../format'
 
 export function HomePage() {
   const { me } = useAuth()
@@ -20,6 +22,13 @@ export function HomePage() {
     queryKey: ['reservations', 'history'],
     queryFn: () => Api.reservations('history'),
   })
+
+  // 이 화면에서 서버로부터 새로 받은 진행 중 예약 - 이 예약이 끝나 이력으로 옮겨 오면 반응
+  // (오래된 캐시에 있던 예약이 다시 조회해 보니 끝나 있던 것은 보는 중에 끝난 것이 아님)
+  const seenActive = useRef(new Set<string>())
+  if (active.data && active.isFetchedAfterMount) {
+    for (const r of active.data) seenActive.current.add(r.id)
+  }
 
   const greeting = me?.user.is_admin ? '관리자' : me?.user.name || me?.user.phone
 
@@ -74,7 +83,16 @@ export function HomePage() {
           <AnimatedList
             items={history.data}
             getKey={(r) => r.id}
-            render={(r) => <ReservationCard reservation={r} />}
+            render={(r, phase) => (
+              <ReservationCard
+                reservation={r}
+                flash={
+                  phase === 'in' && seenActive.current.has(r.id)
+                    ? terminalFlash(displayStatus(r))
+                    : null
+                }
+              />
+            )}
           />
         )}
       </section>

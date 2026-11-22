@@ -21,6 +21,8 @@ const COMMIT_TIMEOUT = 500
 
 let pendingCommit: (() => void) | null = null
 let current: ViewTransitionLike | null = null
+/** 이동을 요청했지만 아직 새 화면이 그려지지 않음 (빠른 두 번 탭이 두 번 이동하지 않게) */
+let navigating = false
 
 export function reducedMotion(): boolean {
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
@@ -36,6 +38,7 @@ function startViewTransition(): StartViewTransition | null {
 
 /** 새 화면이 DOM 에 반영됨 (RouteTransitions 에서 호출) */
 export function routeCommitted(): void {
+  navigating = false
   pendingCommit?.()
   pendingCommit = null
 }
@@ -50,14 +53,22 @@ export function runNavTransition(direction: NavDirection, navigate: () => void):
     navigate()
     return
   }
+  // 앞 이동이 아직 그려지기 전에 또 누름 (카드 두 번 탭 등) - 무시.
+  // 앞 전환을 건너뛰어도(skipTransition) 그 이동은 실행되므로 두 번 이동하게 됨
+  if (navigating) return
+  navigating = true
   current?.skipTransition()
   const root = document.documentElement
   root.dataset.nav = direction
   const transition = start(
     () =>
       new Promise<void>((resolve) => {
-        pendingCommit = resolve
-        window.setTimeout(resolve, COMMIT_TIMEOUT)
+        const done = () => {
+          navigating = false
+          resolve()
+        }
+        pendingCommit = done
+        window.setTimeout(done, COMMIT_TIMEOUT)
         navigate()
       }),
   )

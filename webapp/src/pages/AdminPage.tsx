@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState, type CSSProperties, type FormEvent, type ReactNode } from 'react'
-import { Link } from 'react-router-dom'
+import { TransitionLink } from '../navigation'
 import { Api, type AdminSetting, type AdminUser, type AdminUserPatch, type Reservation } from '../api'
 import { ErrorBox, Spinner } from '../components/Feedback'
 import { Icon } from '../components/Icon'
@@ -101,10 +101,15 @@ export function AdminPage() {
   return (
     <div className="kb-admin">
       <header className="kb-admin__head">
-        <Link to="/" className="kb-admin__brand" aria-label="코레일봇 홈으로">
+        <TransitionLink
+          to="/"
+          direction="pop"
+          className="kb-admin__brand"
+          aria-label="코레일봇 홈으로"
+        >
           <Logo size={30} />
           <b>코레일봇 관리</b>
-        </Link>
+        </TransitionLink>
         <div className="kb-tabs" role="tablist">
           <button
             role="tab"
@@ -398,9 +403,9 @@ function ReservationsTab({ query, users }: { query: QueryState<Reservation[]>; u
                       취소
                     </button>
                   ) : (
-                    <Link to={`/r/${r.id}`} className="kb-btn kb-btn--sm kb-btn--ghost">
+                    <TransitionLink to={`/r/${r.id}`} className="kb-btn kb-btn--sm kb-btn--ghost">
                       상세
-                    </Link>
+                    </TransitionLink>
                   )}
                 </div>
               </div>

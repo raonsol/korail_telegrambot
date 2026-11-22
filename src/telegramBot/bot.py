@@ -1226,6 +1226,15 @@ ADMIN_KORAIL_ID / ADMIN_KORAIL_PW 설정을 확인해주세요."""
                 passwords.append(login[1])
         return passwords
 
+    def forget_korail_password(self, korail_id: str, password: str) -> None:
+        """코레일이 거절한 비밀번호로 확인된 대화 로그인을 지움 (/mytickets 등은 다시 /start)"""
+        key = account_key(korail_id)
+        for state in list(self.userDict.values()):
+            user_info = state.get("userInfo", {})
+            login = user_info.get("korailLogin")
+            if login and account_key(login[0]) == key and login[1] == password:
+                user_info.pop("korailLogin", None)
+
     async def _show_my_tickets(self, chat_id, refresh=False):
         login = self._chat_korail_login(chat_id)
         if login is None:

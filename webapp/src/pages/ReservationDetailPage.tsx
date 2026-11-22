@@ -69,7 +69,12 @@ export function ReservationDetailPage() {
         <ErrorBox error={query.error ?? '예약을 찾을 수 없습니다.'} />
       ) : (
         <div className="kb-stack">
-          <DetailTicket reservation={r} info={info} payBy={payBy} />
+          <DetailTicket
+            reservation={r}
+            info={info}
+            payBy={payBy}
+            fresh={query.isFetchedAfterMount}
+          />
 
           {justCreated && r.is_active && <PushPrompt />}
 
@@ -225,12 +230,15 @@ function DetailTicket({
   reservation: r,
   info,
   payBy,
+  fresh,
 }: {
   reservation: Reservation
   info: ResultInfo
   payBy?: string
+  /** 이 화면에서 서버에 새로 물어본 값인지 (목록 캐시로 먼저 그린 값이 아니라) */
+  fresh: boolean
 }) {
-  const flash = useStatusFlash(displayStatus(r))
+  const flash = useStatusFlash(displayStatus(r), fresh)
   const stubRight =
     r.status === 'success' && r.korail_cancelled_at
       ? `${formatDateTime(r.korail_cancelled_at)} 코레일 취소`

@@ -482,6 +482,25 @@ class AuthService:
                 passwords.append(password)
         return passwords
 
+    def forget_korail_password(self, korail_id: str, password: str) -> int:
+        """코레일이 거절한 비밀번호를 가진 웹 세션을 지움 (코레일 앱에서 비밀번호를 바꾼 경우 등)
+
+        그 세션은 코레일 조회·취소에 쓸 수 없고, 서버가 다시 시도하면 코레일 계정이 잠길 수 있다.
+        사용자는 새 비밀번호로 다시 로그인하면 된다. 지운 세션 수
+        """
+        key = account_key(korail_id)
+        with self.db.session() as s:
+            sessions = s.scalars(select(WebSession)).all()
+            stale = [
+                m
+                for m in sessions
+                if account_key(m.korail_id) == key
+                and self.vault.decrypt(m.korail_pw_enc) == password
+            ]
+            for m in stale:
+                s.delete(m)
+        return len(stale)
+
     def logout(self, token: Optional[str]) -> None:
         if not token:
             return
